@@ -42,8 +42,12 @@ dev-up:
 # entrypoint's background supervisor brings up `claude remote-control --spawn worktree`
 # on its own (~10s), so there's nothing to exec by hand.
 dev: dev-up
-	@echo "Waiting for dd-dev to come up..."
-	@for i in $$(seq 1 30); do docker exec dd-dev true 2>/dev/null && break || sleep 1; done
+	@echo "Waiting for dd-dev to come up (up to 120s)..."
+	@for i in $$(seq 1 120); do \
+		docker exec dd-dev true 2>/dev/null && break; \
+		[ $$i = 120 ] && { echo "ERROR: dd-dev did not become exec-able within 120s — check 'docker compose -f docker-compose.dev.yml logs dev'." >&2; exit 1; }; \
+		sleep 1; \
+	done
 	@$(MAKE) dev-login
 
 # Re-run the interactive login walkthrough against an already-running container.
