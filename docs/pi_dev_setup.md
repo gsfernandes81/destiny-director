@@ -119,16 +119,17 @@ claude auth login     # prints a URL — open on your laptop, paste the code bac
 claude auth status    # verify
 ```
 
-**Claude Remote Control starts automatically.** The entrypoint runs a background
-supervisor (`docker-rc-supervisor.dev.sh`, baked in at `/home/dev/rc-supervisor.sh`)
+**Claude Remote Control starts automatically.** The entrypoint runs a supervisor
+(`docker-rc-supervisor.dev.sh`, baked in at `/home/dev/rc-supervisor.sh`) as the
+container's **foreground** process — so the Claude session is what `docker logs` shows —
 that launches `claude remote-control --spawn worktree` as soon as you're signed in (it
 polls auth every ~10s), so you can drive this container's sessions from
 [claude.ai/code](https://claude.ai/code) or the Claude mobile app with nothing to type.
 `--spawn worktree` gives each on-demand session its own git worktree, and
 `--no-create-session-in-dir` means an unused daemon sits at a true **0/32** (no phantom
-cwd session). It's supervised in the background so it never blocks container start or
-Zed's sshd — if it crashes only it restarts; SSH stays up.
-Log: `~/.local/share/remote-control.log`.
+cwd session). sshd now runs in the background; the supervisor loops forever
+(re-launching the daemon on exit), so it's what keeps the container alive. Its output
+goes to `docker logs` and is also mirrored to `~/.local/share/remote-control.log`.
 
 *Why a supervisor and not just restart-on-crash:* Claude Code's remote-control server
 has a known class of upstream hangs where the **process stays alive but wedges** and
