@@ -55,6 +55,14 @@ mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
 } > "$HOME/.ssh/environment"
 chmod 600 "$HOME/.ssh/environment"
 
-# sshd becomes PID 1, keeps the container alive, and serves SSH; -e routes its log
-# to `docker logs`. All work still also reachable via `docker exec`.
+# Claude Remote Control: drive this container's sessions from claude.ai/code or the
+# Claude mobile app. Launched in the BACKGROUND so it never blocks container start or
+# Zed's sshd (the resilient foreground process below) — if the supervisor dies, the
+# container and SSH stay up. The supervisor idles until Claude is authenticated, then
+# runs (and health-recycles) `claude remote-control --spawn worktree`. See the script
+# header for the recycle policy — it only ever restarts a wedged daemon at 0/32.
+bash /home/dev/rc-supervisor.sh &
+
+# sshd becomes the foreground process, keeps the container alive, and serves SSH; -e
+# routes its log to `docker logs`. All work still also reachable via `docker exec`.
 exec /usr/sbin/sshd -D -e -f /home/dev/sshd_config

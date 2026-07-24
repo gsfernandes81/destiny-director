@@ -112,5 +112,13 @@ RUN --mount=type=cache,target=/home/dev/.cache/uv,uid=${USER_UID},gid=${USER_GID
 COPY --chown=${USER_UID}:${USER_GID} sshd_config.dev /home/dev/sshd_config
 EXPOSE 2222
 
+# Interactive login walkthrough (git SSH / GitHub / Railway / Claude), driven from
+# the host by `make dev` / `make dev-login`. Idempotent — see the script header.
+COPY --chown=${USER_UID}:${USER_GID} docker-login.dev.sh /home/dev/login.sh
+
+# Background supervisor that runs + health-recycles `claude remote-control`. Launched
+# by the entrypoint; only recycles a wedged daemon at 0/32 — see the script header.
+COPY --chown=${USER_UID}:${USER_GID} docker-rc-supervisor.dev.sh /home/dev/rc-supervisor.sh
+
 COPY --chown=${USER_UID}:${USER_GID} docker-entrypoint.dev.sh /home/dev/entrypoint.sh
 CMD ["bash", "/home/dev/entrypoint.sh"]

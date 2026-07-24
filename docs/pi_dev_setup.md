@@ -61,13 +61,22 @@ Register each **public** key with its GitHub account (Settings → SSH keys):
 #    (.env is required even for unit tests — make test uses --env-file .env and
 #     dd/common/cfg.py reads env at import.)
 
-# 4. Build and start (dev container + mysql).
-docker compose -f docker-compose.dev.yml build
-docker compose -f docker-compose.dev.yml up -d
+# 4. Build + start (dev container + mysql) AND log in to everything in one command.
+#    `make dev` builds/starts the container, then runs an interactive walkthrough
+#    that signs you in to whatever isn't done yet — git SSH, GitHub, Railway, Claude.
+#    Each step is idempotent (already-authed services are skipped), so it's safe to
+#    re-run. Run it on the Pi host, in the clone:
+make dev
 
 # 5. Enter the container over the Pi host's sshd (fish is the interactive shell).
 ssh -t <pi-user>@<pi-ip> 'docker exec -it dd-dev fish'
 ```
+
+`make dev` = `make dev-up` (build + start) + `make dev-login` (the login walkthrough).
+Use `make dev-up` alone if you only want to (re)build without touching logins, and
+`make dev-login` alone to re-run just the login steps against a running container.
+Step 2's manual key generation is optional — the walkthrough offers to generate a git
+SSH key for you (into `.dev-ssh/`) and upload it via `gh` if nothing authenticates yet.
 
 Optional laptop `~/.ssh/config` alias so `ssh dd` drops you straight in:
 
@@ -102,11 +111,39 @@ uv run ruff check dd && uv run ty check dd
 ## Claude Code
 
 Node 22 + `@anthropic-ai/claude-code` are baked in; `~/.claude` is a persistent volume,
-so login survives rebuilds.
+so login survives rebuilds. `make dev` / `make dev-login` handle sign-in for you
+(`claude auth login`), but you can also do it directly:
 
 ```sh
-claude        # then /login: it prints a URL — open on your laptop, paste the code back
+claude auth login     # prints a URL — open on your laptop, paste the code back
+claude auth status    # verify
 ```
+
+**Claude Remote Control starts automatically.** The entrypoint runs a background
+supervisor (`docker-rc-supervisor.dev.sh`, baked in at `/home/dev/rc-supervisor.sh`)
+that launches `claude remote-control --spawn worktree` as soon as you're signed in (it
+polls auth every ~10s), so you can drive this container's sessions from
+[claude.ai/code](https://claude.ai/code) or the Claude mobile app with nothing to type.
+`--spawn worktree` gives each on-demand session its own git worktree, and
+`--no-create-session-in-dir` means an unused daemon sits at a true **0/32** (no phantom
+cwd session). It's supervised in the background so it never blocks container start or
+Zed's sshd — if it crashes only it restarts; SSH stays up.
+Log: `~/.local/share/remote-control.log`.
+
+*Why a supervisor and not just restart-on-crash:* Claude Code's remote-control server
+has a known class of upstream hangs where the **process stays alive but wedges** and
+stops accepting new sessions (anthropics/claude-code#51267, #40416, #37321). A
+restart-on-exit loop can't recover that, so the supervisor also **health-recycles** a
+wedged daemon — but only when it is free to: it restarts the daemon **only at a literal
+0/32 sessions**, never while a session is live (even an idle one), because killing a
+live session forces a painful remote recovery. Concretely: a freshly started daemon is
+left alone until it has served ≥1 session; once it has been used and then drops to 0
+sessions, it gets `RC_IDLE_RECYCLE_SECS` (default 300s) of continuous idle and is then
+recycled once. So you always return to a fresh, unwedged daemon after an idle gap, but
+an untouched one is never churned. Tunables (env): `RC_POLL_SECS`,
+`RC_IDLE_RECYCLE_SECS`, `RC_PERMISSION_MODE` (default keeps prompts on). A daemon that
+wedges *mid-session* is deliberately left until that session ends — end the stuck
+session from claude.ai/code (or `docker exec`) and the idle recycle takes it from there.
 
 If Claude Code's Bash sandbox blocks writes to `~/.cache/uv` (breaks uv/ruff/ty/pytest),
 relax the sandbox in-container — the container is already an isolation boundary.

@@ -35,6 +35,21 @@ remove-last-deploy:
 dev-up:
 	HOST_UID=$$(stat -c '%u' .) HOST_GID=$$(stat -c '%g' .) DEV_HOSTNAME=$$(hostname)-dd-dev docker compose -f docker-compose.dev.yml up -d --build
 
+# One command to stand the whole thing up: build + start the container, wait for it
+# to be running, then walk through any logins that aren't done yet (git SSH, GitHub,
+# Railway, Claude) interactively. Every login step is idempotent — already-signed-in
+# services are skipped — so this is safe to re-run. Once Claude is logged in the
+# entrypoint's background supervisor brings up `claude remote-control --spawn worktree`
+# on its own (~10s), so there's nothing to exec by hand.
+dev: dev-up
+	@echo "Waiting for dd-dev to come up..."
+	@for i in $$(seq 1 30); do docker exec dd-dev true 2>/dev/null && break || sleep 1; done
+	@$(MAKE) dev-login
+
+# Re-run the interactive login walkthrough against an already-running container.
+dev-login:
+	docker exec -it dd-dev bash /home/dev/login.sh
+
 dev-down:
 	docker compose -f docker-compose.dev.yml down
 
