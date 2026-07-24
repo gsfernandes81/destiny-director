@@ -1,7 +1,9 @@
-# Remote Pi 5 dev environment. Bring up with:
-#   docker compose -f docker-compose.dev.yml up -d
+# Remote Pi 5 dev environment. Bring up + log in to everything in one command:
+#   make dev            (= make dev-up  +  make dev-login)
 # then reach the container over the Pi host's sshd:
 #   ssh -t <pi-user>@<pi-ip> 'docker exec -it dd-dev fish'
+# or drive it remotely from claude.ai/code — the entrypoint auto-starts
+# `claude remote-control --spawn worktree` once you're signed in.
 services:
   dev:
     build:
