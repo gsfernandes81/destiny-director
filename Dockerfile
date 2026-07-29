@@ -31,8 +31,12 @@ ENV TZ=Etc/UTC \
     PYTHONUNBUFFERED=1 \
     VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
+# libjemalloc2: preloaded in docker-entrypoint.sh. glibc malloc retains freed arenas
+# for this long-lived, bursty-allocation workload (the manifest parse; the gateway
+# cache), inflating resident RAM (Railway bills memory-over-time). jemalloc returns
+# freed pages to the OS via a background decay thread — see the entrypoint.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tzdata ca-certificates \
+    && apt-get install -y --no-install-recommends tzdata ca-certificates libjemalloc2 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
