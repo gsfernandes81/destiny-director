@@ -24,7 +24,7 @@ import lightbulb as lb
 
 import dd.anchor.extensions
 
-from ..common import cfg, utils
+from ..common import cfg, mem_diag, utils
 from ..common.auth import owner_check_error_handler, owner_only
 from ..common.bot import CachedFetchBot
 from ..common.discord_logging import (
@@ -73,6 +73,10 @@ client.error_handler(owner_check_error_handler)
 # Surface any otherwise-unhandled command failure to the alerts channel, labelled
 # with the command that failed.
 install_command_error_reporting(client)
+
+# TEMPORARY: log a MEM_DIAG memory-attribution report to stdout (read via `railway
+# logs`) 2min after start then every 15min. Remove once RAM is characterised.
+mem_diag.install(bot, "anchor")
 
 
 @bot.listen(h.StartingEvent)

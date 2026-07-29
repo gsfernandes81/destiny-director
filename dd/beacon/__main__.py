@@ -26,7 +26,7 @@ import dd.beacon.extensions
 import dd.beacon.extensions.user_commands
 from dd.beacon.extensions.statistics import track_command_usage
 
-from ..common import cfg, schemas
+from ..common import cfg, mem_diag, schemas
 from ..common.auth import owner_check_error_handler
 from ..common.bot import CachedFetchBot, ServerEmojiEnabledBot
 from ..common.discord_logging import (
@@ -72,6 +72,10 @@ client.error_handler(owner_check_error_handler)
 # Surface any otherwise-unhandled command failure to the alerts channel, labelled
 # with the command that failed.
 install_command_error_reporting(client)
+
+# TEMPORARY: log a MEM_DIAG memory-attribution report to stdout (read via `railway
+# logs`) 2min after start then every 15min. Remove once RAM is characterised.
+mem_diag.install(bot, "beacon")
 
 
 @bot.listen(h.StartingEvent)
