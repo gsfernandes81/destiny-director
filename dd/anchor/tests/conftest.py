@@ -29,14 +29,14 @@ def _test_db(tmp_path_factory: pytest.TempPathFactory):
     """Point the DB layer at a throwaway backend for the whole test session.
 
     Mirrors ``dd/beacon/tests/conftest.py``: a temp-file SQLite DB by default (no
-    external service), or the real MySQL engine when ``TEST_USE_MYSQL`` is set.
+    external service), or the real Postgres engine when ``TEST_USE_POSTGRES`` is set.
     """
-    if os.getenv("TEST_USE_MYSQL"):
+    if os.getenv("TEST_USE_POSTGRES"):
         if not schemas._db_is_local() and not os.getenv("ALLOW_REMOTE_SCHEMA_DESTROY"):
             pytest.fail(
-                "TEST_USE_MYSQL is set but the configured DB is not local "
+                "TEST_USE_POSTGRES is set but the configured DB is not local "
                 f"(host={schemas.db_engine.url.host!r}); refusing to run against it — "
-                "it would be wiped. Point it at a local/throwaway MySQL (or set "
+                "it would be wiped. Point it at a local/throwaway Postgres (or set "
                 "ALLOW_REMOTE_SCHEMA_DESTROY=1 to override).",
                 pytrace=False,
             )
@@ -51,8 +51,9 @@ def _test_db(tmp_path_factory: pytest.TempPathFactory):
 
     asyncio.run(schemas.create_all())
     yield
-    # No teardown drop: the temp SQLite file is discarded, and we must NEVER auto-drop a
-    # real MySQL — that ordering (reset_db then destroy_all) is what wiped the dev DB.
+    # No teardown drop: the temp SQLite file is discarded, and we must NEVER
+    # auto-drop a real Postgres — that ordering (reset_db then destroy_all) is
+    # what wiped the dev DB.
     if engine is not None:
         asyncio.run(engine.dispose())
         schemas.reset_db()

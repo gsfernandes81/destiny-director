@@ -34,8 +34,9 @@ async def _fresh_db():
 
 
 async def _seed(rows: list[tuple[str, dt.date, int]]) -> None:
-    # Seed via the ORM constructor rather than CommandUsage.increment, whose MySQL
-    # upsert (on_duplicate_key_update) isn't supported by the SQLite test DB.
+    # Seed via the ORM constructor rather than CommandUsage.increment: increment only
+    # ever writes today's bucket with +1, and these cases need arbitrary dates/counts.
+    # (increment's own upsert is covered by test_increment_upserts_in_place below.)
     async with db_session() as session, session.begin():
         session.add_all(
             CommandUsage(command_name=name, date=day, count=count)
@@ -62,4 +63,26 @@ async def test_fetch_daily_filters_since_and_orders():
         ("ada", d, 2),
         ("xur", d - dt.timedelta(days=1), 3),
         ("xur", d, 5),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_increment_upserts_in_place():
+    """``increment`` inserts the day's bucket, then bumps it — no duplicate PK row.
+
+    Covers the ON CONFLICT DO UPDATE path on whichever dialect the suite is bound to
+    (SQLite by default, real Postgres under TEST_USE_POSTGRES).
+    """
+    today = dt.datetime.now(tz=dt.UTC).date()
+
+    await CommandUsage.increment("xur")
+    assert await CommandUsage.fetch_daily(since=today) == [("xur", today, 1)]
+
+    await CommandUsage.increment("xur")
+    await CommandUsage.increment("xur")
+    await CommandUsage.increment("ada")
+
+    assert await CommandUsage.fetch_daily(since=today) == [
+        ("ada", today, 1),
+        ("xur", today, 3),
     ]

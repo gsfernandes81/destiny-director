@@ -34,8 +34,8 @@ async def _fresh_db():
 
 
 async def _seed(rows: list[tuple[dt.date, str, str, int]]) -> None:
-    # Seed via the ORM constructor rather than AutopostDailyStat.record, whose MySQL
-    # upsert (on_duplicate_key_update) isn't supported by the SQLite test DB.
+    # Seed via the plain ORM constructor — shorter than a record() call per row, and
+    # record()'s own upsert is covered by test_record_overwrites_same_day below.
     async with db_session() as session, session.begin():
         session.add_all(
             AutopostDailyStat(date=day, feed=feed, kind=kind, count=count)
@@ -80,4 +80,29 @@ async def test_fetch_series_no_since_returns_all():
     assert rows == [
         (d - dt.timedelta(days=30), "ada", "mirror", 1),
         (d, "xur", "follow", 3),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_record_overwrites_same_day():
+    """``record`` upserts on the ``(date, feed, kind)`` PK, overwriting ``count``.
+
+    Re-running the daily snapshot corrects the value rather than doubling it (unlike
+    ``CommandUsage.increment``'s ``count = count + 1``). Covers the ON CONFLICT DO
+    UPDATE path on whichever dialect the suite is bound to.
+    """
+    d = dt.date(2026, 6, 20)
+
+    await AutopostDailyStat.record(d, "xur", "follow", 12)
+    await AutopostDailyStat.record(d, "xur", "mirror", 4)
+    assert await AutopostDailyStat.fetch_series(since=d) == [
+        (d, "xur", "follow", 12),
+        (d, "xur", "mirror", 4),
+    ]
+
+    # Same key again → the row is corrected in place, not duplicated or summed.
+    await AutopostDailyStat.record(d, "xur", "follow", 9)
+    assert await AutopostDailyStat.fetch_series(since=d) == [
+        (d, "xur", "follow", 9),
+        (d, "xur", "mirror", 4),
     ]

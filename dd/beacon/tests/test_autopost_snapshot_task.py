@@ -15,9 +15,10 @@
 
 """Integration test for the daily autopost-reach snapshot split.
 
-Exercises ``_snapshot_autopost_reach`` against the SQLite test DB. ``count_dests`` runs
-fine on SQLite; only ``AutopostDailyStat.record`` (a MySQL upsert) does not, so it is
-stubbed to collect the recorded rows.
+Exercises ``_snapshot_autopost_reach`` against the test DB. ``AutopostDailyStat.record``
+is stubbed to collect the rows the task would write, so this stays a test of the
+follow/mirror split rather than of the upsert (which
+``test_autopost_daily_stat_schema.py`` covers directly).
 """
 
 import datetime as dt
