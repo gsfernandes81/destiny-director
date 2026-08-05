@@ -194,9 +194,7 @@ small test bot, not a scaled-down prod mirror.
   `shared_buffers` (compose.yml) all reduce write volume, but this remains a consumer
   SD card doing database writes continuously — plan to re-flash/replace it
   periodically, and don't be surprised if it's the first thing to fail on this box.
-- **`docker.io/arm32v6/postgres:17-alpine` availability is unverified here** — this
-  sandbox has no network access to Docker Hub to confirm the tag exists. Check
-  `https://hub.docker.com/r/arm32v6/postgres/tags` before the first build; official
-  Postgres images have not consistently shipped 32-bit ARM builds for every major
-  version, so a nearby tag (a different Postgres major, or a Debian-slim-based arm32v6
-  variant) may be the real substitute if `17-alpine` isn't there.
+- **`docker.io/arm32v6/postgres:17-alpine`** was confirmed present on Docker Hub as of
+  Aug 2026 (the alpine variants are the ones built for arm32v6; the Debian-based tags
+  are not). If a future major drops the arch, check
+  `https://hub.docker.com/r/arm32v6/postgres/tags` for the nearest alpine tag.
