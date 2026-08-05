@@ -1,0 +1,78 @@
+# syntax=docker/dockerfile:1
+#
+# beacon image for the Pi B+ test-bot host: linux/arm/v6 (ARMv6, the original B+'s
+# instruction set -- armv7/v8 binaries SIGILL on it). Built on a Pi 5 (see
+# deploy/pi5/build-and-ship.sh; its Cortex-A76 runs 32-bit ARM userland natively, so
+# `--platform linux/arm/v6` needs no qemu) and shipped over SSH via `podman save |
+# podman load` -- this image is never pushed to or pulled from a registry.
+#
+# Mirrors the repo-root Dockerfile's shape (builder stage installs the venv, final
+# stage is compiler-free); deviations from it are ARMv6/musl-specific and commented
+# below. It intentionally does NOT mirror Dockerfile's RAILWAY_SERVICE_NAME switch --
+# this box only ever runs beacon.
+
+# --- Builder: install deps + the project into a venv -----------------------
+FROM docker.io/arm32v6/python:3.13-alpine3.23 AS builder
+
+# uv's official distroless image (ghcr.io/astral-sh/uv, used by the repo-root
+# Dockerfile) does not publish an arm/v6 variant, so install via the official shell
+# installer instead -- it autodetects the arm-unknown-linux-musleabihf build on this
+# base and, same as `pip install`+wheel hashes, verifies the downloaded archive against
+# a checksum embedded in the script itself. UV_VERSION is pinned (not `latest`) so the
+# build is reproducible and the checksum in a given install.sh always matches what it
+# fetches.
+ARG UV_VERSION=0.8.17
+# gcc/musl-dev/python3-dev/linux-headers: this base has no prebuilt wheels for
+# ARMv6+musl for most of the dependency tree (aiohttp, yarl, regex, sqlalchemy's
+# optional C extension, ...), so uv falls back to building sdists here. Discarded with
+# this stage -- none of it reaches the final image. psycopg needs no compiler: per
+# pyproject.toml it's the pure-Python distribution, which dlopens libpq at runtime
+# (installed in the final stage below).
+RUN apk add --no-cache curl gcc musl-dev python3-dev linux-headers \
+    && curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh \
+    && mv /root/.local/bin/uv /root/.local/bin/uvx /usr/local/bin/ \
+    && apk del curl
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=0 \
+    UV_PROJECT_ENVIRONMENT=/app/.venv
+WORKDIR /app
+# Dependencies layer -- cached on the pyproject/uv.lock hash.
+# --no-default-groups (NOT the repo-root Dockerfile's --no-dev): both default groups
+# must be excluded here, not just `dev`. `speedups` pulls in cryptography, which has no
+# ARMv6/musl wheel and needs a Rust toolchain (not installed above) to build from
+# source -- and this box doesn't need it; hikari's speedups are a performance nicety,
+# not a requirement, on a single-guild test bot.
+RUN uv sync --no-default-groups --frozen --no-install-project
+# The project itself, installed non-editable into the venv.
+COPY dd ./dd
+COPY README.md ./
+RUN uv sync --no-default-groups --frozen --no-editable
+
+# --- Final: runtime image, no compilers -------------------------------------
+FROM docker.io/arm32v6/python:3.13-alpine3.23 AS final
+ENV TZ=Etc/UTC \
+    PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH"
+# libpq: psycopg is the pure-Python distribution (see the builder stage comment above)
+# and dlopens the system libpq at import time -- without this the bot cannot start.
+# tzdata/ca-certificates: same purpose as the repo-root Dockerfile. No libjemalloc2
+# here (unlike that Dockerfile): Alpine's package repos don't ship it for musl, and at
+# this box's scale it isn't worth chasing down an alternative -- see entrypoint.sh.
+RUN apk add --no-cache libpq tzdata ca-certificates
+WORKDIR /app
+COPY --from=builder /app/.venv /app/.venv
+# The migration environment: entrypoint.sh runs `alembic upgrade head` before the bot
+# starts, and alembic resolves `script_location` relative to alembic.ini.
+COPY alembic.ini ./
+COPY migrations ./migrations
+COPY deploy/pi-bplus/entrypoint.sh ./entrypoint.sh
+# Non-root: rootless podman already maps this uid away from the host's root, but run
+# as non-root inside the container too (defense in depth, matches the `dd` convention
+# used for the host user in deploy/pi-bplus/root-setup.sh).
+RUN adduser -D -u 1000 dd \
+    && chown -R dd:dd /app
+USER dd
+ENTRYPOINT ["sh", "entrypoint.sh"]
