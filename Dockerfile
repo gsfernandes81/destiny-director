@@ -10,8 +10,10 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=0 \
     UV_PROJECT_ENVIRONMENT=/app/.venv
-# build-essential exists only to compile asyncmy from sdist on arm64; it is
-# discarded with this stage and never reaches the final image.
+# build-essential is here for the handful of deps with no arm64 wheel, which uv
+# then builds from sdist; it is discarded with this stage and never reaches the
+# final image. psycopg needs no compiler — we install the pure-Python
+# distribution, which loads libpq at runtime (see the final stage).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
@@ -35,8 +37,12 @@ ENV TZ=Etc/UTC \
 # for this long-lived, bursty-allocation workload (the manifest parse; the gateway
 # cache), inflating resident RAM (Railway bills memory-over-time). jemalloc returns
 # freed pages to the OS via a background decay thread — see the entrypoint.
+# libpq5: psycopg is installed as the pure-Python distribution (no ARMv6/musl binary
+# wheels exist), so it dlopens the system libpq at import time — without this the bot
+# cannot even start.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tzdata ca-certificates libjemalloc2 \
+    && apt-get install -y --no-install-recommends \
+        tzdata ca-certificates libjemalloc2 libpq5 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
