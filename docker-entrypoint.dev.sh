@@ -18,27 +18,6 @@ fi
 # clone is absent or offline.
 [ -f /workspace/pyproject.toml ] && uv sync --frozen || true
 
-# `make atlas-migration-plan` uses a dedicated throwaway scratch schema on the
-# sibling MySQL as Atlas's dev database (ATLAS_DEV_URL, set in docker-compose.dev.yml)
-# — Atlas won't create it itself. Create it idempotently, best-effort with a bounded
-# retry so the container still comes up if MySQL isn't ready yet.
-/home/dev/venv/bin/python - <<'PY' 2>/dev/null || true
-import asyncio, asyncmy
-async def main():
-    for _ in range(15):
-        try:
-            conn = await asyncmy.connect(
-                host="mysql", port=3306, user="root", password="devroot"
-            )
-            async with conn.cursor() as cur:
-                await cur.execute("CREATE DATABASE IF NOT EXISTS atlas_dev")
-            conn.close()
-            return
-        except Exception:
-            await asyncio.sleep(2)
-asyncio.run(main())
-PY
-
 # In-container sshd (Zed-remote / direct SSH). Generate the host key once into the
 # persisted dd-ssh-host volume so Zed's known_hosts survives rebuilds.
 mkdir -p "$HOME/.ssh-host" && chmod 700 "$HOME/.ssh-host"

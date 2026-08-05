@@ -115,9 +115,6 @@ venv.bak/
 # Remote Pi dev container — git identity keys + SSH config (never commit)
 /.dev-ssh/
 
-# Atlas migration planning — generated desired-state DDL (make atlas-migration-plan)
-/.atlas/
-
 # Spin-up-to-test dev bots — background logs + process-group pidfiles (make devbot-up)
 /.devbot-logs/
 
@@ -150,10 +147,9 @@ manifest.zip
 # so keep it out of `railway up` build contexts and `git status`.
 manifest/
 
-# Local DB dumps (`make dump-prod-db` / `dump-dev-db`) — but keep Atlas migrations,
-# so a new migrations/*.sql isn't silently ignored.
+# Local DB dumps (`make dump-prod-db` / `dump-dev-db`). Alembic revisions are Python,
+# so nothing under migrations/ is caught by this.
 *.sql
-!migrations/*.sql
 
 # My ToDo list
 ToDo
