@@ -31,7 +31,7 @@ No code change or redeploy is needed — fix the data:
    save (the server re-validates against the JSON schema).
 2. **Corrupt / to reset a seeded type** (`xur_location`, `world_activity_*`): delete the
    row so the next read auto-seeds from the committed seed doc —
-   `railway connect MySQL` (correct environment), then
+   `railway connect Postgres` (correct environment), then
    `DELETE FROM rotation_data WHERE name = '<slug>';`. `lost_sector` has **no** seed, so
    don't delete it without a good replacement ready in the editor.
 3. Both loaders cache the last-known-good doc in memory, so **restart the bots** to drop
@@ -40,7 +40,7 @@ No code change or redeploy is needed — fix the data:
 
 ## Do NOT roll back
 
-- **The `rotation_data` table + its Atlas migration** — additive; migrations auto-apply
+- **The `rotation_data` table + its migration** — additive; migrations auto-apply
   at boot.
 - **The web editor / OAuth server** (`rotation_editor.py`, `web.py`, `web_auth.py`) —
   reverting them breaks the rotation editor and `/bungie login`. Needs `PUBLIC_BASE_URL` /
