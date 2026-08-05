@@ -1,0 +1,77 @@
+# Copied by deploy/pi-bplus/root-setup.sh's convention to /srv/dd/compose.yml (the path
+# its boot-time /etc/local.d/podman-user.start script and podman-compose invocations
+# both expect). Run unprivileged as the `dd` user with
+# XDG_RUNTIME_DIR=/run/user/<uid> set (root-setup.sh persists that in dd's .profile):
+#
+#   cd /srv/dd && podman-compose up -d
+#
+# Written against the podman-compose compose subset: only plain, long-established keys
+# (image, environment, env_file, command as a list, healthcheck, depends_on as a plain
+# list, volumes, restart, oom_score_adj) -- no profiles/extends/anchors/conditional
+# depends_on, which podman-compose supports inconsistently across versions.
+#
+# Secrets (POSTGRES_PASSWORD, DISCORD_TOKEN_BEACON, ...) are NOT in this file -- they
+# live in /srv/dd/.env, loaded by each service's `env_file:` below. See
+# docs/pi_bplus_setup.md for the required variables. POSTGRES_PASSWORD there MUST match
+# the password embedded in beacon's DATABASE_URL in that same file.
+
+services:
+  postgres:
+    image: docker.io/arm32v6/postgres:17-alpine
+    container_name: dd-postgres
+    environment:
+      POSTGRES_USER: dd
+      POSTGRES_DB: kyber
+    env_file:
+      - /srv/dd/.env   # supplies POSTGRES_PASSWORD only; USER/DB above are not secret
+    # Low-RAM/SD-friendly tuning for a 512MB Pi B+ -- see docs/pi_bplus_setup.md's RAM
+    # budget table and caveats section (notably synchronous_commit=off, a durability
+    # trade-off: the last few committed transactions can be lost on a hard power loss,
+    # not on process crash/restart -- acceptable for a test bot, not for prod data).
+    command:
+      - "-c"
+      - "shared_buffers=16MB"
+      - "-c"
+      - "max_connections=25"
+      - "-c"
+      - "work_mem=2MB"
+      - "-c"
+      - "synchronous_commit=off"
+      - "-c"
+      - "wal_compression=on"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dd -d kyber"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: always
+
+  beacon:
+    # Loaded via `podman save | ssh ... podman load` (deploy/pi5/build-and-ship.sh),
+    # never pulled -- localhost/ is the locally-loaded-image namespace podman uses, and
+    # keeps podman-compose from attempting a registry pull if it's ever missing.
+    image: localhost/dd-beacon:latest
+    container_name: dd-beacon
+    env_file:
+      - /srv/dd/.env
+    # Start-order only under podman-compose (no `condition: service_healthy` -- see the
+    # header comment on why this file avoids it). entrypoint.sh's own retry loop around
+    # `alembic upgrade head` covers the gap on a cold start where postgres is still
+    # running initdb when this container starts.
+    depends_on:
+      - postgres
+    # No memory limit (no --memory / mem_limit) is deliberate, not an oversight:
+    # rootless podman on Alpine/OpenRC has no cgroup delegation for user slices, so a
+    # per-container memory.max cannot be set here at all -- see
+    # deploy/pi-bplus/root-setup.sh. oom_score_adj expresses the same "kill this first"
+    # preference the kernel OOM killer honors instead, mirroring the DEVBOT_OOM_SCORE_ADJ
+    # convention used for throwaway dev bots (.env-example) rather than inventing a new
+    # one -- if this 512MB box is ever tight enough for the OOM killer to fire, beacon
+    # (not postgres, and not the host) should be the one it reaps.
+    oom_score_adj: 800
+    restart: always
+
+volumes:
+  pgdata:
