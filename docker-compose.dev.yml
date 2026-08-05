@@ -28,11 +28,6 @@ services:
     mem_limit: ${DEV_MEM_LIMIT:-2560m}
     memswap_limit: ${DEV_MEMSWAP_LIMIT:-2816m}
     env_file: [.env]                          # MYSQL_URL + RAILWAY_API_TOKEN + app vars
-    environment:
-      # Atlas dev/scratch database for `make atlas-migration-plan`. No usable Docker
-      # in here, so point Atlas at a dedicated throwaway schema on the sibling MySQL
-      # instead of a docker:// dev DB. The schema is created by docker-entrypoint.dev.sh.
-      ATLAS_DEV_URL: mysql://root:devroot@mysql:3306/atlas_dev
     volumes:
       - .:/workspace                          # bind-mount the host clone; dev user uid built to match (USER_UID)
       - dd-uv-cache:/home/dev/.cache/uv        # persist uv cache (fast re-syncs)

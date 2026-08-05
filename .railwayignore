@@ -1,4 +1,4 @@
 # Local DB backups produced by `make dump-prod-db` / `make dump-dev-db`. These live at
 # the repo root and must never be uploaded into a Railway build context. Anchored to
-# root so it cannot match the Atlas `migrations/*.sql` that DO need to ship.
+# root so it can only ever match those dumps.
 /kyber-*.sql

@@ -10,7 +10,9 @@
 # process for no concurrency benefit (anchor is single-event-loop + a couple of worker
 # threads). beacon — the large, hot consumer that the arena parallelism actually helps,
 # and which settled at ~230MB on the defaults — keeps the default arena count.
-# atlas is a static Go binary and is unaffected by LD_PRELOAD.
+#
+# The alembic pre-flight below runs under the same LD_PRELOAD; it is a short-lived
+# process, so the allocator choice is immaterial there either way.
 preload_jemalloc() {  # $1: extra MALLOC_CONF options prefix (may be empty)
   jemalloc="/usr/lib/$(uname -m)-linux-gnu/libjemalloc.so.2"
   if [ -f "$jemalloc" ]; then
@@ -22,12 +24,17 @@ preload_jemalloc() {  # $1: extra MALLOC_CONF options prefix (may be empty)
 # If RAILWAY_SERVICE_NAME is beacon, then start beacon,
 # otherwise if RAILWAY_SERVICE_NAME is anchor start anchor
 # otherwise raise an error
+#
+# Migrations run before either bot starts, and a failure aborts the boot (the `&&`).
+# alembic takes the database URL from dd.common.cfg — i.e. the same DATABASE_PRIVATE_URL
+# / DATABASE_URL the bot itself connects with — so nothing is passed on the command
+# line; it only needs alembic.ini + migrations/, both copied to /app (see Dockerfile).
 if [ "$RAILWAY_SERVICE_NAME" = "beacon" ]; then
   preload_jemalloc ""
-  atlas migrate apply -u ${MYSQL_URL} && python -OO -m dd.beacon
+  alembic upgrade head && python -OO -m dd.beacon
 elif [ "$RAILWAY_SERVICE_NAME" = "anchor" ]; then
     preload_jemalloc "narenas:2,"
-    atlas migrate apply -u ${MYSQL_URL} && python -OO -m dd.anchor
+    alembic upgrade head && python -OO -m dd.anchor
   else
     echo "Unknown service name: $RAILWAY_SERVICE_NAME"
     exit 1

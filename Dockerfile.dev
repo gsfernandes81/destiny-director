@@ -1,8 +1,5 @@
 # syntax=docker/dockerfile:1
 
-# Atlas migration engine — multi-arch static Go binary.
-FROM arigaio/atlas:latest-community AS atlas
-
 # Debian-slim dev environment. Toolchain is baked; the app source is
 # bind-mounted at /workspace at runtime (see docker-compose.dev.yml), so it is
 # NOT copied into the image. The container runs no network service — access is
@@ -60,7 +57,6 @@ RUN set -eux; \
     gh --version
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-COPY --from=atlas /atlas /usr/local/bin/atlas
 
 # Create the dev user at the host owner's uid/gid (passed as build args — see
 # Makefile `dev-up`). Guard against an already-present gid/uid so the build won't

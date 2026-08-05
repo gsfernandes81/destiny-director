@@ -1,8 +1,5 @@
 # syntax=docker/dockerfile:1
 
-# Atlas migration engine — multi-arch static Go binary.
-FROM arigaio/atlas:latest-community AS atlas
-
 # --- Builder: install deps + the project into a venv -----------------------
 FROM python:3.13-slim-bookworm AS builder
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -46,7 +43,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
-COPY --from=atlas /atlas /usr/local/bin/atlas
+# The migration environment: docker-entrypoint.sh runs `alembic upgrade head` before
+# either bot starts, and alembic resolves `script_location` relative to alembic.ini.
+COPY alembic.ini ./
 COPY migrations ./migrations
 COPY docker-entrypoint.sh ./
 # ARG only — do NOT promote to ENV. Baking an empty ENV would shadow Railway's
