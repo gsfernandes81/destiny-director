@@ -5,7 +5,7 @@ Develop Destiny Director inside a long-lived Docker container on a Raspberry Pi 
 `docker exec` into the container → run `claude` / git / make. An in-container sshd
 (port 2222) additionally lets **Zed remote directly into `/workspace`** (see
 [Zed remote / SSH access](#zed-remote--ssh-access)). The container bakes the toolchain
-(uv + Node/Claude Code + Railway CLI + GitHub CLI + Atlas + make); the repo is bind-mounted, so edits
+(uv + Node/Claude Code + Railway CLI + GitHub CLI + make); the repo is bind-mounted, so edits
 on the host clone and inside the container are the same files.
 
 Files: `Dockerfile.dev`, `docker-entrypoint.dev.sh`, `docker-compose.dev.yml`,
@@ -56,12 +56,12 @@ Register each **public** key with its GitHub account (Settings → SSH keys):
 # 3. Put the dev .env at the repo root (bind-mounted -> visible in-container).
 #    Simplest: scp it from your existing dev box. It must contain every var the
 #    bots read at import (Discord tokens, etc.), plus:
-#      MYSQL_URL=mysql://kyber:kyber@mysql:3306/kyber
+#      DATABASE_URL=postgresql://kyber:kyber@postgres:5432/kyber
 #      RAILWAY_API_TOKEN=<railway account token>   # Railway -> Account -> Tokens
 #    (.env is required even for unit tests — make test uses --env-file .env and
 #     dd/common/cfg.py reads env at import.)
 
-# 4. Build + start (dev container + mysql) AND log in to everything in one command.
+# 4. Build + start (dev container + postgres) AND log in to everything in one command.
 #    `make dev` builds/starts the container, then runs an interactive walkthrough
 #    that signs you in to whatever isn't done yet — git SSH, GitHub, Railway, Claude.
 #    Each step is idempotent (already-authed services are skipped), so it's safe to
@@ -184,22 +184,21 @@ alerts and other API data, e.g.
 `gh api repos/gsfernandes81/destiny-director/code-scanning/alerts`. (Alternative: set
 `GH_TOKEN` in `.env` to a PAT instead of running `gh auth login`.)
 
-## MySQL / migrations (integration scope)
+## Postgres / migrations (integration scope)
 
 ```sh
-docker compose -f docker-compose.dev.yml up -d mysql   # if not already up
-make atlas-migration-apply                              # apply against MYSQL_URL
-TEST_USE_MYSQL=1 make test-integration                 # integration suite on MySQL
+docker compose -f docker-compose.dev.yml up -d postgres   # if not already up
+make migration-apply                                       # apply against DATABASE_URL
+TEST_USE_POSTGRES=1 uv run --env-file .env python -m pytest -m integration  # DB suite on Postgres
 ```
 
-Applying migrations needs only the running `mysql` service. Authoring new migrations
-(`make atlas-migration-plan`, i.e. `atlas migrate diff`) uses `dev = docker://mysql/8/dev`
-in `atlas.hcl`, which spins a throwaway MySQL via Docker — that path needs the mounted
-`/var/run/docker.sock` (already in the compose file). Note the non-root `dev` user may
-lack permission on the socket; if `atlas migrate diff` fails with a socket permission
-error, add `group_add: ["<host docker gid>"]` (from `getent group docker` on the Pi) to
-the `dev` service. Applying migrations does not touch the socket. `mysql:8` wants ~1GB+
-RAM; keep it stopped when not integration-testing.
+Applying migrations needs only the running `postgres` service. Authoring new migrations
+(`make migration-plan MSG="..."`) autogenerates a revision by diffing
+`dd/common/schemas.py`'s models straight against that same live database — no throwaway
+"dev" database or Docker socket needed (that was an Atlas-specific requirement this repo
+no longer has). Always hand-check the generated revision; autogenerate is a starting
+point, not an oracle. `postgres:17-alpine` is much lighter than `mysql:8` was; still fine
+to leave it stopped when not integration-testing.
 
 ## Editing
 

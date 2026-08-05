@@ -15,7 +15,7 @@ check whenever preview, markdown, or CV2 rendering changes.
 drives it in Chromium. All paths below are relative to the repo root.
 
 Do **not** reach for `make run-anchor-local` — that starts the whole bot, Discord
-gateway included, and needs a real token and a MySQL server. Neither exists in a
+gateway included, and needs a real token and a Postgres server. Neither exists in a
 container. The driver skips the gateway entirely (see Gotchas).
 
 ## Prerequisites
@@ -29,8 +29,8 @@ and raises `ValueError` without one. Dummy values are fine — the same set CI u
 
 ```bash
 cat > .env <<'EOF'
-MYSQL_SSL=false
-MYSQL_URL=mysql://user:pass@localhost/dd
+DATABASE_SSL=false
+DATABASE_URL=postgresql://user:pass@localhost/dd
 SHEETS_PROJECT_ID=ci
 SHEETS_PRIVATE_KEY_ID=ci
 SHEETS_PRIVATE_KEY=ci
@@ -142,9 +142,11 @@ they skip. The rest of the suite does not need a browser.
 - **`web_auth` is not optional.** `web.start()` raises if `app.middlewares` is empty,
   because the auth middleware is the app's only security boundary. Import it or the app
   refuses to serve.
-- **The DB is MySQL-only in config.** `cfg._db_urls` hardcodes `mysql+asyncmy`, and there
-  is no MySQL in a container. `schemas.configure_test_db(engine)` swaps in SQLite — the
-  same thing `dd/anchor/tests/conftest.py` does. Don't try to point `MYSQL_URL` at SQLite.
+- **The DB defaults to Postgres in config, and there is no Postgres in a container.**
+  `schemas.configure_test_db(engine)` is what actually repoints the live engine at a
+  throwaway SQLite file — the same thing `dd/anchor/tests/conftest.py` does. A bare
+  `DATABASE_URL=sqlite://...` isn't a substitute: `configure_test_db` also wires the
+  session/pool settings the driver needs, which a URL swap alone won't do.
 - **`Cv2Draft.create` takes `id=`, `created_by=`, `action=`** — the id is caller-supplied
   (a UUID4 hex string), and `action` must be one of `post` / `edit` / `copy`. There is no
   `owner_id` or `purpose`.
