@@ -27,7 +27,7 @@ remove-last-deploy:
 # is run via sudo/root, `id -u` is 0 and the build then collides with the root
 # account (`groupadd: GID '0' already exists`). The clone owner is the right uid
 # whoever launches the build. dev-down stops it; dev-down-volumes also drops the
-# named volumes (uv cache, claude/railway/gh config, mysql data) — use when the baked
+# named volumes (uv cache, claude/railway/gh config, postgres data) — use when the baked
 # uid changed and the volumes must be recreated under the new owner. DEV_HOSTNAME
 # sets the container's hostname to the docker host's name + `-dd-dev`, so Claude
 # Code shows a stable, meaningful machine title instead of the random container ID
