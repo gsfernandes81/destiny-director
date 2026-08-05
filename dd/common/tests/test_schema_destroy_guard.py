@@ -26,7 +26,7 @@ from sqlalchemy import make_url
 
 from dd.common import schemas
 
-_REMOTE = "mysql+asyncmy://u:p@viaduct.proxy.rlwy.net:12345/railway"
+_REMOTE = "postgresql+psycopg://u:p@viaduct.proxy.rlwy.net:12345/railway"
 
 
 def _point_at(monkeypatch: pytest.MonkeyPatch, url: str) -> None:
@@ -38,19 +38,19 @@ def test_sqlite_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     schemas._assert_schema_destroy_allowed()  # no raise
 
 
-def test_local_mysql_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    _point_at(monkeypatch, "mysql+asyncmy://u:p@127.0.0.1:3306/db")
+def test_local_postgres_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _point_at(monkeypatch, "postgresql+psycopg://u:p@127.0.0.1:5432/db")
     schemas._assert_schema_destroy_allowed()  # no raise
 
 
-def test_remote_mysql_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_remote_postgres_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ALLOW_REMOTE_SCHEMA_DESTROY", raising=False)
     _point_at(monkeypatch, _REMOTE)
     with pytest.raises(RuntimeError, match="non-local database"):
         schemas._assert_schema_destroy_allowed()
 
 
-def test_remote_mysql_allowed_with_override(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_remote_postgres_allowed_with_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALLOW_REMOTE_SCHEMA_DESTROY", "1")
     _point_at(monkeypatch, _REMOTE)
     schemas._assert_schema_destroy_allowed()  # override → no raise
