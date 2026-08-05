@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from typing import Self
 
 import regex as re
-from atlas_provider_sqlalchemy.ddl import print_ddl
 from sqlalchemy import Index, bindparam, case, exists, literal, or_, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -3468,13 +3467,18 @@ async def destroy_all() -> None:
         logging.info(f"Dropping tables: {list(Base.metadata.tables.keys())}")
         await conn.run_sync(Base.metadata.drop_all)
 
-    await destroy_atlas_metadata()
+    await destroy_migration_metadata()
 
 
-async def destroy_atlas_metadata() -> None:
+async def destroy_migration_metadata() -> None:
+    """Drop the migration tool's own bookkeeping table.
+
+    Alembic stores the applied revision in ``alembic_version``; leaving it behind
+    after a ``destroy-all`` would make the next ``alembic upgrade head`` believe the
+    (now absent) schema is already at head."""
     async with db_engine.begin() as conn:
-        logging.info("Dropping table: atlas_schema_revisions")
-        await conn.execute(text("DROP TABLE IF EXISTS atlas_schema_revisions"))
+        logging.info("Dropping table: alembic_version")
+        await conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
 
 
 async def create_all() -> None:
@@ -3486,9 +3490,6 @@ async def create_all() -> None:
 
 
 if __name__ == "__main__":
-    if "--print-ddl" in sys.argv:
-        print_ddl("mysql", [Base])
-
     if "--destroy-all" in sys.argv:
         aio.run(destroy_all())
 
