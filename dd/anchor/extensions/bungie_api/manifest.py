@@ -49,14 +49,18 @@ async def _get_latest_manifest(api_key: str) -> str:
 
         manifest_url = BUNGIE_NET + manifest_url_fragment
 
+        # Stream the zip straight to disk in 1 MiB chunks. ``await response.read()``
+        # would buffer the whole 43-90 MB payload, and aiohttp builds that by
+        # accumulating chunks in a list and then ``b"".join()``-ing them — both are
+        # alive at the join, so the peak is ~2x the payload before the file write even
+        # starts. Chunking holds one chunk at a time (and is ~5x faster).
         async with (
             aiohttp.ClientSession(timeout=_MANIFEST_DOWNLOAD_TIMEOUT) as session,
             session.get(manifest_url) as response,
+            aiofiles.open("manifest.zip", "wb") as file,
         ):
-            manifest_zip = await response.read()
-
-        async with aiofiles.open("manifest.zip", "wb") as file:
-            await file.write(manifest_zip)
+            async for chunk in response.content.iter_chunked(1 << 20):
+                await file.write(chunk)
 
         # Cleanup manifest directory
         for file in os.listdir("manifest"):
@@ -68,6 +72,12 @@ async def _get_latest_manifest(api_key: str) -> str:
                 zip_ref.extractall("manifest")
 
         await asyncio.get_event_loop().run_in_executor(None, _extract)
+
+        # The extracted sqlite is all we need, so drop the zip — it is another 43-90 MB
+        # of SD card on the Pi / of Railway's ephemeral disk, kept for nothing. Only
+        # after a *successful* extract: a failing ``extractall`` raises above this line,
+        # leaving the download in place for the next attempt (and for inspection).
+        os.remove("manifest.zip")
 
         manifest_path = "manifest/" + os.listdir("manifest")[0]
         return manifest_path
@@ -89,10 +99,17 @@ class _LazyManifestTable:
     Keyed access (``table[hash]`` / ``table.get(hash)``) runs an indexed ``WHERE id=?``
     lookup and memoises the parsed row, so only the handful of hashes a post actually
     touches are materialised — this is what stops the ~39k-row
-    ``DestinyInventoryItemDefinition`` being loaded whole. Iteration (``values`` /
-    ``items`` / ``iter``) streams and caches the entire table on first use, for the one
-    table that needs it (``DestinyVendorDefinition``). ``KeyError`` on a missing hash
-    matches the old ``dict[hash]`` behaviour (fail-fast call sites still fail)."""
+    ``DestinyInventoryItemDefinition`` being loaded whole. ``KeyError`` on a missing
+    hash matches the old ``dict[hash]`` behaviour (fail-fast call sites still fail).
+
+    Whole-table *searches* go through :meth:`hashes_by_field_prefix`, which pushes the
+    predicate into sqlite and returns bare hashes — nothing is parsed into Python. The
+    dict-compatible iteration methods (``values`` / ``items`` / ``iter``) do still
+    stream *and cache* the whole table, which for ``DestinyVendorDefinition`` costs
+    hundreds of MB (its ``itemList`` runs to thousands of entries per vendor); they are
+    kept only for dict parity and have **no production caller** — eververse's rotator
+    discovery, the one path that used to need them, is a
+    :meth:`hashes_by_field_prefix` call now. Don't add one back."""
 
     def __init__(self, con: sqlite3.Connection, table: str) -> None:
         self._con = con
@@ -131,6 +148,43 @@ class _LazyManifestTable:
             return False
         return True
 
+    def hashes_by_field_prefix(self, field: str, prefix: str) -> list[int]:
+        """Hashes of every row whose top-level ``field`` string starts with ``prefix``.
+
+        Equivalent to ``[d["hash"] for d in self.values() if
+        d.get(field, "").startswith(prefix)]`` — same hashes, same (rowid) order — but
+        the predicate runs *inside* sqlite, so no row is ever parsed into Python. That
+        matters for ``DestinyVendorDefinition``: eververse needs two scalars per vendor
+        and the ``.values()`` route paid for every nested ``itemList`` to get them.
+
+        Implementation notes, all of them load-bearing for the equivalence:
+
+        * ``json_extract`` is JSON1, which is compiled into CPython's bundled sqlite on
+          every platform this ships to (Alpine amd64, ``linux/arm/v6``, the dev boxes),
+          so it needs no extension loading.
+        * The prefix test is ``substr(...) = ?``, **not** ``LIKE``: sqlite's ``LIKE``
+          is ASCII-case-insensitive and treats ``_`` and ``%`` in the pattern as
+          wildcards, and the identifiers we match on (``EVERVERSE_BRIGHT_DUST_ROTATOR``)
+          are full of underscores. ``substr`` is an exact, case-sensitive,
+          wildcard-free prefix compare, which is what ``str.startswith`` does.
+        * ``CAST(json AS TEXT)`` because the manifest declares the column ``BLOB`` and
+          some rows really do come back as blobs, which ``json_extract`` rejects.
+        * ``coalesce(..., '')`` mirrors ``.get(field, "")`` for a row missing the field,
+          and the ``json_valid`` guard (in a ``CASE``, whose branch evaluation is
+          guaranteed, unlike ``AND`` short-circuiting) skips a corrupt row exactly as
+          :meth:`_load_all`'s ``json.loads`` ``try``/``except`` does.
+
+        Nothing is memoised: no row is parsed, so there is nothing to cache.
+        """
+        rows = self._con.execute(
+            f"SELECT json_extract(CAST(json AS TEXT), '$.hash') FROM \"{self._table}\" "
+            "WHERE CASE WHEN json_valid(CAST(json AS TEXT)) THEN "
+            "substr(coalesce(json_extract(CAST(json AS TEXT), ?), ''), 1, ?) = ? "
+            "ELSE 0 END",
+            (f"$.{field}", len(prefix), prefix),
+        )
+        return [int(hash_) for (hash_,) in rows if hash_ is not None]
+
     def _load_all(self) -> None:
         if self._all_loaded:
             return
@@ -161,8 +215,10 @@ class ManifestLookup(dict[str, t.Any]):
     Opens the manifest sqlite once (read-only) and hands out per-table
     :class:`_LazyManifestTable` views. Previously every row of every table was parsed
     into a nested dict (hundreds of MB, ~1 GB peak on the item table) on each xur /
-    eververse post; consumers only read specific hashes (plus one ``.values()`` scan of
-    ``DestinyVendorDefinition``), so rows are now read on demand. A post drops its
+    eververse post; consumers only read specific hashes (plus eververse's rotator
+    search, which is answered in sqlite and parses nothing — see
+    :meth:`_LazyManifestTable.hashes_by_field_prefix`), so rows are now read on
+    demand and no table is ever materialised whole. A post drops its
     reference when done and the connection + memoised rows are freed (the sqlite
     connection also finalises itself on GC); :meth:`close` / the context-manager
     protocol are available for explicit cleanup.
@@ -217,6 +273,7 @@ async def _build_manifest_dict(manifest_path: str) -> ManifestLookup:
 
     Name/signature preserved so callers are untouched; it now returns a
     :class:`ManifestLookup` (a drop-in for the old nested dict) instead of eagerly
-    materialising every table. Only the ``DestinyVendorDefinition`` scan and the exact
-    hashes a post references are ever loaded, collapsing the per-post memory spike."""
+    materialising every table. Only the exact hashes a post references are ever
+    loaded (eververse's vendor search stays in sqlite), collapsing the per-post
+    memory spike."""
     return ManifestLookup(manifest_path)

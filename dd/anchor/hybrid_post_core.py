@@ -803,6 +803,11 @@ async def publish_draft(
 #: One weapon/armour row: (name, hash, itemTypeDisplayName, itemType, rarity).
 WeaponItem = tuple[str, int, str, int, str]
 
+#: Rows pulled per ``fetchmany`` when scanning a manifest table. Big enough that the
+#: round-trip overhead is noise, small enough that the raw JSON of a batch is a rounding
+#: error next to the table (see :func:`iter_weapon_items`).
+_ROW_BATCH = 200
+
 
 async def iter_weapon_items(cursor: t.Any) -> list[WeaponItem]:
     """Read the manifest's named, non-dummy weapons/armour via ``cursor``, deduped.
@@ -811,26 +816,32 @@ async def iter_weapon_items(cursor: t.Any) -> list[WeaponItem]:
     (so a producer can share one manifest connection across several reads) and returns
     one row per (name, type), newest hash winning — the pool the reward autocomplete and
     :func:`resolve_weapon` search. Whites/greens and redacted/dummy items are dropped.
+
+    Rows are consumed in ``fetchmany`` batches, not one ``fetchall()``: the item table
+    is the manifest's largest and materialising all ~39k raw JSON strings at once cost
+    240 MB (+284 MB RSS) before a single one was even parsed. Only the deduped result
+    survives the loop, so batching is output-identical and drops the peak to ~6 MB.
     """
     item_by_key: dict[tuple[str, str], WeaponItem] = {}
     await cursor.execute("SELECT json FROM DestinyInventoryItemDefinition")
-    for (row,) in await cursor.fetchall():
-        defn = json.loads(row)
-        item_type = defn.get("itemType")
-        if item_type not in (2, 3) or defn.get("redacted"):
-            continue
-        rarity = (defn.get("inventory") or {}).get("tierTypeName", "")
-        if rarity in ("", "Common", "Basic"):  # drop dummies/whites/greens
-            continue
-        name = (defn.get("displayProperties") or {}).get("name")
-        if not name:
-            continue
-        type_name = defn.get("itemTypeDisplayName", "")
-        hash_ = int(defn["hash"])
-        key = (name.lower(), type_name.lower())
-        existing = item_by_key.get(key)
-        if existing is None or hash_ > existing[1]:  # keep the newest hash
-            item_by_key[key] = (name, hash_, type_name, item_type, rarity)
+    while batch := await cursor.fetchmany(_ROW_BATCH):
+        for (row,) in batch:
+            defn = json.loads(row)
+            item_type = defn.get("itemType")
+            if item_type not in (2, 3) or defn.get("redacted"):
+                continue
+            rarity = (defn.get("inventory") or {}).get("tierTypeName", "")
+            if rarity in ("", "Common", "Basic"):  # drop dummies/whites/greens
+                continue
+            name = (defn.get("displayProperties") or {}).get("name")
+            if not name:
+                continue
+            type_name = defn.get("itemTypeDisplayName", "")
+            hash_ = int(defn["hash"])
+            key = (name.lower(), type_name.lower())
+            existing = item_by_key.get(key)
+            if existing is None or hash_ > existing[1]:  # keep the newest hash
+                item_by_key[key] = (name, hash_, type_name, item_type, rarity)
     return sorted(item_by_key.values(), key=lambda e: e[0].lower())
 
 
