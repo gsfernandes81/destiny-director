@@ -40,9 +40,28 @@ ARG UV_VERSION=0.8.17
 # requirement, on a single-guild test bot.
 ARG UV_SYNC_GROUPS=--no-dev
 # Non-empty forces aiohttp & family to their pure-Python builds instead of compiling C
-# extensions. Only bites when a package installs from sdist, i.e. on ARMv6/musl, where
-# no wheels exist for them; on amd64 wheels are used and the flag never applies.
+# extensions, for the ARMv6 target. On amd64 it is empty and none of this applies.
+#
+# The *_NO_EXTENSIONS variables below are necessary but NOT sufficient, and the gap cost
+# a deployment. They are read by those packages' setup.py, so they only do anything when
+# a package is BUILT FROM SDIST. musllinux armv7l wheels exist for every one of them, and
+# an emulated arm/v6 build reports `uname -m` as armv7l (see .github/workflows/pi-image.yml
+# — QEMU does this and the image is still genuinely armv6). So uv found armv7 wheels,
+# installed them without building anything, never consulted the variables, and the build
+# went green.
+#
+# Measured on the real B+ afterwards: python3 and _speedups were v6KZ, while _http_parser,
+# _multidict, _quoting_c, _helpers_c, _frozenlist, _http_writer, reader_c and mask were all
+# `Tag_CPU_arch: v7`. The bot reached RUNNING, served for ~60s, then took SIGSEGV — ARMv7-A
+# code on an ARM1176 core with no NEON.
+#
+# --no-binary-package is what actually forces the source build, and therefore what makes
+# the variables above take effect. Belt and braces on purpose: either alone is silently
+# insufficient here.
 ARG PURE_PYTHON=
+# Expands to nothing when PURE_PYTHON is empty, so the amd64 build is untouched.
+ARG NO_BINARY_PKGS="--no-binary-package aiohttp --no-binary-package multidict \
+--no-binary-package yarl --no-binary-package frozenlist --no-binary-package propcache"
 
 # gcc & co. are unconditional even though the amd64 build needs none of them: they are
 # discarded with this stage, never reach the final image, and keeping them unconditional
@@ -71,12 +90,12 @@ WORKDIR /app
 # copied in at this point, so editing anything under dd/ does NOT invalidate this layer;
 # rebuilds reuse the cached (on ARMv6, slow and C-compiling) result.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen ${UV_SYNC_GROUPS} --no-install-project
+RUN uv sync --frozen ${UV_SYNC_GROUPS} ${PURE_PYTHON:+${NO_BINARY_PKGS}} --no-install-project
 # The project itself, installed non-editable into the venv. Copied in only now, after
 # the expensive dependency sync above, so source edits invalidate only this cheap layer.
 COPY dd ./dd
 COPY README.md ./
-RUN uv sync --frozen ${UV_SYNC_GROUPS} --no-editable
+RUN uv sync --frozen ${UV_SYNC_GROUPS} ${PURE_PYTHON:+${NO_BINARY_PKGS}} --no-editable
 
 # --- Final: runtime image, no compilers ------------------------------------
 FROM ${BASE_IMAGE} AS final
