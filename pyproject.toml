@@ -26,6 +26,7 @@ dependencies = [
     "roman>=5.2",
     "setuptools>=83.0.0",
     "sqlalchemy>=2.0.51,<3",
+    "supervisor>=4.3.0",
     "tzdata>=2026.2",
     "yarl>=1.24.2",
 ]
