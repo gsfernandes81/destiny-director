@@ -19,12 +19,14 @@ The rendering these used to assert moved to the shared golden corpus
 (``dd/anchor/preview_fixtures``), which holds the Python and JavaScript renderers
 to one output rather than checking either alone."""
 
+import asyncio
 import dataclasses
 import json
 import sqlite3
 import typing as t
 
 import aiosqlite
+import hikari as h
 import pytest
 
 from dd.anchor import hybrid_post_core as hpc
@@ -346,3 +348,103 @@ async def test_iter_weapon_items_batches_rather_than_fetching_everything() -> No
     items = await hpc.iter_weapon_items(_Cursor())
     assert [i[0] for i in items] == ["Solo"]
     assert calls == ["execute", "fetchmany(200)", "fetchmany(200)"]
+
+
+# --- reconcile_missing_post -----------------------------------------------------------
+# A post deleted in Discord has to be RETIRED from the record, not merely reported: the
+# form's Edit/Create split and post_action's 409 guard both read `meta.is_current()`, so
+# an answer that lives only in the render path offers a Create the server then refuses.
+# The probe runs outside `draft_lock` (a REST call), so the locked re-read may find a
+# different record than the one probed — hence a DraftMeta return rather than a bool:
+# "gone, but a different post now exists" has no truthy answer.
+
+
+class _FakeBot:
+    """Only what reconcile_missing_post touches — one fetch_message that can fail."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls = 0
+
+    async def fetch_message(self, _channel_id: int, _message_id: int) -> object:
+        self.calls += 1
+        if self.error:
+            raise self.error
+        return object()
+
+
+def _spec_for(meta: "hpc.DraftMeta", saved: list["hpc.DraftMeta"]) -> t.Any:
+    """A stand-in spec exposing just the meta accessors and the draft lock."""
+
+    class _Spec:
+        followable_key = "weekly_reset"
+        channel_id = 123
+        draft_lock = asyncio.Lock()
+
+        async def load_meta(self) -> hpc.DraftMeta:
+            return meta
+
+        async def save_meta(self, m: hpc.DraftMeta) -> None:
+            saved.append(m)
+
+    return _Spec()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_retires_and_persists_a_deleted_post() -> None:
+    meta = hpc.DraftMeta(
+        message_id=7, reset_ts=99, crossposted=True, status="published"
+    )
+    saved: list[hpc.DraftMeta] = []
+    bot = t.cast(t.Any, _FakeBot(h.NotFoundError(url="u", headers={}, raw_body=b"")))
+
+    got = await hpc.reconcile_missing_post(_spec_for(meta, saved), meta, bot)
+    # Persisted, so post_action's own is_current() check agrees with the form.
+    assert saved and saved[0].message_id == 0
+    assert saved[0].reset_ts == 0
+    assert saved[0].crossposted is False
+    assert saved[0].status == "draft"
+    # And the returned meta is the retired record, so this request renders from it.
+    assert got.is_current(99) is False
+    assert got.message_id == 0
+
+
+@pytest.mark.asyncio
+async def test_reconcile_leaves_the_record_alone_when_discord_is_unhappy() -> None:
+    # A rate limit or a transport blip is not evidence of deletion; flipping the form
+    # into offering Create there would risk a second post for the period.
+    meta = hpc.DraftMeta(message_id=7, reset_ts=99, status="posted")
+    saved: list[hpc.DraftMeta] = []
+
+    bot = t.cast(t.Any, _FakeBot(RuntimeError("429")))
+    got = await hpc.reconcile_missing_post(_spec_for(meta, saved), meta, bot)
+    assert got is meta
+    assert not saved
+    assert meta.message_id == 7
+
+
+@pytest.mark.asyncio
+async def test_reconcile_does_not_probe_without_a_bot() -> None:
+    meta = hpc.DraftMeta(message_id=7, reset_ts=99, status="posted")
+    saved: list[hpc.DraftMeta] = []
+
+    got = await hpc.reconcile_missing_post(_spec_for(meta, saved), meta, None)
+    assert got is meta
+    assert not saved
+
+
+@pytest.mark.asyncio
+async def test_reconcile_adopts_a_newer_record_instead_of_retiring_it() -> None:
+    # Between the (unlocked) fetch 404ing and the locked re-read, another tab or the
+    # cron created a NEW post: the persisted record now names a different message. The
+    # newer record must be left alone AND handed back, so the form renders Edit for the
+    # post that now exists rather than a Create post_action would 409.
+    stale = hpc.DraftMeta(message_id=7, reset_ts=99, status="posted")
+    fresh = hpc.DraftMeta(message_id=8, reset_ts=99, status="posted")
+    saved: list[hpc.DraftMeta] = []
+    bot = t.cast(t.Any, _FakeBot(h.NotFoundError(url="u", headers={}, raw_body=b"")))
+
+    got = await hpc.reconcile_missing_post(_spec_for(fresh, saved), stale, bot)
+    assert got is fresh  # render from what the locked read established
+    assert not saved  # the newer record is not touched
+    assert stale.message_id == 7  # nor is the caller's stale copy wiped

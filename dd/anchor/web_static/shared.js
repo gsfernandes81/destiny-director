@@ -49,6 +49,29 @@ async function api(path, body) {
 }
 window.api = api;
 
+// --- status lines -------------------------------------------------------------------
+// Several pages show "working…" then a result in the same little element. Shared because
+// three of them wanted it and the copies had already started to drift — one page called
+// a spinner helper that only existed in another file, which threw on click and left its
+// button disabled forever.
+
+/** Plain status text. `isError` switches it to the error colour. */
+function say(el, message, isError) {
+  el.classList.toggle("err", !!isError);
+  el.textContent = message;
+}
+
+/** Status text with a spinner in front — for waits measured in seconds. */
+function busy(el, message) {
+  el.classList.remove("err");
+  el.replaceChildren(
+    Object.assign(document.createElement("span"), { className: "spinner" }),
+    document.createTextNode(message),
+  );
+}
+window.say = say;
+window.busy = busy;
+
 // Internal DOM helpers (each page's own script keeps its own copies for widget building).
 const _byId = (id) => document.getElementById(id);
 

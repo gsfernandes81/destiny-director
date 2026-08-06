@@ -506,6 +506,78 @@ def _bot_starting() -> aiohttp.web.Response:
     return aiohttp.web.json_response({"error": _STARTING_MSG}, status=503)
 
 
+def _retire_meta(meta: DraftMeta) -> None:
+    """Forget the tracked post, keeping the draft data so Create can re-post it.
+
+    The reset every "the post is gone" path performs — deletion from the form, and
+    :func:`reconcile_missing_post` finding it deleted in Discord.
+    """
+    meta.message_id = 0
+    meta.reset_ts = 0
+    meta.crossposted = False
+    meta.status = "draft"
+
+
+async def reconcile_missing_post(
+    spec: HybridPostSpec, meta: DraftMeta, bot: CachedFetchBot | None
+) -> DraftMeta:
+    """The ``DraftMeta`` the caller should trust — retiring the tracked post if gone.
+
+    ``DraftMeta`` records what we posted; it cannot know what happened to it afterwards.
+    Someone deleting the message in Discord used to leave the form offering **Edit** for
+    a message that no longer exists — the edit then fails, and Create is nowhere to be
+    found. Checked once per form load.
+
+    Persisting the answer is the point, not a side effect. Reporting it to the caller
+    alone would fix the render and nothing else: ``post_action`` re-derives
+    ``post_this_period`` from ``meta.is_current()`` on its own, so a form that had been
+    talked into offering Create would get a 409 telling it a post already exists — a
+    button the server refuses. Writing the record back keeps ``is_current()`` the single
+    source of truth, so no consumer needs a second predicate.
+
+    Returns a meta rather than a verdict because the fetch runs OUTSIDE ``draft_lock``
+    (a Discord REST call can take seconds, and that lock serialises create/edit/delete —
+    holding it across a probe on every form GET would let one hung fetch wedge every
+    write). By the time a 404 is confirmed, another tab or the cron may have created a
+    new post, or the delete handler may have retired the record. A bool cannot express
+    the difference: ``True`` is wrong in the second case, ``False`` in the first. The
+    locked re-read sees whichever happened, and the caller renders from *that*.
+
+    Unknown counts as *present*: a REST blip or a bot that is still starting must not
+    flip the form into offering a second post for the period. Only a definite "not
+    found" (Discord 404) retires the record.
+    """
+    if not meta.message_id or bot is None:
+        return meta
+    try:
+        await bot.fetch_message(spec.channel_id, meta.message_id)
+    except h.NotFoundError:
+        logger.info(
+            "Tracked post %s is gone from channel %s; retiring the record",
+            meta.message_id,
+            spec.channel_id,
+        )
+        async with spec.draft_lock:
+            # Re-read under the lock: a create/edit/delete may have landed since the
+            # unlocked fetch. If the persisted record no longer names the message we
+            # probed, that newer record is the truth — hand it back untouched, whether
+            # it tracks a fresh post (render Edit) or was itself retired (render
+            # Create). Only an unchanged record gets retired and persisted.
+            current = await spec.load_meta()
+            if current.message_id == meta.message_id:
+                _retire_meta(current)
+                await spec.save_meta(current)
+            return current
+    except Exception:
+        # Anything else (rate limit, forbidden, transport) is not evidence of deletion.
+        logger.warning(
+            "Could not confirm tracked post %s still exists; assuming it does",
+            meta.message_id,
+            exc_info=True,
+        )
+    return meta
+
+
 async def form_get(
     spec: HybridPostSpec, request: aiohttp.web.Request, bot: CachedFetchBot | None
 ) -> aiohttp.web.Response:
@@ -516,7 +588,17 @@ async def form_get(
     # Keyed off the post's tracked period (is_current), NOT the draft's own reset_ts —
     # a user-overridable display field that must not decide staleness. A producer whose
     # post is optional (Trials) simply reports post_this_period False when none exists.
-    post_this_period = meta.is_current(spec.current_reset_ts())
+    # When the record claims a post for this period, verify it against Discord and adopt
+    # whatever comes back: the same record (still live), a retired one (deleted in
+    # Discord — offer Create, and the persisted record agrees so post_action will not
+    # refuse it), or a newer record another writer landed while we were checking (offer
+    # Edit for the post that now exists). `meta` is rebound rather than mutated, so the
+    # bootstrap below — which re-derives its own flags from meta.is_current() — sees the
+    # same truth the render does.
+    now_ts = spec.current_reset_ts()
+    if meta.is_current(now_ts):
+        meta = await reconcile_missing_post(spec, meta, bot)
+    post_this_period = meta.is_current(now_ts)
     draft = (await spec.load_draft() if post_this_period else None) or (
         await spec.build_context()
     )
@@ -703,10 +785,7 @@ async def delete(
                 return aiohttp.web.json_response(
                     {"ok": False, "error": _discord_error_note(exc)}, status=502
                 )
-            meta.message_id = 0
-            meta.reset_ts = 0
-            meta.crossposted = False
-            meta.status = "draft"
+            _retire_meta(meta)
             await spec.save_meta(meta)
     return aiohttp.web.json_response({"ok": True})
 

@@ -26,6 +26,12 @@ main.stats { margin: 1rem 0; display: flex; flex-direction: column; gap: 1.2rem;
 /* Chart spacing within this page's cards; the chart's own chrome is in charts.css. */
 .chart { margin: .2rem 0 .4rem; }
 
+/* `.table-scroll` (the wrapper these tables sit in) lives in shared.css. Without it the
+   table's own minimum width — a sparkline column plus long command/server names —
+   pushed the whole document wider than the viewport, so the entire page scrolled
+   sideways, headers and charts and all, which reads as broken rather than as "this
+   table is wide". */
+
 /* Data tables — command leaderboard, current totals, server list. */
 table.data { width: 100%; border-collapse: collapse; font-size: .88rem; }
 table.data th, table.data td {
@@ -65,6 +71,15 @@ table.data tbody tr:hover { background: var(--surface-3); }
 .muted.small { font-size: .78rem; margin: .1rem 0 .5rem; }
 #commandsCaption, #autopostsCaption { margin: 0 0 .2rem; }
 .spark-col { width: 160px; }
+/* On a narrow screen the sparkline is the first thing worth losing: it is a secondary
+   read of a series the chart above already shows in full.
+   Both halves, or neither: `.spark-col` is only ever on the <th> (stats.js gives the
+   body cells `.spark-cell`), so hiding it alone drops the header out from over a column
+   of cells that stay — every column right of it then sits under the wrong heading,
+   which is a worse read than the overflow this was meant to relieve. */
+@media (max-width: 640px) {
+  .spark-col, .spark-cell { display: none; }
+}
 .trend-col { width: 3rem; }
 .spark-cell { padding: .15rem .5rem; }
 

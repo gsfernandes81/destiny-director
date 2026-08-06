@@ -211,7 +211,9 @@ async def test_panel_hosts_the_bot_actions_and_modals(clean_cards: None) -> None
 
     assert 'id="infoBtn"' in body
     assert 'id="stopBtn"' in body
-    assert '<dialog class="panelmodal" id="stopDialog">' in body
+    # `danger` on the dialog is what makes the shutdown modal read as a warning rather
+    # than another form — the copy below is only half of it.
+    assert '<dialog class="panelmodal danger" id="stopDialog">' in body
     # Shutting down takes the panel with it; the dialog must say so.
     assert "panel runs inside the bot" in body
     assert "/static/control_panel.js" in body

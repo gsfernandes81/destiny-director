@@ -13,34 +13,24 @@
 # You should have received a copy of the GNU Affero General Public License along with
 # destiny-director. If not, see <https://www.gnu.org/licenses/>.
 
-"""Per-feed actions page — the web replacement for ``/<feed> send`` and ``show``.
+"""Per-feed actions — the web replacement for ``/<feed> send`` and ``show``.
 
-One page per autopost feed, reached from that feed's row on ``/autopost_settings``. It
-carries **actions only**: preview the post the producer would build right now, and send
-it to the feed's channel.
+**Two endpoints and no page.** The actions live on each feed's row on
+``/autopost_settings``, and the rendered post appears in that page's modals: a feed has
+no state a page could show that the row does not, so a page was only ever a click in the
+way. What is deliberately not here is anything beyond the two actions — no toggle (it
+stays solely on ``/autopost_settings``, so one row has one write path) and no status or
+health, which is the deferred observability work in ``plans/anchor_web_ia.md`` §4.
 
-Deliberately *not* here:
-
-- **The enable/disable toggle.** It stays solely on ``/autopost_settings`` so one row
-  has one write path. This page links there instead.
-- **Status / health** — last-run chips, delivery counts, reach. That is the deferred
-  observability work (``plans/anchor_web_ia.md`` §4); a feed-hub carrying it was
-  explicitly rejected, and this page must not grow it back a panel at a time.
-
-Routes (all behind the shared Discord-OAuth middleware in ``web_auth``, which also
+Routes (both behind the shared Discord-OAuth middleware in ``web_auth``, which also
 Origin-checks the POST, so there is no auth code here):
 
-- ``GET  /feed/{name}``          the static page shell
-- ``GET  /feed/{name}/data``     which feed this is, and whether it can be sent
 - ``GET  /feed/{name}/preview``  build the post now, return its node tree
 - ``POST /feed/{name}/send``     publish it to the feed's channel
 
-The shell carries no server-injected bootstrap: ``script-src 'self'`` (see ``web.py``'s
-CSP) forbids inline script, so the page is static and fetches ``/data`` for itself —
-the same shape ``cv2_builder_page`` uses. ``/preview`` likewise returns the **payload**,
-not HTML, and the page draws it with the shared renderer in ``web_static/cv2_render.js``
-— matching ``/mirror-logs/render``'s contract, so both preview surfaces go through one
-renderer.
+``/preview`` returns the **payload**, not HTML, and the page draws it with the shared
+renderer in ``web_static/cv2_render.js`` — matching ``/mirror-logs/render``'s contract,
+so both preview surfaces go through one renderer.
 
 **Why send returns before the post lands.** Both announcers retry construction forever
 with backoff (``autopost.discord_announcer``, ``xur.api_to_discord_announcer``), and
@@ -91,11 +81,18 @@ async def _on_started(_event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECT
     _bot = bot
 
 
+class BotNotReady(RuntimeError):
+    """Raised when a route needs the bot before ``StartedEvent`` has stashed it."""
+
+
 def _require_bot() -> CachedFetchBot:
+    # A plain exception, not HTTPServiceUnavailable. Both call sites are inside a
+    # `except Exception` that reports `str(e)` to the page, so nothing ever propagated
+    # this as an HTTP response — it just arrived on screen as "Service Unavailable",
+    # aiohttp's stringification of the class, with the sentence explaining what to do
+    # dropped on the floor. That sentence is the whole value of the error.
     if _bot is None:
-        raise aiohttp.web.HTTPServiceUnavailable(
-            text="Bot is still starting — try again in a moment."
-        )
+        raise BotNotReady("The bot is still starting — try again in a moment.")
     return _bot
 
 
@@ -170,7 +167,9 @@ async def _handle_send(request: aiohttp.web.Request) -> aiohttp.web.Response:
     post builds cleanly and the announcer is running — see the module docstring.
     """
     feed = _feed_or_404(request)
-    if feed.channel_id is None:
+    # Falsy, not `is None`: `register_feed` normalises 0 to None, and this is the guard
+    # standing between a dormant feed and a post announced into channel 0.
+    if not feed.channel_id:
         return aiohttp.web.json_response(
             {"error": f"{_title(feed.name)} is dormant — no channel configured."},
             status=409,
@@ -184,11 +183,20 @@ async def _handle_send(request: aiohttp.web.Request) -> aiohttp.web.Response:
             {"error": "A send is already in flight for this feed."}, status=409
         )
 
+    # Claim the slot here, before the first await — not after the build below. The
+    # build takes seconds on the Bungie-backed feeds, and a check that far from its
+    # claim is not a guard: two requests arriving inside that window both saw an empty
+    # set, and both posted. Adding immediately after the `in` test is atomic, because
+    # nothing between them yields to the loop.
+    _sending.add(feed.name)
+
     try:
         payload = await request.json()
     except Exception:
         payload = {}
-    publish = bool(payload.get("publish", True))
+    # A body that parses but isn't an object (`[1, 2]`) would make `.get` raise, and an
+    # exception here would strand the slot we just claimed.
+    publish = bool(payload.get("publish", True)) if isinstance(payload, dict) else True
 
     # Build once here so a constructor failure (the common one) is reported in the
     # response, before anything is posted. The announcer rebuilds — an extra API fetch
@@ -197,12 +205,13 @@ async def _handle_send(request: aiohttp.web.Request) -> aiohttp.web.Response:
     try:
         await _build(feed)
     except Exception as e:
+        _sending.discard(feed.name)
         logger.exception("Manual send of %s aborted: build failed", feed.name)
         return aiohttp.web.json_response(
             {"error": f"Building the post failed, nothing was sent: {e}"}, status=502
         )
 
-    _sending.add(feed.name)
+    # From here the task owns the slot and releases it in `_run_send`.
     task = asyncio.create_task(_run_send(feed, publish))
     _send_tasks.add(task)
     task.add_done_callback(_send_tasks.discard)

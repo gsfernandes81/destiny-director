@@ -93,6 +93,21 @@
   }
 }
 * { box-sizing: border-box; }
+/* `hidden` is only a UA style (`display: none`), so ANY author `display` on the element
+   beats it. Adding one to the base button rule below silently disabled every `hidden`
+   button on the post toolbars, showing Create and Edit at once. Stated here, once, for
+   the whole sheet — the same trap is set by `.spinner`, `.post-wall` and the form-page
+   layout rules, and a per-selector patch only holds until the next `display:` lands.
+   `!important` because an author rule of equal specificity would otherwise win on
+   source order. Attribute only: the `.hidden` CLASS some pages define is separate, and
+   `#problems.hidden` animates its display, which this must not freeze. */
+[hidden] { display: none !important; }
+
+/* A wide table scrolls INSIDE its container rather than widening the document. Here
+   rather than in a page sheet because it is layout chrome, not a page's own look: the
+   first two users (stats' leaderboards) will not be the last, and the alternative is
+   the copy-paste that already happened to the `.hidden` utility. */
+.table-scroll { overflow-x: auto; }
 body {
   font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   margin: 0; padding: 0 1.2rem 1.2rem; max-width: 880px; margin-inline: auto;

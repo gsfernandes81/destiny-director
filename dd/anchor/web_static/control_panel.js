@@ -21,17 +21,23 @@ document.addEventListener("DOMContentLoaded", () => {
   const stopConfirm = byId("stopConfirm");
   const botStatus = byId("botStatus");
 
-  function say(el, message, isError) {
-    el.classList.toggle("err", !!isError);
-    el.textContent = message;
-  }
+  // say/busy/api are globals from shared.js (loaded first, deferred).
 
   /** A <dt>/<dd> pair. textContent throughout — ids come from config, not literals. */
-  function row(list, label, value) {
+  function row(list, label, value, href) {
     const dt = document.createElement("dt");
     dt.textContent = label;
     const dd = document.createElement("dd");
-    dd.textContent = value;
+    if (href) {
+      const link = document.createElement("a");
+      link.href = href;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = value;
+      dd.appendChild(link);
+    } else {
+      dd.textContent = value;
+    }
     list.append(dt, dd);
   }
 
@@ -65,7 +71,8 @@ document.addEventListener("DOMContentLoaded", () => {
         // Prefer the name; fall back to the id only when the bot could not resolve it
         // (not in the guild, channel deleted, or still starting up).
         data.channels.forEach((c) =>
-          row(feeds, c.feed, c.channelName || c.channelId || "(not set)"),
+          // A link only when the bot resolved the guild — otherwise it would 404.
+          row(feeds, c.feed, c.channelName || c.channelId || "(not set)", c.url),
         );
       } else {
         row(feeds, "—", "(none configured)");
@@ -88,7 +95,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   stopConfirm.addEventListener("click", async () => {
     stopConfirm.disabled = true;
-    say(stopStatus, "Stopping…", false);
+    busy(stopStatus, "Stopping…");
     try {
       const res = await window.api("/bot/stop", {});
       const data = await res.json().catch(() => ({}));

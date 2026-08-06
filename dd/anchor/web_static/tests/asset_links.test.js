@@ -217,3 +217,61 @@ test("a page driven by initPostForm has every element it dereferences", () => {
   );
   assert.deepEqual(missing, [], "shared.js will throw on these pages");
 });
+
+// A page script calling a helper that exists nowhere throws on first use — and if that
+// use is the first line of a click handler, the button disables and never recovers.
+// That shipped once: bungie_account.js called busy() when the only definition lived in
+// autopost_settings.js. shared.js's helpers are top-level functions (so plain globals),
+// so a bare call is fine — what must hold is that the helper is DEFINED somewhere and
+// that the page actually loads shared.js.
+//
+// The helper list is DERIVED from shared.js's `window.x =` exports, not hardcoded: a
+// hardcoded list leaves the next shared helper uncovered until someone remembers, which
+// is the very failure this exists to catch. The export is also the real contract —
+// deleting the `window.` lines would keep a `function say` assertion green while
+// breaking every page.
+test("page scripts only call shared helpers that shared.js defines", () => {
+  const SHARED_JS = fs.readFileSync(path.join(STATIC_DIR, "shared.js"), "utf8");
+  const HELPERS = [...SHARED_JS.matchAll(/^window\.(\w+)\s*=/gm)]
+    .map((m) => m[1])
+    // Not a helper — the page's server-injected data, assigned to the same namespace.
+    .filter((n) => n !== "__BOOTSTRAP__");
+  const offenders = [];
+
+  // The guard on the guard, matching the one above: an empty list finds no offenders.
+  assert.ok(
+    HELPERS.length >= 3,
+    `expected shared.js to export several helpers, found ${JSON.stringify(HELPERS)}`,
+  );
+
+  const HOSTS = pages();
+
+  for (const name of fs.readdirSync(STATIC_DIR).filter((n) => n.endsWith(".js"))) {
+    if (name === "shared.js") continue;
+    const text = fs
+      .readFileSync(path.join(STATIC_DIR, name), "utf8")
+      // Comments mention these helpers by name; only real calls matter.
+      .replace(/\/\/[^\n]*/g, "")
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+    const used = HELPERS.filter(
+      (h) =>
+        new RegExp(`(?:^|[^.\\w])${h}\\s*\\(`, "m").test(text) &&
+        // A file may define its own — cv2_builder_page.js has an api() of its own
+        // shape, scoped to the draft routes, and wants nothing from shared.js.
+        !new RegExp(`function\\s+${h}\\b`).test(text),
+    );
+    if (!used.length) continue;
+
+    // Every page that loads this script must also load shared.js before it.
+    for (const host of HOSTS.filter((p) => p.text.includes(`/static/${name}`))) {
+      const shared = host.text.indexOf("/static/shared.js");
+      if (shared === -1 || shared > host.text.indexOf(`/static/${name}`)) {
+        offenders.push(
+          `${host.name}: loads ${name} (uses ${used.join(", ")}) without shared.js before it`,
+        );
+      }
+    }
+  }
+
+  assert.deepEqual(offenders, [], "load shared.js before the script that calls into it");
+});

@@ -71,6 +71,9 @@
       .modalpreview { max-height: 50vh; overflow-y: auto; }
       .modalstatus { color: var(--text-faint); font-size: .85rem; }
       .modalstatus.err { color: var(--danger, #d9534f); }
+      /* The send dialog carries two of these (preview build, send outcome) and usually
+         only one is saying anything; an empty one must not hold open a gap. */
+      .modalstatus:empty { display: none; }
       .row .desc { color: var(--text-faint); font-size: .8rem; margin-top: .15rem; }
       /* A URL setting stacks its full-width text input below the label instead of
          placing a switch on the right. */
@@ -147,6 +150,13 @@
       <!-- The post being sent, so the confirmation shows WHAT is going out, not just
            where. This is the preview; the row deliberately stays a list of toggles. -->
       <div class="modalpreview cv2-preview" id="sendPreview"></div>
+      <!-- Two status lines, not one. The preview build and the send are deliberately
+           independent — send stays available while the preview builds and even if it
+           fails — so they must not share a slot: a preview resolving after a failed
+           send used to clear the error, leaving a blank line and an armed button. Both
+           can also be true at once ("Iron Banner is not running" AND "Send failed"),
+           and both are worth reading. -->
+      <p class="modalstatus" id="sendPreviewStatus"></p>
       <p class="modalstatus" id="sendStatus"></p>
       <label class="publish"
         ><input type="checkbox" id="publish" checked /> Publish (crosspost to

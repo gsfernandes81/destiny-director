@@ -178,18 +178,29 @@ async def test_send_honours_publish_false() -> None:
     assert seen["publish_message"] is False
 
 
-async def test_send_refuses_a_dormant_feed() -> None:
+@pytest.mark.parametrize("dormant_channel", [None, 0])
+async def test_send_refuses_a_dormant_feed(dormant_channel: int | None) -> None:
+    # 0 is the shape production actually produces: an unset followable ships as
+    # `"portal_ops": 0` in FOLLOWABLES, so `cfg.followables.get(...)` returns 0, not
+    # None. A guard written as `is None` let Send answer "started" and announce into
+    # channel 0 — failing where only the log could see it. register_feed normalises the
+    # two, and this covers both spellings arriving at the handler.
     called = False
 
     async def _announcer(**_kwargs: t.Any) -> None:
         nonlocal called
         called = True
 
-    _register(channel_id=None, announcer=_announcer)
+    _register(channel_id=dormant_channel, announcer=_announcer)
     res = await feed_actions._handle_send(_as_request(_FakeRequest("xur", {})))
     assert res.status == 409
     assert "dormant" in json.loads(_text(res))["error"]
     assert not called
+
+
+async def test_register_feed_normalises_an_unset_channel_to_none() -> None:
+    _register(channel_id=0)
+    assert autopost.registered_feeds()["xur"].channel_id is None
 
 
 async def test_send_refuses_without_an_announcer() -> None:
@@ -212,6 +223,45 @@ async def test_send_does_not_post_when_the_build_fails() -> None:
     assert res.status == 502
     assert "nothing was sent" in json.loads(_text(res))["error"]
     assert not called
+    # And the slot is released, or a failed build would make the feed unsendable.
+    assert "xur" not in feed_actions._sending
+
+
+async def test_a_send_during_another_send_s_build_is_refused() -> None:
+    """The in-flight guard must cover the pre-flight build, not just the announcer.
+
+    The build takes seconds against the live Bungie API. When the slot was only claimed
+    after it, two requests arriving inside that window both passed the check and both
+    posted — the exact double-post the guard exists to prevent.
+    """
+    building = asyncio.Event()
+    release = asyncio.Event()
+    builds = 0
+
+    async def _slow_constructor(**_kwargs: object) -> HMessage:
+        nonlocal builds
+        builds += 1
+        building.set()
+        await release.wait()
+        return _post()
+
+    async def _announcer(**_kwargs: t.Any) -> None:
+        return None
+
+    _register(constructor=_slow_constructor, announcer=_announcer)
+
+    first = asyncio.create_task(
+        feed_actions._handle_send(_as_request(_FakeRequest("xur", {})))
+    )
+    await building.wait()  # the first request is mid-build, not yet started
+
+    second = await feed_actions._handle_send(_as_request(_FakeRequest("xur", {})))
+    assert second.status == 409
+    assert "already in flight" in json.loads(_text(second))["error"]
+
+    release.set()
+    assert (await first).status == 200
+    assert builds == 1  # the second never got as far as building
 
 
 async def test_send_rejects_a_second_send_while_one_is_in_flight() -> None:
@@ -244,3 +294,15 @@ async def test_routes_registered_without_a_page_or_card() -> None:
     paths = {getattr(r.resource, "canonical", None) for r in app.router.routes()}
     assert "/feed/{name}/preview" in paths
     assert "/feed/{name}/send" in paths
+
+
+async def test_preview_before_the_bot_is_up_says_what_to_do(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The message must survive to the page. An HTTPServiceUnavailable here stringified
+    # to "Service Unavailable" — technically true, useless to read — because both call
+    # sites report str(e) rather than letting it propagate as a response.
+    monkeypatch.setattr(feed_actions, "_bot", None)
+    _register()
+    res = await feed_actions._handle_preview(_as_request(_FakeRequest("xur")))
+    assert "still starting" in json.loads(_text(res))["error"]

@@ -1058,13 +1058,8 @@ def _clean_activity_name(name: str, category: str) -> str:
     return base
 
 
-async def _build_indexes() -> _Indexes:
-    # One row per named weapon/armour (deduped, newest hash wins). The weapon pool is
-    # generic and identical across producers, so it comes from the process-wide, cached
-    # get_weapon_pool() (shared with trials) rather than being re-scanned here; a
-    # manifest failure there yields [] so the strike/conquest index below still builds
-    # from this extension's own connection.
-    items = await get_weapon_pool()
+async def _scan_activities() -> tuple[set[str], dict[str, set[str]], bool]:
+    """The strike + conquest pools, from this extension's own manifest connection."""
     # Only GM strikes need manifest autocomplete now; raids/dungeons/pantheon/crucible
     # are bounded Choice selectors (see the *_CHOICES constants).
     strikes: set[str] = set()
@@ -1106,9 +1101,24 @@ async def _build_indexes() -> _Indexes:
                             strikes.add(cleaned)
     except Exception:
         logger.warning("weekly_reset: manifest index build failed", exc_info=True)
-        complete = False
-    else:
-        complete = True
+        return strikes, conquest_by_tier, False
+    return strikes, conquest_by_tier, True
+
+
+async def _build_indexes() -> _Indexes:
+    # The two halves share nothing but the manifest, so they run together rather than in
+    # sequence — the page now waits for this build, so it waits for their max, not their
+    # sum. Running them concurrently also means their two manifest resolves coalesce
+    # onto one (`manifest._inflight`); in sequence they were two Bungie round-trips,
+    # each opening a fresh session, on the cold path this build exists to keep short.
+    #
+    # The weapon pool is generic and identical across producers, so it comes from the
+    # process-wide, cached get_weapon_pool() (shared with trials) rather than being
+    # re-scanned here; a manifest failure there yields [] so the strike/conquest index
+    # still builds.
+    items, (strikes, conquest_by_tier, complete) = await asyncio.gather(
+        get_weapon_pool(), _scan_activities()
+    )
 
     result = _Indexes(
         items=items,
@@ -1289,49 +1299,24 @@ def _pair(raw: t.Any) -> tuple[str, str]:
     return (values[0], values[1])
 
 
-#: How long the form waits for the manifest-backed pools before rendering without them.
-#: The manifest is a large download the first time (its own timeout is 600s) plus a full
-#: scan of two definition tables, so a cold process used to make ``GET /weekly_reset``
-#: hang for 40s+ and sometimes never answer. A prewarm runs at StartedEvent, so in the
-#: normal case this wait is already satisfied and costs nothing; this bound is what
-#: happens when the form is opened before it finishes.
-_OPTIONS_WAIT_SECONDS = 5
-
-
 async def _build_options() -> dict[str, t.Any]:
     """Option pools shipped in the page bootstrap and filtered client-side.
 
-    Never blocks the page for long: on timeout the form renders with empty
-    manifest-backed pools and ``ready: False``, which the page surfaces as a "still
-    loading, reload shortly" banner. The prewarm keeps building in the background, so a
-    reload a moment later gets the full pools.
+    **Waits for the manifest rather than rendering without it.** A bounded wait was
+    tried, and traded the wrong thing away: it turned a slow page into a page with empty
+    weapon / GM strike / Conquest pickers and a banner nobody has to read, on the one
+    form where those pools *are* the content. The reason the wait was there is now
+    handled upstream — the manifest is prewarmed at ``StartedEvent``
+    (``bungie_api.prewarm_manifest``) so it is on disk before anyone opens this, and
+    concurrent resolves are coalesced onto one, so two pages opened together do not
+    queue behind two downloads.
+
+    ``ready`` survives for the case no amount of waiting fixes: the manifest could not
+    be read at all, so the pools are genuinely empty and the page says so.
     """
-    try:
-        # shield() so the timeout abandons the *wait*, not the build: the prewarm's
-        # in-flight manifest download keeps going and a reload picks it up.
-        indexes = await asyncio.wait_for(
-            asyncio.shield(get_indexes()), _OPTIONS_WAIT_SECONDS
-        )
-    except Exception:  # TimeoutError included — either way, render without the pools.
-        logger.info(
-            "weekly_reset: manifest pools not ready within %ss; serving the form "
-            "without them",
-            _OPTIONS_WAIT_SECONDS,
-        )
-        return {
-            "ready": False,
-            "items": [],
-            "conquests": {tier: [] for tier in CONQUEST_TIERS},
-            "strikes": [],
-            "raids": list(RAIDS),
-            "dungeons": list(DUNGEONS),
-            "pantheon": list(PANTHEON_BOSSES),
-            "crucible_modes": list(CRUCIBLE_MODES),
-            "crucible_3v3_first": CRUCIBLE_3V3_FIRST,
-            "crucible_6v6_first": CRUCIBLE_6V6_FIRST,
-        }
+    indexes = await get_indexes()
     return {
-        # False when the manifest was not ready in time, or could not be read at all.
+        # False when the manifest could not be read at all.
         "ready": indexes.complete,
         "items": [
             {"name": name, "hash": hash_, "type": type_name, "rarity": rarity}
