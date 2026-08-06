@@ -7,7 +7,13 @@
 set -euo pipefail
 
 PI_USER="${PI_USER:-$(logname 2>/dev/null || echo pi)}"
-SSH_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJDFSj3iGVI4W4HLDIoyDfyXtr3JdxlKAYd1iB8im8le claude-slim-stack-temp-20260805"
+# Deploy keys are per-session throwaways (the agent session that needs SSH access
+# rotates every so often), so this default is just the current one -- it's appended to
+# authorized_keys, never replacing what's already there (see the grep-before-append
+# below), so old sessions' keys keep working until someone prunes them by hand. A
+# future session rotating the key doesn't need a repo commit to do it: override with
+# `SSH_PUBKEY="ssh-ed25519 AAAA... some-label" sudo -E bash deploy/pi5/root-setup.sh`.
+SSH_PUBKEY="${SSH_PUBKEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOGaCeXcIrWB9SFTi/rwLx68HwPub3uP2TzsyPFKpbQj claude-cloud-two-20260806}"
 SUBID_START="${SUBID_START:-200000}"
 SUBID_COUNT="${SUBID_COUNT:-65536}"
 

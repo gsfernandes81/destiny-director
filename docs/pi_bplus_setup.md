@@ -2,13 +2,18 @@
 
 Run a real (test-guild) copy of `dd.beacon` + its own Postgres on an **original
 Raspberry Pi B+** (BCM2835, single ARM1176JZF-S core @ 700MHz, ARMv6, 512MB RAM) — a
-low-stakes, always-on box for exercising the bot outside of Railway. Images are built
-on a Raspberry Pi 5 and shipped to the B+ over SSH; nothing is pulled from or pushed to
-a registry.
+low-stakes, always-on box for exercising the bot outside of Railway. There is no Pi 5
+(or any other build host) in this setup: images are built directly on the B+ itself,
+unprivileged as `dd`, from a clone of this repo — nothing is pulled from or pushed to a
+registry, and nothing is shipped over SSH. A Pi 5 cross-build path still exists (see
+[Optional: Pi 5 cross-build](#optional-faster-alternative--build-on-a-pi-5) below) as a
+faster alternative for whoever has a Pi 5 handy, but it is no longer the primary or
+assumed path.
 
-Files: `deploy/pi-bplus/root-setup.sh`, `deploy/pi-bplus/Containerfile`,
-`deploy/pi-bplus/entrypoint.sh`, `deploy/pi-bplus/compose.yml`,
-`deploy/pi5/root-setup.sh`, `deploy/pi5/build-and-ship.sh`.
+Files: `deploy/pi-bplus/root-setup.sh`, `deploy/pi-bplus/build-local.sh`,
+`deploy/pi-bplus/Containerfile`, `deploy/pi-bplus/entrypoint.sh`,
+`deploy/pi-bplus/compose.yml`, `deploy/pi5/root-setup.sh`,
+`deploy/pi5/build-and-ship.sh`.
 
 ## Hardware / OS assumptions
 
@@ -24,18 +29,18 @@ Files: `deploy/pi-bplus/root-setup.sh`, `deploy/pi-bplus/Containerfile`,
   unsynced diskless system loses Postgres's data directory outright on power loss —
   worse than the SD-endurance trade-off `sys` mode makes (see
   [Caveats](#constraints--caveats) below).
-- **Raspberry Pi 5**, used only as a build host — its Cortex-A76 executes 32-bit ARM
-  userland natively, so `podman build --platform linux/arm/v6` runs without qemu/binfmt
-  emulation. This remains the recommended path: it's dramatically faster than the B+'s
-  single 700MHz ARM1176 core, even though the dependency-install layer now compiles
-  only one package from sdist (`greenlet`, SQLAlchemy's asyncio C bridge — `regex` and
-  `dateparser` were dropped in favor of pure-Python `re`/`python-dateutil`, and
-  aiohttp/multidict/yarl/frozenlist/propcache are forced to their pure-Python builds
-  via `*_NO_EXTENSIONS=1`). With only that one small C build left, building
-  `deploy/pi-bplus/Containerfile` directly *on* the B+ (`podman build` locally, no Pi 5,
-  no `podman save`/`load` transfer step) is now a feasible fallback if a Pi 5 isn't
-  available — just expect it to take noticeably longer on that CPU, so still prefer the
-  Pi 5 path below when you have one.
+- **No Pi 5 (or any other build host) in this setup.** Images are built directly on the
+  B+, natively, as ARMv6 — which is only feasible because the dependency-install layer
+  now compiles just one package from sdist (`greenlet`, SQLAlchemy's asyncio C bridge —
+  `regex` and `dateparser` were dropped in favor of pure-Python `re`/`python-dateutil`,
+  and aiohttp/multidict/yarl/frozenlist/propcache are forced to their pure-Python
+  builds via `*_NO_EXTENSIONS=1`). With only that one small C build left, an on-device
+  build is slow but no longer impractical — expect roughly 30+ minutes on the single
+  700MHz ARM1176 core (see [Step 2](#step-2--build-the-image-on-the-b-primary-path)).
+  A Raspberry Pi 5 — whose Cortex-A76 executes 32-bit ARM userland natively, so
+  `podman build --platform linux/arm/v6` runs without qemu/binfmt emulation — remains
+  available as a strictly optional, faster cross-build path for anyone who has one; it
+  is not assumed or required by anything else in this document.
 - Rootless **podman** + **podman-compose** throughout on the B+ (no Docker, no root
   containers) — see `deploy/pi-bplus/root-setup.sh` for why (no systemd/logind on
   Alpine, no cgroup delegation for rootless user slices under OpenRC).
@@ -72,7 +77,62 @@ It (idempotently) does everything that needs root, so nothing after this step do
 **Reboot after this step** — the cgroup mode, `gpu_mem`, and `noatime` changes all need
 it. Everything from here on runs unprivileged as `dd` over SSH.
 
-## Step 2 — build and ship from the Pi 5
+## Step 2 — build the image on the B+ (primary path)
+
+`root-setup.sh` (Step 1) does not install `git` — it only installs what the running
+stack needs (`podman`, `crun`, `passt`, `shadow-uidmap`, `podman-compose`, `zram-init`),
+not what building from a repo clone needs. Add it once, as root, before cloning:
+
+```sh
+apk add git
+```
+
+(This is a deliberate omission from `root-setup.sh` rather than an oversight — adding
+it there would mean re-running that script, and the whole point of Step 1 is that you
+only run it once. Installing `git` by hand here is one extra command against re-running
+a root script for a one-line change.)
+
+Then, as `dd` (everything from here on is unprivileged), clone the repo onto the B+ and
+build:
+
+```sh
+git clone <this-repo-url> ~/destiny-director
+cd ~/destiny-director
+deploy/pi-bplus/build-local.sh
+```
+
+`build-local.sh` builds `deploy/pi-bplus/Containerfile` for `linux/arm/v6` natively (no
+qemu, no cross-build host, nothing shipped over SSH) and tags it `dd-beacon:latest`.
+**Expect roughly 30+ minutes** on the B+'s single 700MHz ARM1176 core — the bulk of
+that is compiling `greenlet` from sdist; see the hardware-assumptions note above for
+why that's the only C extension left in the build. This is a one-off wait per image,
+not a normal iteration loop, so plan builds around it rather than expecting quick
+feedback.
+
+For every rebuild after a code change, from `~/destiny-director` as `dd`:
+
+```sh
+git pull
+deploy/pi-bplus/build-local.sh
+cd /srv/dd && podman-compose up -d --force-recreate beacon
+```
+
+(`--force-recreate` is required — see the `podman-compose up -d` note in Step 3 below
+for why plain `up -d` won't pick up a freshly-built same-tagged image.)
+
+Because the image builds directly on this host, its build layers accumulate on the SD
+card across repeated rebuilds — there's no separate build host to absorb that churn.
+Periodically run `podman image prune` (dangling layers) or, more aggressively,
+`podman system prune` (unused images/containers/build cache) as `dd` to reclaim space;
+how often depends on how frequently you're rebuilding, but it's worth checking `df -h`
+after a run of several rebuilds in a short span.
+
+### Optional faster alternative — build on a Pi 5
+
+If a Raspberry Pi 5 is available, it cross-builds the same image far faster than the
+B+'s single 700MHz core can build it natively, and ships it over SSH instead of
+building in place. This is entirely optional — nothing else in this document depends
+on it, and the B+ never needs a Pi 5 to be usable.
 
 On the Pi 5, once:
 
@@ -94,7 +154,8 @@ deploy/pi5/build-and-ship.sh dd@<pi-bplus-hostname-or-ip>
 This builds `deploy/pi-bplus/Containerfile` for `linux/arm/v6`, tags it
 `dd-beacon:latest`, and pipes `podman save` straight into `ssh ... podman load` on the
 B+ — no registry involved. It takes a `user@host` argument (or reads
-`PI_BPLUS_TARGET` from the environment).
+`PI_BPLUS_TARGET` from the environment). With this path, the B+ never needs its own
+repo clone or `git` install — the image arrives pre-built.
 
 ## Step 3 — deploy config + bring the stack up
 
@@ -138,10 +199,11 @@ XDG_RUNTIME_DIR=/run/user/$(id -u) podman-compose up -d
 
 (root-setup.sh's boot-time script does this automatically after a reboot once
 `compose.yml` exists — this manual command is for the first bring-up, and for picking
-up a freshly-shipped image without rebooting: `podman-compose up -d` alone does *not*
+up a freshly-built image without rebooting: `podman-compose up -d` alone does *not*
 recreate a running container against a same-tagged image it already has, so after
-`build-and-ship.sh` ships an update run `podman-compose up -d --force-recreate
-beacon`.)
+`build-local.sh` (or `build-and-ship.sh`, on the Pi 5 path) produces a new image, run
+`podman-compose up -d --force-recreate beacon` — this is exactly the last line of
+Step 2's rebuild loop above.)
 
 ## Verification checklist
 
