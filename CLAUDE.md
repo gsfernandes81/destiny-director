@@ -57,6 +57,14 @@ DB layer, or building a message/embed, read it.** Quick orientation:
   import time**, so a missing var fails fast with `ValueError`.
 - Deploy via `make deploy-beacon-dev` / `deploy-anchor-prod` etc. (Railway) or via
   Railway's plugin.
+- **One image for every deployment.** The repo-root `Dockerfile` builds both the Railway
+  (amd64) and Raspberry Pi B+ (`linux/arm/v6`) images — Alpine for both, prod-correct
+  defaults, three build args (`BASE_IMAGE`, `UV_SYNC_GROUPS`, `PURE_PYTHON`) for the Pi.
+  There are **no entrypoint shell scripts**: PID 1 is **supervisord** (`supervisord.conf`),
+  which picks the bot from `RAILWAY_SERVICE_NAME`, bounds its restarts, and runs a
+  disarmed-by-default sshd (`sshd_config`) so a container whose bot has died is still
+  reachable. Migrations run inside each bot's startup hook, not ahead of it — supervisord
+  has no ordering mechanism, so don't add config that assumes one.
 - **Never call the Railway connector's agent** (`mcp__Railway__railway-agent`). Use the
   direct tools only — `get-status`, `list-deployments`, `get-logs`, `get-service-config`,
   `list-variables`, `redeploy`, `update-service`. The agent takes its own actions to

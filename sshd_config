@@ -1,0 +1,53 @@
+# Break-glass sshd for the DEPLOYED container (see supervisord.conf; the dev container's
+# equivalent is sshd_config.dev). It exists for one job: getting a shell into a container
+# whose bot has died — `supervisorctl -c /etc/dd/supervisord.conf status`, a look at the
+# database, a manual `alembic` run — without keeping the bot alive to do it.
+#
+# Runs as the unprivileged `dd` user (the image does `USER dd`), which is why the port is
+# 2222 rather than 22. A non-root sshd can only ever authenticate its own account, so
+# `dd` is the only reachable login by construction.
+Port 2222
+ListenAddress 0.0.0.0
+
+# Generated at runtime by supervisord's sshd-keygen program (`ssh-keygen -A -f
+# /home/dd/.ssh-host`, hence the etc/ssh suffix it appends to that prefix) — NEVER baked
+# into the image, which would ship one private host key to every deployment. Point a
+# volume at /home/dd/.ssh-host so the key, and the client's known_hosts entry, survive a
+# container replacement — a NAMED volume, not a bind mount, which would hide the
+# etc/ssh directory the image pre-creates for ssh-keygen.
+HostKey /home/dd/.ssh-host/etc/ssh/ssh_host_ed25519_key
+PidFile /home/dd/run/sshd.pid
+
+# The arming switch. This file is written at every sshd start from the
+# SSH_AUTHORIZED_KEYS environment variable (the deployment's .env on the Pi, a service
+# variable on Railway) — see the sshd program in supervisord.conf, which is also where
+# the reasoning for doing it that way lives. Unset variable -> empty file -> nobody can
+# log in, which is the default state.
+#
+# NOT AuthorizedKeysCommand: OpenSSH runs that command with a scrubbed environment, so it
+# cannot see SSH_AUTHORIZED_KEYS at all (verified, not assumed).
+#
+# One key per line, as usual. A single key is the common case; a multi-line value works
+# wherever the deployment can express one (Railway's variable UI can — a dotenv file
+# cannot).
+AuthorizedKeysFile /home/dd/.ssh/authorized_keys
+
+# sshd hands sessions its own compiled-in PATH, which does not include the venv, so a
+# `ssh <host> supervisorctl ...` would otherwise find nothing. This fixes the
+# non-interactive case; an interactive LOGIN shell reads /etc/profile, which sets PATH
+# unconditionally and undoes it — for that case the Dockerfile symlinks the two tools
+# worth reaching for (supervisorctl, alembic) into /usr/local/bin, which is on the
+# profile's PATH. Anything else: `export PATH=/app/.venv/bin:$PATH`.
+SetEnv PATH=/app/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PermitRootLogin no
+StrictModes yes
+# No `UsePAM no` here (unlike sshd_config.dev, which is Debian-based): Alpine's OpenSSH is
+# built without PAM entirely, so the option does not exist and sshd warns "Unsupported
+# option UsePAM" on every start. Non-root sshd needs PAM off, and it already is.
+
+Subsystem sftp internal-sftp

@@ -37,9 +37,17 @@ make test
 Running code locally with docker:
 
 ```
-docker build -t anchor .
-docker run --env-file=.env anchor
+docker build -t dd .
+docker run --env-file=.env -e RAILWAY_SERVICE_NAME=anchor dd
 ```
+
+One `Dockerfile` builds the image for both deployment targets (Railway and the
+Raspberry Pi B+); its defaults are the Railway/amd64 ones, and three build args switch
+it to ARMv6 — see the file's header, or
+[`docs/pi_bplus_setup.md`](docs/pi_bplus_setup.md). Inside the container PID 1 is
+supervisord (`supervisord.conf`), which picks the bot from `RAILWAY_SERVICE_NAME` and
+also runs a disarmed-by-default sshd for getting a shell into a container whose bot has
+died (`sshd_config`).
 
 Developing on a remote Raspberry Pi 5 in a Docker dev container (terminal-only,
 `docker exec` over the Pi host's SSH): see [`docs/pi_dev_setup.md`](docs/pi_dev_setup.md).

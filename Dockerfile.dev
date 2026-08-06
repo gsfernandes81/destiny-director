@@ -15,7 +15,8 @@ ARG USER_GID=1000
 # client under --no-install-recommends). openssh-server runs the in-container
 # sshd (port 2222, non-root) so Zed can remote directly in (see sshd_config.dev).
 # libjemalloc2 lets the devbot runner (docker-run-devbot.sh) LD_PRELOAD jemalloc so
-# a locally-run dev bot mirrors prod's allocator (docker-entrypoint.sh) for RAM work.
+# a locally-run dev bot mirrors the deployed image's allocator (the LD_PRELOAD/MALLOC_CONF
+# ENV in the repo-root Dockerfile) for RAM work.
 # postgresql-client gives psql for poking at the `postgres` sibling service (pulls in
 # libpq5, which psycopg's pure-Python distribution also dlopens at import time — see
 # the runtime Dockerfile's libpq5 comment).

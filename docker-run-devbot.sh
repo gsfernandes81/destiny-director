@@ -116,13 +116,14 @@ DATABASE_URL="$devbot_url" DATABASE_PRIVATE_URL="$devbot_url" uv run alembic upg
 # it, not the Claude session, is reaped first if the container cap is ever hit.
 export DATABASE_URL="$devbot_url" DATABASE_PRIVATE_URL="$devbot_url"
 
-# Mirror prod's allocator (docker-entrypoint.sh preload_jemalloc). glibc retains freed
+# Mirror the deployed image's allocator (the Dockerfile's LD_PRELOAD). glibc retains freed
 # arenas, jemalloc returns them to the OS via a background decay thread. anchor caps
 # narenas:2 (its small, single-loop process gained nothing from the default 4*ncpu and
 # paid the per-arena overhead); beacon keeps the default. Needs libjemalloc2 in the image
 # (Dockerfile.dev) — absent until the container is rebuilt, in which case we fall back to
 # glibc, same as before. Set DEVBOT_JEMALLOC=0 to force glibc for an A/B RAM comparison.
-# Keep MALLOC_CONF in sync with docker-entrypoint.sh.
+# Keep MALLOC_CONF in sync with the Dockerfile's ENV (and supervisord.conf's note on
+# where anchor's narenas:2 comes from in a deployment).
 jemalloc="/usr/lib/$(uname -m)-linux-gnu/libjemalloc.so.2"
 if [ "${DEVBOT_JEMALLOC:-1}" = "0" ]; then
   echo "devbot: jemalloc disabled via DEVBOT_JEMALLOC=0 (glibc malloc)"

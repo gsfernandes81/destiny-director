@@ -140,7 +140,8 @@ async def run_migrations_online() -> None:
     async with engine.connect() as connection:
         if not _is_sqlite:
             # beacon and anchor boot together and BOTH run `alembic upgrade head`
-            # (docker-entrypoint.sh). This transaction-scoped advisory lock (an
+            # (from their own startup hooks — dd/common/db_migrations.py). This
+            # transaction-scoped advisory lock (an
             # arbitrary constant, ours alone) serialises them: the loser waits, then
             # finds the schema already at head and does nothing, instead of colliding
             # mid-DDL. Released automatically by the commit below.

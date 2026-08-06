@@ -1,4 +1,7 @@
-# Build-context excludes for `docker build` (both Dockerfile and Dockerfile.dev).
+# Build-context excludes for `docker build` (both Dockerfile and Dockerfile.dev). The
+# repo-root Dockerfile is the ONLY image definition — it builds both the Railway and the
+# Raspberry Pi B+ images, so nothing either of them needs may be excluded here
+# (supervisord.conf and sshd_config are COPYed into the image).
 # NOTE: `.railwayignore` only governs Railway uploads; local/Pi builds need this.
 # Do NOT add a bare `*.sql` line — migrations/*.sql must ship in the prod image.
 

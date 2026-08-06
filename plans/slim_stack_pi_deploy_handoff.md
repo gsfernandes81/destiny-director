@@ -19,12 +19,14 @@ The branch is complete and verified (`make check` green: ruff, ty, 1354 pytest,
    Targets: `make migration-plan/-apply/-dry-run/-check`.
 3. **Dev container + all docs on the new stack** (postgres:17-alpine sibling, rewritten
    `docker-run-devbot.sh`, CLAUDE.md/docs sweep).
-4. **Pi B+ deployment assets**: `deploy/pi-bplus/{root-setup.sh,Containerfile,
-   entrypoint.sh,compose.yml}`, `deploy/pi5/{root-setup.sh,build-and-ship.sh}`, and
-   the full runbook `docs/pi_bplus_setup.md` — READ THE RUNBOOK FIRST.
+4. **Pi B+ deployment assets**: `deploy/pi-bplus/{root-setup.sh,compose.yml}`,
+   `deploy/pi5/{root-setup.sh,build-and-ship.sh}`, and the full runbook
+   `docs/pi_bplus_setup.md` — READ THE RUNBOOK FIRST. (The Pi's own Containerfile and
+   entrypoint.sh are gone: one repo-root `Dockerfile` now builds both targets, and PID 1
+   is supervisord — see `supervisord.conf`.)
 5. **Pure-Python slimming**: `regex`/`dateparser` replaced by stdlib `re` +
    `python-dateutil`; aiohttp-family forced pure via `*_NO_EXTENSIONS=1` in the
-   Containerfile; `greenlet` is the sole remaining sdist compile. Deps-below-code
+   image build; `greenlet` is the sole remaining sdist compile. Deps-below-code
    layer ordering enforced in both images.
 
 Known non-blocker: `ruff format --check` flags 13 files with formatting drift that
@@ -63,7 +65,8 @@ OLD session's pubkey, so have the owner override/append the new one.
 
 - **In-cloud build (preferred for the no-Pi-5 goal)**: the cloud session VM has
   Docker + 16GB RAM. Enable binfmt/qemu for arm/v6 and build
-  `deploy/pi-bplus/Containerfile` with `--platform linux/arm/v6`, then ship:
+  the repo-root `Dockerfile` with `--platform linux/arm/v6` and the three Pi build args
+  (see the runbook's Step 2), then ship:
   `docker save | ssh ssh-two.gsrpi.uk podman load` (or gzip over scp if the pipe is
   fragile through the tunnel). Emulated builds are slow but only `greenlet` compiles.
 - **On-device build**: clone the repo on two and `podman build` locally — feasible

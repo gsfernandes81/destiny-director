@@ -10,10 +10,16 @@ registry, and nothing is shipped over SSH. A Pi 5 cross-build path still exists 
 faster alternative for whoever has a Pi 5 handy, but it is no longer the primary or
 assumed path.
 
-Files: `deploy/pi-bplus/root-setup.sh`, `deploy/pi-bplus/build-local.sh`,
-`deploy/pi-bplus/Containerfile`, `deploy/pi-bplus/entrypoint.sh`,
-`deploy/pi-bplus/compose.yml`, `deploy/pi5/root-setup.sh`,
-`deploy/pi5/build-and-ship.sh`.
+Files: `deploy/pi-bplus/root-setup.sh`, `deploy/pi-bplus/compose.yml`,
+`deploy/pi5/root-setup.sh`, `deploy/pi5/build-and-ship.sh`, and — shared with Railway —
+the repo-root `Dockerfile`, `supervisord.conf` and `sshd_config`.
+
+There is **one image definition for both deployment targets**. The separate
+`deploy/pi-bplus/Containerfile` is gone, and so are the shell entrypoints
+(`docker-entrypoint.sh`, `deploy/pi-bplus/entrypoint.sh`) and `build-local.sh`: the
+container's PID 1 is now **supervisord**, configured by `supervisord.conf`. What used to
+differ between the two targets is now three build args on the one Dockerfile, whose
+defaults are the Railway/amd64 ones — see [Step 2](#step-2--build-the-image-on-the-b-primary-path).
 
 ## Hardware / OS assumptions
 
@@ -98,11 +104,27 @@ build:
 ```sh
 git clone <this-repo-url> ~/destiny-director
 cd ~/destiny-director
-deploy/pi-bplus/build-local.sh
+podman build --platform linux/arm/v6 \
+    --build-arg BASE_IMAGE=docker.io/arm32v6/python:3.13-alpine3.23 \
+    --build-arg UV_SYNC_GROUPS=--no-default-groups \
+    --build-arg PURE_PYTHON=1 \
+    -t dd-beacon:latest .
 ```
 
-`build-local.sh` builds `deploy/pi-bplus/Containerfile` for `linux/arm/v6` natively (no
-qemu, no cross-build host, nothing shipped over SSH) and tags it `dd-beacon:latest`.
+That builds the repo-root `Dockerfile` for `linux/arm/v6` natively (no qemu, no
+cross-build host, nothing shipped over SSH) and tags it `dd-beacon:latest`. The three
+build args are the whole difference between this image and the Railway one: the ARMv6
+base (v7/v8 binaries `SIGILL` on this CPU), dropping the `speedups` group (cryptography
+has no ARMv6/musl wheel and would need a Rust toolchain), and forcing the aiohttp family
+to its pure-Python builds. `--platform linux/arm/v6` is redundant on the B+ itself (the
+build is already native) but is passed anyway so the intent is unmissable in the build
+log and so copy-pasting this onto a v7/v8 board cannot silently produce an image that
+`SIGILL`s on the real B+.
+
+If `XDG_RUNTIME_DIR` is unset (a non-interactive `ssh host '...'` never sources `dd`'s
+`.profile`), export it first — `export XDG_RUNTIME_DIR=/run/user/$(id -u)` — or podman
+fails with its rootless "could not get runtime directory" error.
+
 **Expect roughly 30+ minutes** on the B+'s single 700MHz ARM1176 core — the bulk of
 that is compiling `greenlet` from sdist; see the hardware-assumptions note above for
 why that's the only C extension left in the build. This is a one-off wait per image,
@@ -113,7 +135,11 @@ For every rebuild after a code change, from `~/destiny-director` as `dd`:
 
 ```sh
 git pull
-deploy/pi-bplus/build-local.sh
+podman build --platform linux/arm/v6 \
+    --build-arg BASE_IMAGE=docker.io/arm32v6/python:3.13-alpine3.23 \
+    --build-arg UV_SYNC_GROUPS=--no-default-groups \
+    --build-arg PURE_PYTHON=1 \
+    -t dd-beacon:latest .
 cd /srv/dd && podman-compose up -d --force-recreate beacon
 ```
 
@@ -151,7 +177,8 @@ change):
 deploy/pi5/build-and-ship.sh dd@<pi-bplus-hostname-or-ip>
 ```
 
-This builds `deploy/pi-bplus/Containerfile` for `linux/arm/v6`, tags it
+This builds the repo-root `Dockerfile` for `linux/arm/v6` (with the same three build
+args as above), tags it
 `dd-beacon:latest`, and pipes `podman save` straight into `ssh ... podman load` on the
 B+ — no registry involved. It takes a `user@host` argument (or reads
 `PI_BPLUS_TARGET` from the environment). With this path, the B+ never needs its own
@@ -172,6 +199,12 @@ repo's own `.env`). It's read by **both** compose services via `env_file:`, so i
 the Postgres password *and* the bot's own config, `.env-example`-style. At minimum:
 
 ```sh
+# Which bot this container runs. supervisord's only program command is
+# `python -OO -m dd.$RAILWAY_SERVICE_NAME`, so this is REQUIRED on the Pi — Railway
+# injects it automatically, nothing here does. supervisord refuses to start at all if it
+# is unset, so a missing value fails loudly and immediately rather than subtly.
+RAILWAY_SERVICE_NAME=beacon
+
 # Postgres (consumed by the postgres service's env_file)
 POSTGRES_PASSWORD=<pick something>
 
@@ -183,6 +216,10 @@ DATABASE_SSL=false   # in-network traffic between two containers on the same hos
 # Discord
 DISCORD_TOKEN_BEACON=<test bot token>
 TEST_ENV=<test-guild id>[,<second test-guild id>...]
+
+# Optional: arms the in-container sshd (see "Getting a shell into the container"
+# below). One public key; unset means sshd runs but authorizes nobody.
+# SSH_AUTHORIZED_KEYS=ssh-ed25519 AAAA... you@yourbox
 
 # ...plus every other var dd.common.cfg validates at import time — copy the rest of
 # .env-example's beacon-relevant vars (CONTROL_DISCORD_SERVER_ID, FOLLOWABLES,
@@ -201,7 +238,8 @@ XDG_RUNTIME_DIR=/run/user/$(id -u) podman-compose up -d
 `compose.yml` exists — this manual command is for the first bring-up, and for picking
 up a freshly-built image without rebooting: `podman-compose up -d` alone does *not*
 recreate a running container against a same-tagged image it already has, so after
-`build-local.sh` (or `build-and-ship.sh`, on the Pi 5 path) produces a new image, run
+the `podman build` above (or `build-and-ship.sh`, on the Pi 5 path) produces a new
+image, run
 `podman-compose up -d --force-recreate beacon` — this is exactly the last line of
 Step 2's rebuild loop above.)
 
@@ -215,17 +253,66 @@ Step 2's rebuild loop above.)
   Also check **OCI Runtime** is `crun` (installed by `root-setup.sh`; `runc` doesn't
   ship for `armv6` in the same way) and **cgroup Manager**/**cgroupVersion** show `v2`
   (`root-setup.sh` step 4).
-- `cd /srv/dd && podman-compose logs -f` — `postgres` should reach `database system is
-  ready to accept connections`, then `beacon` should run its `alembic upgrade head`
-  (look for `entrypoint.sh`'s retry line if it races a cold Postgres start — one or two
-  retries on first boot is expected, not a bug) and then hikari's gateway-connected log
-  line.
+- `cd /srv/dd && podman-compose logs -f` — first `supervisord started with pid 1`, then
+  `spawned: 'bot'`, then `postgres` reaching `database system is ready to accept
+  connections`, then beacon's own `alembic upgrade head` and hikari's gateway-connected
+  log line. A cold start racing `initdb` is handled inside the bot now
+  (`dd.common.schemas.wait_for_db` runs before the migration, both in beacon's
+  `StartingEvent` hook), not by an entrypoint retry loop — so the bot simply waits
+  rather than exiting and being restarted.
+- `sshd` losing one round to `sshd-keygen` on the very first boot (`sshd: no hostkeys
+  available -- exiting`, then a respawn a second later) is expected and self-healing —
+  supervisord has no ordering mechanism, and its retry loop is what supplies it.
 - **Slow startup is normal.** A cold start (`podman-compose up -d` right after boot)
   can take a couple of minutes end to end on this CPU: Postgres's first `initdb`, then
   `alembic upgrade head` running every migration from scratch, then hikari's own
   gateway handshake. Don't take 60-90s of silence as a hang.
 - `podman ps` — both containers `Up`; `podman stats --no-stream` — sanity-check RSS
   against the budget below.
+
+## Getting a shell into the container
+
+The container's PID 1 is **supervisord** (`supervisord.conf`, shared with Railway), and
+it outlives the bot: if beacon fails to start three times in a row it goes `FATAL` and
+supervisord keeps running, so the container stays up and can still be inspected. That is
+what the in-container sshd is for.
+
+It is **disarmed by default**: sshd runs, but its authorized_keys file is written from
+`SSH_AUTHORIZED_KEYS` at every start, so with the variable unset the file is empty and
+every login is refused (password auth is off). To arm it, put one public key in
+`/srv/dd/.env` and recreate the container:
+
+```sh
+# in /srv/dd/.env
+SSH_AUTHORIZED_KEYS=ssh-ed25519 AAAA... you@yourbox
+```
+
+sshd listens on **2222** (it runs as the unprivileged `dd` user, so it cannot use 22),
+inside the container's network namespace. `compose.yml` does not publish that port —
+publish it, or reach it with `podman exec`, depending on how much you trust the network
+the B+ is on.
+
+Two things `compose.yml` should carry for this to be pleasant (it is host-side
+deployment config, so it is edited on the B+ / in whatever repo owns it, not here):
+
+* a **named volume mounted at `/home/dd/.ssh-host`**. Host keys are generated at
+  runtime, never baked into the image — a baked host key would be the same private key
+  in every deployment — so without a volume they are regenerated on every container
+  replacement and your client warns about a changed host key each time. It must be a
+  *named* volume, not a bind mount: the image pre-creates `.ssh-host/etc/ssh`, and a
+  named volume is seeded from the image while a bind mount would hide it.
+* a **port publish for 2222**, if you want to ssh in from off-box.
+
+Once in:
+
+```sh
+supervisorctl -c /etc/dd/supervisord.conf status      # what is running / FATAL
+supervisorctl -c /etc/dd/supervisord.conf restart bot # bring the bot back by hand
+supervisorctl -c /etc/dd/supervisord.conf tail -f bot
+```
+
+(`supervisorctl` and `alembic` are symlinked into `/usr/local/bin` so a login shell
+finds them; for anything else in the venv, `export PATH=/app/.venv/bin:$PATH`.)
 
 ## Expected RAM budget
 
@@ -239,7 +326,7 @@ Step 2's rebuild loop above.)
 | postgres (`shared_buffers=16MB` + backends) | ~60-80MB |
 | beacon (hikari + lightbulb + asyncio)| ~120-200MB |
 | supervisord (container PID 1)        |    ~3-5MB |
-| in-container sshd — **only when armed** |    ~2-3MB |
+| in-container sshd (always resident; see below) |    ~2-3MB |
 | **Subtotal**                         | **~225-330MB** |
 | zram swap cushion                    | up to 256MB compressed |
 
@@ -258,8 +345,12 @@ what you pay for is the runtime, not for supervisor.
 
 Two things make the real cost lower still than the ~6MB standalone figure: supervisord
 and the bot are the same interpreter from the same venv, so they share libpython's text
-pages; and sshd only exists when armed (see the `.env` key variable — with no key set
-it never starts). The table's ~3-5MB reflects the 32-bit ARMv6 build, where pointers
+pages; and sshd is a small C daemon rather than a second interpreter. Note that sshd
+**runs whether or not it is armed** — an unset `SSH_AUTHORIZED_KEYS` empties its
+authorized_keys file rather than stopping the daemon, because the alternative
+(not starting it) needs a conditional supervisord does not have, and faking one makes
+the healthy default deployment log a retry storm on every boot. See the comments in
+`supervisord.conf`. The table's ~3-5MB reflects the 32-bit ARMv6 build, where pointers
 halve and CPython typically lands 30-40% below the amd64 figures quoted above — that
 part is inference from the amd64 measurement, not a measurement on this board, so
 confirm it with `podman stats` once the stack is actually running.
