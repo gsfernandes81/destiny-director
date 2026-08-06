@@ -238,12 +238,36 @@ Step 2's rebuild loop above.)
 | podman + crun (rootless runtime)     |     ~10MB |
 | postgres (`shared_buffers=16MB` + backends) | ~60-80MB |
 | beacon (hikari + lightbulb + asyncio)| ~120-200MB |
-| **Subtotal**                         | **~220-320MB** |
+| supervisord (container PID 1)        |    ~3-5MB |
+| in-container sshd — **only when armed** |    ~2-3MB |
+| **Subtotal**                         | **~225-330MB** |
 | zram swap cushion                    | up to 256MB compressed |
 
 That leaves real headroom under 490MB even before zram is touched, but there isn't
 much to spare for a second bot or a heavier extension set — this box is sized for one
 small test bot, not a scaled-down prod mirror.
+
+### On supervisord's and sshd's share of that
+
+Measured rather than estimated, because on a 512MB board a supervisor that "just adds
+a few MB" is worth checking rather than assuming. `supervisord` running two programs
+was **6192 kB RSS / 4623 kB PSS / 4376 kB private**, against **6240 kB / 4709 kB /
+4424 kB** for a bare do-nothing CPython interpreter — i.e. it measured *fractionally
+smaller* than an empty interpreter. Its own code and state are inside the noise floor:
+what you pay for is the runtime, not for supervisor.
+
+Two things make the real cost lower still than the ~6MB standalone figure: supervisord
+and the bot are the same interpreter from the same venv, so they share libpython's text
+pages; and sshd only exists when armed (see the `.env` key variable — with no key set
+it never starts). The table's ~3-5MB reflects the 32-bit ARMv6 build, where pointers
+halve and CPython typically lands 30-40% below the amd64 figures quoted above — that
+part is inference from the amd64 measurement, not a measurement on this board, so
+confirm it with `podman stats` once the stack is actually running.
+
+The trade runs in the box's favour regardless: those few MB buy *bounded* restarts,
+which is what prevents the genuinely expensive failure mode — an unbounded crash-loop
+where the container restarts forever, re-running `alembic upgrade head` against the SD
+card on every cycle.
 
 ## Constraints / caveats
 
