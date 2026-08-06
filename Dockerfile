@@ -120,8 +120,9 @@ ENV TZ=Etc/UTC \
     LD_PRELOAD=/usr/local/lib/libjemalloc.so \
     MALLOC_CONF=background_thread:true,dirty_decay_ms:10000,muzzy_decay_ms:10000
 
-# Non-root, matching the `dd` convention used for the host user in
-# deploy/pi-bplus/root-setup.sh (and defense in depth under rootless podman). The
+# Non-root, matching the `dd` convention used for the host user in the Pi B+'s host
+# provisioning (now owned by the separate infra repo) and defense in depth under
+# rootless podman. The
 # account keeps busybox adduser's `!` (no password) shadow entry: that is OpenSSH's
 # locked-account marker on some platforms, but Alpine's build authenticates a public key
 # against it happily — verified by flipping the field and logging in, rather than
