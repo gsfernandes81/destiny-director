@@ -26,7 +26,16 @@ Files: `deploy/pi-bplus/root-setup.sh`, `deploy/pi-bplus/Containerfile`,
   [Caveats](#constraints--caveats) below).
 - **Raspberry Pi 5**, used only as a build host — its Cortex-A76 executes 32-bit ARM
   userland natively, so `podman build --platform linux/arm/v6` runs without qemu/binfmt
-  emulation.
+  emulation. This remains the recommended path: it's dramatically faster than the B+'s
+  single 700MHz ARM1176 core, even though the dependency-install layer now compiles
+  only one package from sdist (`greenlet`, SQLAlchemy's asyncio C bridge — `regex` and
+  `dateparser` were dropped in favor of pure-Python `re`/`python-dateutil`, and
+  aiohttp/multidict/yarl/frozenlist/propcache are forced to their pure-Python builds
+  via `*_NO_EXTENSIONS=1`). With only that one small C build left, building
+  `deploy/pi-bplus/Containerfile` directly *on* the B+ (`podman build` locally, no Pi 5,
+  no `podman save`/`load` transfer step) is now a feasible fallback if a Pi 5 isn't
+  available — just expect it to take noticeably longer on that CPU, so still prefer the
+  Pi 5 path below when you have one.
 - Rootless **podman** + **podman-compose** throughout on the B+ (no Docker, no root
   containers) — see `deploy/pi-bplus/root-setup.sh` for why (no systemd/logind on
   Alpine, no cgroup delegation for rootless user slices under OpenRC).
