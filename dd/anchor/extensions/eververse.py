@@ -1,3 +1,4 @@
+import re
 import typing as t
 from collections import defaultdict
 
@@ -6,7 +7,6 @@ import aiohttp
 import aiohttp.web
 import hikari as h
 import lightbulb as lb
-import regex as re
 
 from dd.hmessage import HMessage
 

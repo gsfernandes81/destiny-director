@@ -13,7 +13,6 @@ dependencies = [
     "aiosqlite>=0.22.1",
     "alembic>=1.19.0",
     "attrs>=25.4.0",
-    "dateparser>=1.4.1",
     "fastjsonschema>=2.21.2",
     "hikari-lightbulb>=3.2.4",
     "hikari-toolbox>=0.1.7",
@@ -22,8 +21,8 @@ dependencies = [
     # wheels have no ARMv6 or musl builds, so they would break the Raspberry Pi target.
     # This links libpq at runtime instead, which every deploy environment provides.
     "psycopg>=3.3.4",
+    "python-dateutil>=2.9.0.post0",
     "python-dotenv>=1.2.2",
-    "regex>=2026.6.28",
     "roman>=5.2",
     "setuptools>=83.0.0",
     "sqlalchemy>=2.0.51,<3",

@@ -15,11 +15,11 @@
 
 import json
 import logging
+import re
 import typing as t
 from os import getenv as __getenv
 
 import hikari as h
-import regex as re
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.pool import NullPool, Pool
