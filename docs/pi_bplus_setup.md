@@ -2,17 +2,23 @@
 
 Run a real (test-guild) copy of `dd.beacon` + its own Postgres on an **original
 Raspberry Pi B+** (BCM2835, single ARM1176JZF-S core @ 700MHz, ARMv6, 512MB RAM) — a
-low-stakes, always-on box for exercising the bot outside of Railway. There is no Pi 5
-(or any other build host) in this setup: images are built directly on the B+ itself,
-unprivileged as `dd`, from a clone of this repo — nothing is pulled from or pushed to a
-registry, and nothing is shipped over SSH. A Pi 5 cross-build path still exists (see
-[Optional: Pi 5 cross-build](#optional-faster-alternative--build-on-a-pi-5) below) as a
-faster alternative for whoever has a Pi 5 handy, but it is no longer the primary or
-assumed path.
+low-stakes, always-on box for exercising the bot outside of Railway. No Pi 5 (or any
+other build host) is *required* for this setup: images can be built directly on the B+
+itself, unprivileged as `dd`, from a clone of this repo — nothing pulled from or pushed
+to a registry, nothing shipped over SSH. Two faster alternatives exist for whoever wants
+them: a Pi 5 cross-build path (see
+[Optional: Pi 5 cross-build](#optional-faster-alternative--build-on-a-pi-5)), and a
+prebuilt image that `.github/workflows/pi-image.yml` now publishes to GHCR on every push
+to `dev`/`slim-stack` (see
+[Fastest: pull the prebuilt image](#fastest-pull-the-prebuilt-image-from-ghcr)) — but
+building on the B+ itself remains the primary/assumed path documented step-by-step
+below.
 
 Files: `deploy/pi-bplus/root-setup.sh`, `deploy/pi-bplus/compose.yml`,
-`deploy/pi5/root-setup.sh`, `deploy/pi5/build-and-ship.sh`, and — shared with Railway —
-the repo-root `Dockerfile`, `supervisord.conf` and `sshd_config`.
+`deploy/pi5/root-setup.sh`, `deploy/pi5/build-and-ship.sh`,
+`.github/workflows/pi-image.yml` (builds + publishes the prebuilt image, see below), and
+— shared with Railway — the repo-root `Dockerfile`, `supervisord.conf` and
+`sshd_config`.
 
 There is **one image definition for both deployment targets**. The separate
 `deploy/pi-bplus/Containerfile` is gone, and so are the shell entrypoints
@@ -183,6 +189,35 @@ args as above), tags it
 B+ — no registry involved. It takes a `user@host` argument (or reads
 `PI_BPLUS_TARGET` from the environment). With this path, the B+ never needs its own
 repo clone or `git` install — the image arrives pre-built.
+
+### Fastest: pull the prebuilt image from GHCR
+
+No build hardware needed at all: `.github/workflows/pi-image.yml` builds this same
+`Dockerfile` for `linux/arm/v6` under QEMU emulation (with the same three build args as
+Step 2 above) on every push to `dev`/`slim-stack` and on manual dispatch, and pushes the
+result to GHCR — a normal GitHub Actions runner does in a few minutes what takes 30+ on
+the B+'s own core. On the B+, as `dd`:
+
+```sh
+podman pull ghcr.io/gsfernandes81/destiny-director:sha-<full commit sha>
+```
+
+The workflow's job summary for a given run prints the exact tag and digest it pushed —
+pin to that digest for anything you want to be able to reproduce later; the moving
+`dev`/`slim-stack` branch tags are there for convenience, not reproducibility.
+
+**One-time manual step, not something this workflow can do**: GHCR packages default to
+*private*, and package visibility is a setting on the package itself in GitHub's UI, not
+a workflow permission — an unauthenticated `podman pull` from the B+ will 403 until an
+owner makes the `destiny-director` package public (on the package's GitHub page:
+Package settings → Danger Zone → Change visibility). Do this once, after the workflow's
+first successful push has created the package.
+
+This path does not update `deploy/pi-bplus/compose.yml`, which still references the
+locally-built/loaded `localhost/dd-beacon:latest` tag — pointing it at a pulled
+`ghcr.io/...` tag instead is a real change (the image reference, and probably how
+updates get pulled going forward) and is left for whoever next touches host-side
+deployment config, rather than made as a one-line edit here.
 
 ## Step 3 — deploy config + bring the stack up
 
@@ -384,3 +419,13 @@ card on every cycle.
   Aug 2026 (the alpine variants are the ones built for arm32v6; the Debian-based tags
   are not). If a future major drops the arch, check
   `https://hub.docker.com/r/arm32v6/postgres/tags` for the nearest alpine tag.
+- **The GHCR image is built under QEMU emulation, not natively.** `linux/arm/v6`'s
+  emulated `uname -m` can read `armv7l` even though the image is genuinely armv6 (base
+  image and every apk package in it), so a CI build may resolve a different uv
+  wheel/sdist than a native build on the B+ would for the same dependency. This has not
+  been observed to produce a wrong image, but it means a green `pi-image.yml` run is not
+  by itself proof that the on-device build (Step 2) would behave identically. The GHCR
+  package must also be made public by hand once (see
+  [Fastest: pull the prebuilt image](#fastest-pull-the-prebuilt-image-from-ghcr)) —
+  that's a GitHub package setting, not a workflow permission, so no workflow change
+  can do it.
