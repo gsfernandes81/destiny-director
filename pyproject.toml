@@ -14,6 +14,7 @@ dependencies = [
     "alembic>=1.19.0",
     "attrs>=25.4.0",
     "fastjsonschema>=2.21.2",
+    "greenlet>=3.5.3",
     "hikari-lightbulb>=3.2.4",
     "hikari-toolbox>=0.1.7",
     "hikari>=2.5.0,<3",
