@@ -48,6 +48,11 @@
         max-width: 34rem; width: calc(100% - 2rem);
       }
       dialog.panelmodal::backdrop { background: rgba(0, 0, 0, .55); }
+      /* The destructive one is bordered and backdropped harder, so it does not look
+         like the information dialog it sits next to. */
+      dialog.panelmodal.danger { border-color: var(--danger-border, #d9534f); }
+      dialog.panelmodal.danger::backdrop { background: rgba(60, 0, 0, .7); }
+      dialog.panelmodal.danger h2 { color: var(--danger-text, #f0a0a0); }
       dialog.panelmodal h2 { margin: 0 0 .6rem; font-size: 1.05rem; }
       dialog.panelmodal p.lede {
         margin: 0 0 .8rem; font-size: .92rem; color: var(--muted);
@@ -101,12 +106,17 @@
       </div>
     </dialog>
 
-    <dialog class="panelmodal" id="stopDialog">
-      <h2>Shut the bot down?</h2>
+    <dialog class="panelmodal danger" id="stopDialog">
+      <h2>⚠️ Shut the bot down?</h2>
       <p class="lede">
-        The bot stops and stays stopped — a clean exit, so Railway will not restart it.
-        <strong>This panel runs inside the bot</strong>, so this page goes down with it.
-        Bringing it back means redeploying from Railway.
+        <strong>Everything stops.</strong> No feeds post, nothing mirrors to any
+        following server, and no command or web page answers — until someone brings it
+        back by hand.
+      </p>
+      <p class="lede">
+        The exit is clean, so <strong>Railway will not restart it</strong>. And this
+        panel runs inside the bot, so <strong>this page dies with it</strong> — you
+        cannot undo this from here. Recovery is a redeploy from the Railway dashboard.
       </p>
       <p class="modalstatus" id="stopStatus"></p>
       <div class="modal-actions">

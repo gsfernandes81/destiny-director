@@ -1,7 +1,14 @@
-"""Destiny 2 manifest download, caching, and in-memory table building."""
+"""Destiny 2 manifest download, caching, and in-memory table building.
+
+**The cache is the extracted file on disk**, keyed by the versioned filename Bungie
+itself hands out. That makes invalidation fall out for free — a new manifest is a new
+name, so it can never be served from an old copy — at the price of one small metadata
+round-trip per resolve, which :func:`prewarm_manifest` keeps off the first request.
+"""
 
 import asyncio
 import json
+import logging
 import os
 import sqlite3
 import typing as t
@@ -12,6 +19,8 @@ import aiofiles
 import aiohttp
 
 from .constants import API_MANIFEST, BUNGIE_NET, manifest_table_names
+
+logger = logging.getLogger(__name__)
 
 # Timeouts for the manifest fetch. The metadata call is tiny; the manifest zip
 # is large (hundreds of MB) so it gets a much longer allowance.
@@ -24,28 +33,138 @@ _MANIFEST_DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=600)
 # same file, one wipes ``manifest/`` while the other is extracting, and both
 # ``extractall`` concurrently — corrupting the sqlite ("database disk image is
 # malformed"). The first caller downloads; the rest wait and hit the cached path below.
+# `_inflight` now means there is normally only one resolve running at all; this is kept
+# as the last line of defence, since nothing stops a caller reaching `_resolve_manifest`
+# by another route in future.
 _manifest_lock = asyncio.Lock()
+
+#: The resolve currently running, if any, so a burst of callers shares one rather than
+#: each making its own Bungie round-trip. Not a cache — it is dropped as soon as it
+#: completes, so the next caller performs a fresh currency check.
+_inflight: "asyncio.Task[str] | None" = None
+
+#: Where the extracted manifest and its download live. Named rather than spelled out at
+#: each use because both deferred plans that touch this (a committed fallback manifest,
+#: and moving the cache onto a Railway volume — see plans/manifest_backup_in_git.md)
+#: turn on being able to point these somewhere else.
+_MANIFEST_DIR = "manifest"
+_MANIFEST_ZIP = "manifest.zip"
+
+
+def _downloaded_manifests() -> list[str]:
+    """Every extracted manifest on disk, newest first.
+
+    Normally one — a download wipes the directory first — but ordered so ``[0]`` means
+    something if an interrupted extract ever leaves two behind.
+    """
+    try:
+        names = os.listdir(_MANIFEST_DIR)
+    except FileNotFoundError:
+        return []
+    paths = [os.path.join(_MANIFEST_DIR, name) for name in names]
+    return sorted(
+        (p for p in paths if os.path.isfile(p)),
+        key=os.path.getmtime,
+        reverse=True,
+    )
+
+
+async def prewarm_manifest(api_key: str) -> None:
+    """Resolve (and if needed download) the manifest, ignoring failures.
+
+    Run once at ``StartedEvent``. The download is hundreds of MB and the extract is
+    slow, so a process that does this lazily makes whichever request arrives first —
+    typically a weekly-reset form load or a vendor post — wear the whole cost. Doing it
+    at startup means the manifest is on disk before anything asks, and every later
+    resolve is a small metadata round-trip plus a local sqlite open.
+
+    Failures are logged and swallowed: a bot that cannot reach Bungie at boot must still
+    start, and every consumer already resolves the manifest itself.
+
+    Note this is not the *only* thing that warms the manifest at boot — ``item_index``'s
+    own warm (``rotation_editor``) resolves it too, and coalesces onto this one rather
+    than downloading twice. What this adds is ownership: the warm now belongs to the
+    module that owns the manifest, instead of being a side effect of whichever consumer
+    happens to be loaded.
+    """
+    if not api_key:
+        # Matches item_index.warm: no key is a configuration state, not a failure, and
+        # it must not log a warning on every boot of an environment that has none.
+        return
+    try:
+        path = await _get_latest_manifest(api_key)
+    except Exception:
+        logger.warning("Manifest prewarm failed; it will be resolved on first use")
+        return
+    logger.info("Manifest prewarmed: %s", path)
 
 
 async def _get_latest_manifest(api_key: str) -> str:
+    """The path to the current manifest, downloading it if we do not have it.
+
+    Concurrent callers are **coalesced onto one resolve**: several pages that each need
+    the manifest (a weekly-reset form load alone touches the option indexes and the
+    weapon pool) share a single metadata round-trip and, on a cold volume, a single
+    download. Previously they queued on the lock and each made its own Bungie call once
+    it got in — harmless but wasteful, and it multiplied the wait for the last in line.
+
+    ``shield`` so a caller that gives up (a cancelled request) does not cancel the
+    resolve that everyone else is waiting on.
+    """
+    global _inflight
+    task = _inflight
+    if task is None or task.done():
+        # No await between the check and the assignment, so this cannot interleave: a
+        # burst of callers all see the same task.
+        task = asyncio.create_task(_resolve_manifest(api_key))
+        _inflight = task
+    return await asyncio.shield(task)
+
+
+async def _resolve_manifest(api_key: str) -> str:
     async with _manifest_lock:
         # Prep the manifest directory
-        Path("manifest").mkdir(exist_ok=True)
+        Path(_MANIFEST_DIR).mkdir(exist_ok=True)
 
-        # Get the latest manifest url from the API
-        async with (
-            aiohttp.ClientSession(timeout=_MANIFEST_META_TIMEOUT) as session,
-            session.get(API_MANIFEST, headers={"X-API-Key": api_key}) as response,
-        ):
-            manifest_url_fragment = (await response.json())["Response"][
-                "mobileWorldContentPaths"
-            ]["en"]
+        # Ask Bungie which manifest is current — on every resolve, deliberately. This
+        # round-trip IS the currency check, and it is what makes the extracted file on
+        # disk safe to reuse: Bungie versions the manifest in its own filename, so a new
+        # one cannot be mistaken for the copy we hold. Skipping the check on a timer was
+        # tried and reverted — it bounded staleness at hours, and the window it opened
+        # (a mid-week hotfix landing between the check and the post that reads it) is
+        # exactly when the definitions matter. The cost it saved is a small JSON GET;
+        # the cost that actually hurts is the download, which this still avoids, and
+        # which `prewarm_manifest` moves off the first request entirely.
+        try:
+            async with (
+                aiohttp.ClientSession(timeout=_MANIFEST_META_TIMEOUT) as session,
+                session.get(API_MANIFEST, headers={"X-API-Key": api_key}) as response,
+            ):
+                manifest_url_fragment = (await response.json())["Response"][
+                    "mobileWorldContentPaths"
+                ]["en"]
+        except Exception:
+            # Bungie unreachable. A manifest already on disk is stale at worst — its
+            # content changes every week or two — and is enormously better than failing
+            # every autocomplete pool and post derivation until Bungie comes back. No
+            # state is written here, so the next call re-checks rather than committing
+            # to the stale copy.
+            existing = _downloaded_manifests()
+            if existing:
+                logger.warning(
+                    "Could not reach Bungie to check the manifest version; reusing %s",
+                    existing[0],
+                    exc_info=True,
+                )
+                return existing[0]
+            raise
 
         manifest_url_filename = manifest_url_fragment.split("/")[-1]
+        manifest_path = os.path.join(_MANIFEST_DIR, manifest_url_filename)
         # Check if the manifest is already downloaded (a concurrent caller that waited
         # on the lock finds the freshly-extracted file here and returns, no re-fetch)
-        if os.path.exists("manifest/" + manifest_url_filename):
-            return "manifest/" + manifest_url_filename
+        if os.path.exists(manifest_path):
+            return manifest_path
 
         manifest_url = BUNGIE_NET + manifest_url_fragment
 
@@ -57,29 +176,41 @@ async def _get_latest_manifest(api_key: str) -> str:
         async with (
             aiohttp.ClientSession(timeout=_MANIFEST_DOWNLOAD_TIMEOUT) as session,
             session.get(manifest_url) as response,
-            aiofiles.open("manifest.zip", "wb") as file,
+            aiofiles.open(_MANIFEST_ZIP, "wb") as file,
         ):
             async for chunk in response.content.iter_chunked(1 << 20):
                 await file.write(chunk)
 
         # Cleanup manifest directory
-        for file in os.listdir("manifest"):
-            os.remove("manifest/" + file)
+        for stale in _downloaded_manifests():
+            os.remove(stale)
 
         def _extract():
             # Extract the newly downloaded manifest
-            with zipfile.ZipFile("manifest.zip", "r") as zip_ref:
-                zip_ref.extractall("manifest")
+            with zipfile.ZipFile(_MANIFEST_ZIP, "r") as zip_ref:
+                zip_ref.extractall(_MANIFEST_DIR)
 
-        await asyncio.get_event_loop().run_in_executor(None, _extract)
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, _extract)
+        except Exception:
+            # A partial extract is the one failure the currency check above cannot see:
+            # it leaves a file with exactly the name Bungie just gave us, so the next
+            # resolve finds it, believes it, and hands every consumer a truncated sqlite
+            # ("database disk image is malformed") for the rest of the process's life.
+            # The realistic cause is running out of disk part-way through ~340MB. Clean
+            # up what we wrote so the next resolve downloads again instead.
+            logger.warning("Manifest extract failed; discarding the partial copy")
+            for partial in _downloaded_manifests():
+                os.remove(partial)
+            raise
 
         # The extracted sqlite is all we need, so drop the zip — it is another 43-90 MB
         # of SD card on the Pi / of Railway's ephemeral disk, kept for nothing. Only
         # after a *successful* extract: a failing ``extractall`` raises above this line,
         # leaving the download in place for the next attempt (and for inspection).
-        os.remove("manifest.zip")
+        os.remove(_MANIFEST_ZIP)
 
-        manifest_path = "manifest/" + os.listdir("manifest")[0]
+        # The name Bungie just gave us, not whatever `listdir` happens to return first.
         return manifest_path
 
 

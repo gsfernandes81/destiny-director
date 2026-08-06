@@ -35,21 +35,21 @@ document.addEventListener("DOMContentLoaded", () => {
         settings[el.dataset.slug] = el.value;
       });
     btn.disabled = true;
-    status.textContent = "Saving…";
+    busy(status, "Saving…");
     try {
       const res = await window.api("/autopost_settings/save", { settings });
       if (res.ok) {
-        status.textContent = "Saved.";
+        say(status, "Saved.", false);
       } else {
         let msg = "Save failed.";
         try {
           const data = await res.json();
           if (data && data.error) msg = data.error;
         } catch (_) {}
-        status.textContent = msg;
+        say(status, msg, true);
       }
     } catch (_) {
-      status.textContent = "Network error — try again.";
+      say(status, "Network error — try again.", true);
     } finally {
       btn.disabled = false;
     }
@@ -66,6 +66,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const sendTitle = byId("sendTitle");
   const sendBody = byId("sendBody");
   const sendPreview = byId("sendPreview");
+  const sendPreviewStatus = byId("sendPreviewStatus");
   const sendStatus = byId("sendStatus");
   const sendConfirm = byId("sendConfirm");
   const publish = byId("publish");
@@ -85,19 +86,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return name ? name.textContent.trim() : slug;
   }
 
-  function say(el, message, isError) {
-    el.classList.toggle("err", !!isError);
-    el.textContent = message;
-  }
-
-  /** A status line with a spinner in front of it — for waits measured in seconds. */
-  function busy(el, message) {
-    el.classList.remove("err");
-    el.replaceChildren(
-      Object.assign(document.createElement("span"), { className: "spinner" }),
-      document.createTextNode(message),
-    );
-  }
+  // say/busy/api are globals from shared.js (loaded first, deferred).
 
   /** Abandon any in-flight preview draw, so a slow one cannot land after this. */
   function cancelDraw() {
@@ -155,13 +144,21 @@ document.addEventListener("DOMContentLoaded", () => {
       // preview is broken is exactly one you may still need to push.
       pending = slug;
       sendTitle.textContent = "Send the " + label + " post?";
+      // The "you can close this page" line matters more than it looks: the send runs in
+      // the bot, detached from this request, so closing the tab cancels nothing — and
+      // without saying so, an operator sits here waiting on a post that needs no
+      // watching. See plans/send_status_feedback.md.
       sendBody.textContent =
         "This posts to the " + label + " channel straight away. It cannot be recalled, " +
-        "only edited or deleted afterwards.";
+        "only edited or deleted afterwards. Sending continues in the bot, so you can " +
+        "close this page once it starts.";
       publish.checked = true;
       sendConfirm.disabled = false;
+      // Clear the previous open's send error. The preview's busy() used to do this
+      // incidentally, back when both wrote the same line.
+      say(sendStatus, "", false);
       sendDialog.showModal();
-      await drawPreview(slug, sendPreview, sendStatus);
+      await drawPreview(slug, sendPreview, sendPreviewStatus);
     });
   });
 
@@ -184,7 +181,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         sendDialog.close();
-        status.textContent = "Send started — check Mirror logs for delivery.";
+        say(
+          status,
+          "Send started — it continues even if you leave. Check Mirror logs for " +
+            "delivery.",
+          false,
+        );
       } else {
         say(sendStatus, data.error || "Send failed.", true);
         sendConfirm.disabled = false;

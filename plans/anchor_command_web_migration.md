@@ -5,7 +5,8 @@
 Phases 4 and 3 were taken out of order, ahead of 2 — the phases are independent. Phase 2
 (the web embed builder, dropping `/post embed`) was **deferred indefinitely by the owner
 on 2026-08-05**; `/post embed` stays in Discord, and `plans/web_embed_builder.md` stays
-unbuilt. Phase 1 is built and **partly verified** on dev. Owner decisions locked
+unbuilt. Phase 1 is built and **verified on dev** — the owner drove Send end to end
+2026-08-05, which is what produced the fix rounds since. Owner decisions locked
 2026-08-04.
 
 Anchor's Discord surface is **39 invocable entries**, all owner-gated
@@ -85,15 +86,21 @@ actually use.
 
 `help_details.py` needed no change — none of its entries covered a Set A command.
 
-### Phase 1 — per-feed send + preview on web ✅ BUILT 2026-08-05, PARTLY VERIFIED
+### Phase 1 — per-feed send + preview on web ✅ BUILT + VERIFIED 2026-08-05
 
 Built in three commits (registry groundwork → page → removal). `make lint`,
 `make typecheck` and the full non-Discord suite (1209 passed) are green.
 
-**Partly verified on dev 2026-08-05** (owner). The pages and preview were driven in a
-browser; what remains unconfirmed is a **real Send landing in a channel and mirroring**
-— beacon was never deployed to dev, so the mirror leg has never run end to end. Worth
-finishing before prod.
+**Verified on dev 2026-08-05** (owner): the pages, the preview and a real Send were all
+driven in a browser against live Discord. That round is what produced the two fix
+batches after it — the Trials button regression, the weekly-reset load time, the raw
+channel ids. Note the inversion it leaves behind, since it recurs every time: **the
+fixes a test round produces are themselves untested**, so "we tested it" and "what we
+would ship is tested" drift apart by exactly one batch each time.
+
+Still open: whether the **mirror leg** ran, which depends on beacon having been up in
+dev during that session. Everything else on the send path fails visibly; a broken
+crosspost fan-out fails quietly, in other people's servers.
 
 What differs from the plan as written:
 

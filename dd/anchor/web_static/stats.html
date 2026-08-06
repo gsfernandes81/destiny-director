@@ -52,17 +52,19 @@
           down. Click a row to focus it in the chart above. The resolution toggle applies
           to every sparkline.
         </p>
-        <table class="data selectable" id="commandsTable">
-          <thead>
-            <tr>
-              <th>Command</th>
-              <th class="num">Total</th>
-              <th class="trend-col">Trend</th>
-              <th class="spark-col">Over time</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+        <div class="table-scroll">
+          <table class="data selectable" id="commandsTable">
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th class="num">Total</th>
+                <th class="trend-col">Trend</th>
+                <th class="spark-col">Over time</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </section>
 
       <section id="section-autoposts" class="card hidden">
@@ -74,18 +76,20 @@
           Each feed's total reach (followers + mirrors) over time. Click a row to focus
           that feed in the chart above. The resolution toggle applies to every sparkline.
         </p>
-        <table class="data selectable" id="currentTable">
-          <thead>
-            <tr>
-              <th>Feed</th>
-              <th class="num">Followers</th>
-              <th class="num">Mirrors</th>
-              <th class="trend-col">Trend</th>
-              <th class="spark-col">Over time</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+        <div class="table-scroll">
+          <table class="data selectable" id="currentTable">
+            <thead>
+              <tr>
+                <th>Feed</th>
+                <th class="num">Followers</th>
+                <th class="num">Mirrors</th>
+                <th class="trend-col">Trend</th>
+                <th class="spark-col">Over time</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </section>
 
       <section id="section-populations" class="card hidden">
@@ -108,12 +112,14 @@
               placeholder="Filter by server id…"
               autocomplete="off"
             />
-            <table class="data" id="serversTable">
-              <thead>
-                <tr><th>Server ID</th><th class="num">Population</th></tr>
-              </thead>
-              <tbody></tbody>
-            </table>
+            <div class="table-scroll">
+              <table class="data" id="serversTable">
+                <thead>
+                  <tr><th>Server ID</th><th class="num">Population</th></tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
           </div>
         </details>
       </section>
