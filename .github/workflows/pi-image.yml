@@ -1,0 +1,132 @@
+name: Pi B+ image
+
+# Manual runs (for iterating on this workflow, or forcing a rebuild without a
+# code change) plus the branches the owner actually deploys to the B+ from.
+# Keep this list to branches someone is actively test-deploying — add/remove
+# entries here as that changes rather than switching to `push: {}` (every
+# push, including throwaway ones, would burn ~30+ min-equivalent of emulated
+# ARMv6 CI time otherwise).
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+      - slim-stack
+
+# Least-privilege default token: packages:write is what docker/login-action
+# needs to push to GHCR; contents:read is checkout. No other scope is used.
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-pi-image:
+    name: Build & push linux/arm/v6 image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # GHCR requires an all-lowercase owner/repo path; `github.repository`
+      # preserves whatever case the repo actually has, so a fork or rename
+      # with uppercase letters would otherwise fail the push with an opaque
+      # "name invalid" error from the registry, not from this workflow.
+      - name: Compute lowercase image path
+        id: image
+        run: |
+          echo "path=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      # Only linux/arm/v6 is built here — deliberately not amd64 too. Railway
+      # builds its own amd64 image straight from this same Dockerfile using
+      # the ARGs' Railway-correct defaults (see the Dockerfile's header), so
+      # an amd64 GHCR image would be a second, redundant copy of exactly what
+      # Railway already builds itself. Do not "complete the matrix" by adding
+      # platforms here.
+      - name: Set up QEMU (arm)
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # One image serves both bots — RAILWAY_SERVICE_NAME picks beacon vs.
+      # anchor at container start (see supervisord.conf) — so the image is
+      # named after the repo, not either bot. Tags: the commit SHA is the
+      # immutable one a Pi deployment should actually pin (paired with the
+      # digest surfaced below); the branch name is a moving convenience tag
+      # for "whatever was last pushed to dev/slim-stack".
+      - name: Compute tags/labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.image.outputs.path }}
+          tags: |
+            type=sha,format=long
+            type=ref,event=branch
+
+      # These three build-args are the *entire* difference between this and
+      # Railway's image (see the Dockerfile's header comment) — their
+      # defaults are the Railway/amd64 values, so all three must be
+      # overridden here or the build silently produces an amd64-flavoured
+      # image under an arm/v6 tag that SIGILLs on the real B+. Double-check
+      # these names/values against the Dockerfile if it ever changes.
+      #
+      # cache-to mode=max (not the default `min`) matters specifically
+      # because of this Dockerfile's builder/final split: the expensive
+      # dependency-sync layer lives in the discarded `builder` stage, not in
+      # the final image, so `min` mode (which only caches layers that reach
+      # the final export) would drop it and every push would recompile
+      # greenlet from sdist under emulation. `max` caches builder-stage
+      # layers too, so a source-only change (the common case) reuses the
+      # cached dependency layer exactly as the Dockerfile's own layer
+      # ordering intends.
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm/v6
+          push: true
+          build-args: |
+            BASE_IMAGE=docker.io/arm32v6/python:3.13-alpine3.23
+            UV_SYNC_GROUPS=--no-default-groups
+            PURE_PYTHON=1
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The deploy story is "pull this exact digest", so surface it here
+      # rather than making whoever deploys go dig it out of the push log.
+      #
+      # NOTE on QEMU + ARMv6: under emulation, `uname -m` inside this build
+      # can report armv7l even though `--platform linux/arm/v6` (and the
+      # arm32v6 base image) are genuinely armv6. That does NOT make the
+      # pushed image wrong for the Pi — the base image and every apk package
+      # in it are still armv6 — but it does mean uv's wheel/platform
+      # detection during this CI build may take a different wheel-vs-sdist
+      # path than a native build on the real B+ would. If a dependency's
+      # wheel availability ever becomes suspect, don't trust a green build
+      # here as proof of the real board's behaviour.
+      - name: Summarize
+        run: |
+          {
+            echo "### Pi B+ image published"
+            echo
+            echo "Digest: \`${{ steps.build.outputs.digest }}\`"
+            echo
+            echo "Pull on the B+ with:"
+            echo '```'
+            echo "podman pull ${{ steps.image.outputs.path }}@${{ steps.build.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
