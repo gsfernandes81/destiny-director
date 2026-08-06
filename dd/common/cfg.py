@@ -75,6 +75,43 @@ def _getbool(key: str, default: bool) -> bool:
     return value.strip().lower() in {"true", "1", "yes", "on"}
 
 
+# The kernel's legal range for /proc/<pid>/oom_score_adj (see proc(5)). Kept here
+# rather than in dd.common.lifecycle so the env parsing below and the helper that
+# writes procfs share one definition.
+OOM_SCORE_ADJ_MIN = -1000
+OOM_SCORE_ADJ_MAX = 1000
+
+
+def _getenv_oom_score_adj(key: str) -> int | None:
+    """Parse an optional ``oom_score_adj``; ``None`` when unset or blank.
+
+    Optional because it is a memory-pressure optimisation, not a dependency — but a
+    *malformed* value is still a hard error here rather than garbage written to
+    procfs later, which is the same fail-fast-at-import contract as the required
+    vars above.
+    """
+    value = __getenv(key)
+    if value is None or not value.strip():
+        return None
+
+    try:
+        score_adj = int(value.strip())
+    except ValueError:
+        raise ValueError(
+            f"Environment variable '{key}' must be an integer between "
+            f"{OOM_SCORE_ADJ_MIN} and {OOM_SCORE_ADJ_MAX}."
+        ) from None
+
+    if not OOM_SCORE_ADJ_MIN <= score_adj <= OOM_SCORE_ADJ_MAX:
+        raise ValueError(
+            f"Environment variable '{key}' is {score_adj}, outside the kernel's "
+            f"legal oom_score_adj range "
+            f"({OOM_SCORE_ADJ_MIN}..{OOM_SCORE_ADJ_MAX})."
+        )
+
+    return score_adj
+
+
 def _test_env(var_name: str) -> tuple[int, ...] | tuple[()]:
     test_env = _getenv(var_name, default="false")
     test_env = test_env.lower()
@@ -298,6 +335,21 @@ embed_critical_color = h.Color(0x992D22)
 # Database URLs. DATABASE_PRIVATE_URL wins over DATABASE_URL — Railway injects both
 # and the private one stays on the internal network.
 db_url, db_url_async = _db_urls("DATABASE_PRIVATE_URL", "DATABASE_URL")
+
+# Whether each bot runs `alembic upgrade head` itself on StartingEvent (see
+# dd/common/db_migrations.py). Defaults ON: the process model has no dependency
+# ordering to lean on (supervisord spawns its programs simultaneously), so the
+# migration is sequenced by straight-line Python inside the bot instead of by a shell
+# entrypoint. Set false to run a bot against a database somebody else migrates —
+# local dev against a shared DB, or a container where a one-shot job does it.
+run_migrations_on_startup = _getbool("RUN_MIGRATIONS_ON_STARTUP", True)
+
+# Optional Linux OOM-kill preference this process raises itself to at startup (see
+# dd.common.lifecycle.apply_oom_score_adj). Unset -> left at whatever the container
+# baseline is. Named without the DEVBOT_ prefix of the dev-runner knob it mirrors
+# (DEVBOT_OOM_SCORE_ADJ, applied externally by choom in docker-run-devbot.sh) because
+# this one is read by the app itself, in every environment.
+oom_score_adj = _getenv_oom_score_adj("OOM_SCORE_ADJ")
 
 # Static Images / Resources
 lost_sector_gif_url = _getenv("LOST_SECTOR_GIF_URL")
