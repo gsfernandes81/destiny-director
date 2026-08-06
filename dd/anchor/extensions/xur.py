@@ -18,6 +18,7 @@ import datetime as dt
 import json
 import logging
 import pathlib
+import re
 import time
 import typing as t
 
@@ -26,7 +27,6 @@ import aiohttp
 import aiohttp.web
 import hikari as h
 import lightbulb as lb
-import regex as re
 
 from dd.hmessage import HMessage
 

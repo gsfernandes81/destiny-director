@@ -33,14 +33,14 @@ import contextlib
 import datetime as dt
 import logging
 import math
+import re
 import typing as t
 from random import randint
 from time import perf_counter
 
-import dateparser
 import hikari as h
 import lightbulb as lb
-import regex as re
+from dateutil import parser as dateutil_parser
 
 from ...common import cfg
 from ...common.auth import owner_only
@@ -886,7 +886,15 @@ class UndoAutoDisable(
     async def invoke(self, ctx: lb.Context, bot: CachedFetchBot = lb.di.INJECTED):
         await ctx.defer()
 
-        from_date = dateparser.parse(self.from_date)
+        try:
+            from_date = dateutil_parser.parse(self.from_date)
+        except (ValueError, OverflowError):
+            await ctx.respond(
+                f"Could not parse {self.from_date!r} as a date. Use an "
+                "unambiguous format such as ISO 8601 (e.g. 2026-08-06 or "
+                "2026-08-06T12:00:00)."
+            )
+            return
 
         mirrors = await MirroredChannel.undo_auto_disable_for_failure(since=from_date)
         response = f"Undid auto disable since {from_date} for channels {mirrors}"

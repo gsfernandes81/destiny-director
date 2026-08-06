@@ -2,12 +2,12 @@ import asyncio as aio
 import base64
 import hashlib
 import logging
+import re
 import typing as t
 from enum import Enum
 
 import aiohttp
 import hikari as h
-import regex as re
 
 from . import cfg
 

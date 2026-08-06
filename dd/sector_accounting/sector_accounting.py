@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 import typing as t
 from collections import defaultdict
 
 import attr
-import regex as re
 
 from .utils import (
     EntityRotation,

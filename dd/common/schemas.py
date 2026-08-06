@@ -20,12 +20,12 @@ import datetime as dt
 import enum
 import logging
 import os
+import re
 import sys
 import typing as t
 from dataclasses import dataclass
 from typing import Self
 
-import regex as re
 from sqlalchemy import Index, bindparam, case, exists, literal, or_, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
