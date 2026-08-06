@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "statusMessage": "Materialising the two deploy key",
+            "command": "test -n \"${DD_CTL_KEY_B64:-}\" || exit 0; mkdir -p \"$HOME/.ssh\" && chmod 700 \"$HOME/.ssh\" && printf %s \"$DD_CTL_KEY_B64\" | base64 -d > \"$HOME/.ssh/id_ed25519_ddctl\" && chmod 600 \"$HOME/.ssh/id_ed25519_ddctl\""
+          }
+        ]
+      }
+    ]
+  }
+}
