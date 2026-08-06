@@ -42,12 +42,16 @@ def _rotator_hashes(manifest_table: dict[str, t.Any], prefix: str) -> list[int]:
     These are the vendors whose ``vendorIdentifier`` starts with ``prefix`` — e.g.
     ``EVERVERSE_BRIGHT_DUST_ROTATOR`` or ``EVERVERSE_SILVER_ROTATOR``
     (``..._EXOTIC_GHOSTS`` and friends).
+
+    The search runs in sqlite (``hashes_by_field_prefix``) rather than over
+    ``.values()``: the two scalars this needs per vendor used to cost a full parse of
+    ``DestinyVendorDefinition``, the fattest table in the manifest — ~385 MB RSS, and
+    twice over in :func:`eververse_message_constructor`, where both lookups are live at
+    once.
     """
-    return [
-        vendor_def["hash"]
-        for vendor_def in manifest_table["DestinyVendorDefinition"].values()
-        if vendor_def.get("vendorIdentifier", "").startswith(prefix)
-    ]
+    return manifest_table["DestinyVendorDefinition"].hashes_by_field_prefix(
+        "vendorIdentifier", prefix
+    )
 
 
 def _exotic_ornament_target_name(

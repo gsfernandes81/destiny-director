@@ -19,10 +19,16 @@ No DB / network / Discord — only the manifest-driven pure functions, exercised
 hand-built fixtures that mirror the live manifest shapes (verified against dev data).
 """
 
+import json
+import sqlite3
+
+import pytest
+
 from dd.anchor.extensions.bungie_api import (
     EVERVERSE_BRIGHT_DUST_ROTATOR_PREFIX,
     EVERVERSE_SILVER_ROTATOR_PREFIX,
 )
+from dd.anchor.extensions.bungie_api.manifest import ManifestLookup
 from dd.anchor.extensions.bungie_api.models import DestinyItem
 from dd.anchor.extensions.eververse import (
     _eververse_line,
@@ -32,46 +38,122 @@ from dd.anchor.extensions.eververse import (
     _rotator_hashes,
 )
 
+# Vendor rows as (id, vendorDefinition). ``_rotator_hashes`` used to scan
+# ``.values()`` in Python and now pushes the prefix test into sqlite, so the fixture is
+# a real manifest sqlite (the shape production actually hands it) and every case below
+# is asserted against the old ``.values()`` filter, kept verbatim as the reference
+# implementation in ``_rotator_hashes_via_values``.
+#
+# The last four rows are the ones that separate a genuine ``str.startswith`` from the
+# obvious-looking ``LIKE 'EVERVERSE_BRIGHT_DUST_ROTATOR%'``: sqlite's LIKE is
+# ASCII-case-insensitive and reads ``_`` in the pattern as "any one character", and
+# these identifiers are nothing but underscores.
+_VENDOR_ROWS: list[tuple[int, dict]] = [
+    (
+        10,
+        {
+            "hash": 10,
+            "vendorIdentifier": "EVERVERSE_BRIGHT_DUST_ROTATOR_EXOTIC_GHOSTS",
+        },
+    ),
+    (
+        20,
+        {
+            "hash": 20,
+            "vendorIdentifier": "EVERVERSE_BRIGHT_DUST_ROTATOR_LEGENDARY_SHADERS",
+        },
+    ),
+    (30, {"hash": 30, "vendorIdentifier": "EVERVERSE_WEEKLY_OFFERINGS"}),
+    (40, {"hash": 40, "vendorIdentifier": ""}),
+    (50, {"hash": 50}),  # missing vendorIdentifier entirely
+    (60, {"hash": 60, "vendorIdentifier": "EVERVERSE_SILVER_ROTATOR_EXOTIC_GHOSTS"}),
+    # Exactly the prefix, no suffix — startswith matches; 'PREFIX_%' would not.
+    (70, {"hash": 70, "vendorIdentifier": "EVERVERSE_BRIGHT_DUST_ROTATOR"}),
+    # Prefix immediately followed by a non-separator — startswith matches.
+    (80, {"hash": 80, "vendorIdentifier": "EVERVERSE_BRIGHT_DUST_ROTATORX"}),
+    # Same length and letters, wrong separators — LIKE's '_' wildcard would match.
+    (90, {"hash": 90, "vendorIdentifier": "EVERVERSEXBRIGHTXDUSTXROTATOR_GHOSTS"}),
+    # Lowercase — LIKE is case-insensitive, startswith is not.
+    (100, {"hash": 100, "vendorIdentifier": "eververse_bright_dust_rotator_ghosts"}),
+    # A vendorIdentifier carrying LIKE's other wildcard, for good measure.
+    (110, {"hash": 110, "vendorIdentifier": "EVERVERSE%ROTATOR"}),
+]
 
-def _vendor_manifest() -> dict:
-    return {
-        "DestinyVendorDefinition": {
-            10: {
-                "hash": 10,
-                "vendorIdentifier": "EVERVERSE_BRIGHT_DUST_ROTATOR_EXOTIC_GHOSTS",
-            },
-            20: {
-                "hash": 20,
-                "vendorIdentifier": "EVERVERSE_BRIGHT_DUST_ROTATOR_LEGENDARY_SHADERS",
-            },
-            30: {"hash": 30, "vendorIdentifier": "EVERVERSE_WEEKLY_OFFERINGS"},
-            40: {"hash": 40, "vendorIdentifier": ""},
-            50: {"hash": 50},  # missing vendorIdentifier entirely
-            60: {
-                "hash": 60,
-                "vendorIdentifier": "EVERVERSE_SILVER_ROTATOR_EXOTIC_GHOSTS",
-            },
-        }
-    }
+#: Ids of rows written as blobs rather than text — the manifest column is declared BLOB
+#: and real rows do come back that way, which bare ``json_extract`` rejects.
+_BLOB_ROW_IDS = frozenset({20, 60})
+#: Id of a row holding unparseable JSON: the ``.values()`` path skips it via
+#: ``json.loads``' ``except``, and the sqlite path must skip it too rather than
+#: aborting the whole query with "malformed JSON".
+_CORRUPT_ROW_ID = 120
 
 
-def test_rotator_hashes_filters_by_bright_dust_prefix():
-    hashes = _rotator_hashes(_vendor_manifest(), EVERVERSE_BRIGHT_DUST_ROTATOR_PREFIX)
-    assert sorted(hashes) == [10, 20]
+def _rotator_hashes_via_values(manifest_table, prefix: str) -> list[int]:
+    """The pre-fix implementation, kept as the equivalence reference."""
+    return [
+        vendor_def["hash"]
+        for vendor_def in manifest_table["DestinyVendorDefinition"].values()
+        if vendor_def.get("vendorIdentifier", "").startswith(prefix)
+    ]
 
 
-def test_rotator_hashes_filters_by_silver_prefix():
-    hashes = _rotator_hashes(_vendor_manifest(), EVERVERSE_SILVER_ROTATOR_PREFIX)
+@pytest.fixture
+def vendor_manifest(tmp_path):
+    path = str(tmp_path / "world.content")
+    con = sqlite3.connect(path)
+    try:
+        con.execute(
+            "CREATE TABLE DestinyVendorDefinition (id INTEGER PRIMARY KEY, json)"
+        )
+        for id_, defn in _VENDOR_ROWS:
+            blob = json.dumps(defn)
+            con.execute(
+                "INSERT INTO DestinyVendorDefinition (id, json) VALUES (?, ?)",
+                (id_, blob.encode() if id_ in _BLOB_ROW_IDS else blob),
+            )
+        con.execute(
+            "INSERT INTO DestinyVendorDefinition (id, json) VALUES (?, ?)",
+            (_CORRUPT_ROW_ID, "{not json"),
+        )
+        con.commit()
+    finally:
+        con.close()
+    lookup = ManifestLookup(path)
+    yield lookup
+    lookup.close()
+
+
+def test_rotator_hashes_filters_by_bright_dust_prefix(vendor_manifest):
+    hashes = _rotator_hashes(vendor_manifest, EVERVERSE_BRIGHT_DUST_ROTATOR_PREFIX)
+    assert hashes == [10, 20, 70, 80]
+
+
+def test_rotator_hashes_filters_by_silver_prefix(vendor_manifest):
+    hashes = _rotator_hashes(vendor_manifest, EVERVERSE_SILVER_ROTATOR_PREFIX)
     assert hashes == [60]
 
 
-def test_rotator_hashes_empty_when_none_match():
-    manifest = {
-        "DestinyVendorDefinition": {
-            1: {"hash": 1, "vendorIdentifier": "SOMETHING_ELSE"},
-        }
-    }
-    assert _rotator_hashes(manifest, EVERVERSE_BRIGHT_DUST_ROTATOR_PREFIX) == []
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        EVERVERSE_BRIGHT_DUST_ROTATOR_PREFIX,
+        EVERVERSE_SILVER_ROTATOR_PREFIX,
+        "EVERVERSE",
+        "EVERVERSE_BRIGHT_DUST_ROTATOR_EXOTIC_GHOSTS",
+        "SOMETHING_ELSE",
+        "eververse",
+        "EVERVERSE%",
+    ],
+)
+def test_rotator_hashes_matches_the_values_scan(vendor_manifest, prefix):
+    # The whole point of the sqlite pushdown: same hashes, same order, every prefix.
+    assert _rotator_hashes(vendor_manifest, prefix) == _rotator_hashes_via_values(
+        vendor_manifest, prefix
+    )
+
+
+def test_rotator_hashes_empty_when_none_match(vendor_manifest):
+    assert _rotator_hashes(vendor_manifest, "NOTHING_STARTS_WITH_THIS") == []
 
 
 def _item_manifest_with(entry: dict) -> dict:
