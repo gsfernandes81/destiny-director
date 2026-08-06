@@ -71,7 +71,13 @@ ARG NO_BINARY_PKGS="--no-binary-package aiohttp --no-binary-package multidict \
 # sdist there. psycopg needs no compiler either way: per pyproject.toml it is the
 # pure-Python distribution, which dlopens libpq at runtime (installed in the final
 # stage).
-RUN apk add --no-cache curl gcc musl-dev python3-dev linux-headers \
+#   g++ is here for greenlet specifically and is NOT redundant with gcc: greenlet's
+#   extension is C++ (_greenlet.cpp), and its setup.py invokes the C++ driver by name, so
+#   a builder with only gcc fails with `error: command 'g++' failed: No such file or
+#   directory`. Alpine splits the two into separate packages; Debian's build-essential
+#   would have hidden this. It only ever runs on the ARMv6 path — greenlet has a
+#   musllinux x86_64 wheel — but like the rest of this line it is unconditional.
+RUN apk add --no-cache curl gcc g++ musl-dev python3-dev linux-headers \
     && curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh \
     && mv /root/.local/bin/uv /root/.local/bin/uvx /usr/local/bin/ \
     && apk del curl
