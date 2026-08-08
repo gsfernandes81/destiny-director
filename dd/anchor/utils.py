@@ -29,7 +29,6 @@ import yarl
 
 from dd.hmessage import HMessage
 
-from ..common import cfg
 from ..common.bot import CachedFetchBot
 from ..common.utils import ErrorClass, classify_error
 
@@ -287,41 +286,6 @@ async def run_in_thread_pool(func, *args, **kwargs):
     exception = future.exception()
     if exception is not None:
         raise exception
-
-
-async def alert_owner(
-    *args: str,
-    bot: CachedFetchBot | None = None,
-    channel: None | int | h.TextableChannel,
-    mention_mods: bool = True,
-):
-    # Sends an alert in the specified channels
-    # logs the same alert
-    # If no channels specified, returns the alert string
-    alert = ""
-
-    for arg in args:
-        alert = alert + " " + str(arg)
-
-    alert = "Warning:" + alert + " "
-
-    if mention_mods:
-        alert = alert + f"<@&{cfg.control_discord_role_id}> "
-
-    # If we get a single channel, turn it into a len() = 1 list
-    if isinstance(channel, int):
-        if bot is None:
-            raise ValueError("bot needs to be specified if channel is int")
-        channel = t.cast(
-            h.TextableChannel,
-            bot.cache.get_guild_channel(channel)
-            or await bot.rest.fetch_channel(channel),
-        )
-    elif channel is None:
-        return alert
-
-    # Send the alert in the channel
-    await channel.send(alert, role_mentions=True)
 
 
 def endl(*args: list[str]) -> str:

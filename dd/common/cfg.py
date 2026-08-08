@@ -166,7 +166,6 @@ disable_bad_channels = _getbool("DISABLE_BAD_CHANNELS", False)
 
 # Discord control server config
 control_discord_server_id = int(_getenv("CONTROL_DISCORD_SERVER_ID", "-1"))
-control_discord_role_id = _getenv("CONTROL_DISCORD_ROLE_ID", "-1")
 kyber_discord_server_id = _getenv("KYBER_DISCORD_SERVER_ID", default=-1)
 log_channel = _getenv("LOG_CHANNEL_ID", default=0)
 alerts_channel = _getenv("ALERTS_CHANNEL_ID", default=0)
