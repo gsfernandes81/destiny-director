@@ -18,6 +18,10 @@
 A permanent fetch error (e.g. 403 Missing Access on the source message) must make the
 crosspost wait give up immediately instead of retrying — and re-logging a full
 traceback — roughly every 30s forever. Transient errors must still retry.
+
+Also covers the source channel's name being resolved once for the whole wait rather
+than per retry — the retry loop runs for up to 12h and ``followable_name`` rebuilds the
+entire feed→channel dict on every call.
 """
 
 import asyncio
@@ -96,6 +100,27 @@ async def test_transient_error_retries_then_succeeds(
 
     assert bot.rest.fetch_message.await_count == 2  # retried after the transient error
     bot.wait_for.assert_not_awaited()  # already crossposted -> no wait
+
+
+async def test_followable_name_resolved_once_per_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Two loop iterations (one transient failure, then success) plus the permanent-path
+    # and give-up log lines must all share a single name lookup: the name cannot change
+    # mid-wait, and each lookup rebuilds every followable's channel id.
+    monkeypatch.setattr(mirror.aio, "sleep", AsyncMock())  # instant backoff
+    monkeypatch.setattr(mirror, "discord_error_logger", AsyncMock())
+    lookups = MagicMock(return_value="lost_sector")
+    monkeypatch.setattr(mirror.settings, "followable_name", lookups)
+
+    crossposted = SimpleNamespace(
+        channel_id=SRC_CHANNEL, id=MSG_ID, flags=h.MessageFlag.CROSSPOSTED
+    )
+    bot = _fake_bot([ConnectionError("boom"), crossposted])
+    await _run(bot)
+
+    assert bot.rest.fetch_message.await_count == 2  # the loop did iterate twice
+    lookups.assert_called_once_with(id=SRC_CHANNEL)
 
 
 async def test_transient_gives_up_at_the_ceiling(

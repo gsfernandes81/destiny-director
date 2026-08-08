@@ -107,7 +107,10 @@ async def _lost_sector_posts(
     editor previews exactly what will post; ``details_enabled`` mirrors the live
     champions/shields toggle.
     """
-    image_url = await settings.get_lost_sector_image_url()
+    # ``or None``: the setting may legitimately be blank, and a PostSpec image is
+    # absent-or-a-url — an empty string would reach the previewer as an image node with
+    # a blank src, which the browser resolves against the page and re-fetches.
+    image_url = await settings.get_lost_sector_image_url() or None
     now = dt.datetime.now(dt.UTC)
     # Align to the daily 17:00 UTC reset so entry 0 is the currently-live post.
     base = now.replace(hour=17, minute=0, second=0, microsecond=0)

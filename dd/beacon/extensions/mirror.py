@@ -525,6 +525,11 @@ async def handle_waiting_for_crosspost(
 ):
     deadline = perf_counter() + _CROSSPOST_WAIT_CEILING_SECONDS
     backoff_timer = 30
+    # Resolved once, not per iteration: followable_name rebuilds the whole feed→channel
+    # dict on every call, and this loop can retry every 30s for up to 12h — all to
+    # produce a log-line name that cannot change mid-wait. Same reasoning as the mirror
+    # log's run list, which hoists its own get_followables_sync out of the row loop.
+    channel_name_or_id = str(settings.followable_name(id=channel.id))
     while True:
         remaining = deadline - perf_counter()
         if remaining <= 0:
@@ -533,12 +538,11 @@ async def handle_waiting_for_crosspost(
             logging.warning(
                 "Giving up crosspost wait for message %s in channel %s after %dh.",
                 msg.id,
-                str(settings.followable_name(id=channel.id)),
+                channel_name_or_id,
                 _CROSSPOST_WAIT_CEILING_SECONDS // 3600,
             )
             return
         try:
-            channel_name_or_id = str(settings.followable_name(id=channel.id))
             logging.info(
                 f"MessageCreateEvent received for message in channel: "
                 f"{channel_name_or_id}"
@@ -582,7 +586,7 @@ async def handle_waiting_for_crosspost(
                     "Skipping crosspost wait for message %s in channel %s: source not "
                     "fetchable (%s).",
                     msg.id,
-                    str(settings.followable_name(id=channel.id)),
+                    channel_name_or_id,
                     type(e).__name__,
                 )
                 return

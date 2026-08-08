@@ -4,7 +4,6 @@ import datetime as dt
 import logging
 import typing as t
 
-import aiohttp
 import hikari as h
 
 from dd.hmessage import HMessage
@@ -164,13 +163,18 @@ async def format_post(
         rotation = await load_rotation(buffer=5)
         sectors = rotation(date)
 
-    # Follow the hyperlink to have the newest image embedded
-    try:
-        ls_image_url = await follow_link_single_step(
-            await settings.get_lost_sector_image_url()
-        )
-    except aiohttp.InvalidURL:
-        ls_image_url = None
+    # Follow the hyperlink to have the newest image embedded — but only if there is a
+    # link at all: the image url is a DB setting now and may legitimately be blank.
+    # follow_link_single_step must never be handed "" — aiohttp raises InvalidURL from
+    # inside the helper's own retry loop, where it is caught as the ClientError subclass
+    # it is, so a blank setting costs an ERROR alert per attempt plus the retry sleeps
+    # (~2s) on every single post build, and never surfaces to the caller.
+    ls_image_url_setting = await settings.get_lost_sector_image_url()
+    ls_image_url = (
+        await follow_link_single_step(ls_image_url_setting)
+        if ls_image_url_setting
+        else None
+    )
 
     ls_extra_details_enabled = (
         await schemas.AutoPostSettings.get_lost_sector_details_enabled()

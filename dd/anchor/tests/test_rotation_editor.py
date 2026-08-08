@@ -28,7 +28,9 @@ from dd.anchor.extensions import rotation_editor as editor
 from dd.common import (
     rotation_schema as rs,
     schemas,
+    settings,
 )
+from dd.sector_accounting import sector_accounting
 
 pytestmark = pytest.mark.asyncio
 
@@ -191,6 +193,41 @@ async def test_preview_renders_valid_document():
     body = json.dumps(payload["posts"])
     assert "Alpha" in body
     assert "World Lost Sectors" in body  # the post header, from lost_sector.build_body
+
+
+def _patch_ls_image_url(monkeypatch: pytest.MonkeyPatch, url: str) -> None:
+    async def _get_image_url() -> str:
+        return url
+
+    monkeypatch.setattr(settings, "get_lost_sector_image_url", _get_image_url)
+
+
+async def test_lost_sector_preview_omits_a_blank_image_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The image url is a DB setting that may legitimately be blank now. A PostSpec image
+    # is absent-or-a-url: an empty string would reach the previewer as an image node
+    # with a blank src, which the browser resolves against the page and re-fetches.
+    _patch_ls_image_url(monkeypatch, "")
+    posts = await editor._lost_sector_posts(
+        sector_accounting.Rotation.from_json(_doc()), details_enabled=False
+    )
+    assert posts
+    assert all(spec.image_url is None for _label, spec in posts)
+
+
+async def test_lost_sector_preview_carries_a_configured_image_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _patch_ls_image_url(monkeypatch, "https://kyberscorner.com/ls.gif")
+    posts = await editor._lost_sector_posts(
+        sector_accounting.Rotation.from_json(_doc()), details_enabled=False
+    )
+    # Days with data carry the url; a TBC day is a bare "no data" post with no image.
+    assert any(
+        spec.image_url == "https://kyberscorner.com/ls.gif" for _label, spec in posts
+    )
+    assert all(spec.image_url != "" for _label, spec in posts)
 
 
 async def test_preview_rejects_invalid_document():
