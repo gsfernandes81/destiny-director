@@ -154,11 +154,12 @@ async def test_render_category_rows_are_flat_peers_not_indented() -> None:
 
 
 @pytest.mark.integration
-async def test_render_category_rows_zebra_stripe_without_indenting() -> None:
+async def test_render_category_rows_dim_by_flagship_not_position() -> None:
     # A categorised group's rows are flat peers (see the test above), but they still
-    # need the same two-tone rhythm a feed group's .sub rows give it — just via
-    # alternating background (.flat-alt) rather than indent/dim, since no row here is a
-    # "child" of another.
+    # need the same two-tone rhythm a feed group's light-parent/dark-subs gives it.
+    # Branding's flagship setting (what "Branding" IS) stays light; Logging & Alerts has
+    # no single flagship, so every one of its settings — including the one that must
+    # structurally start the group — is dark. See _Setting.dim's docstring.
     html_out = await aps._render_html()
     by_slug = {s.slug: s for s in aps._SETTINGS}
 
@@ -167,16 +168,13 @@ async def test_render_category_rows_zebra_stripe_without_indenting() -> None:
         idx = html_out.index(label)
         return html_out[max(0, idx - 120) : idx]
 
-    # Branding: default_accent(0), error_accent(1, alt), default_url(2).
     assert 'class="row flat-alt' not in _row_start("embed_default_color")
     assert 'class="row flat-alt' in _row_start("embed_error_color")
-    assert 'class="row flat-alt' not in _row_start("default_url")
+    assert 'class="row flat-alt' in _row_start("default_url")
 
-    # Logging & Alerts: alert_level(0), disable_bad_channels(1, alt),
-    # log_channel(2), alerts_channel(3, alt).
-    assert 'class="row flat-alt' not in _row_start("alert_min_level")
+    assert 'class="row flat-alt' in _row_start("alert_min_level")
     assert 'class="row flat-alt' in _row_start("disable_bad_channels")
-    assert 'class="row flat-alt' not in _row_start("log_channel_id")
+    assert 'class="row flat-alt' in _row_start("log_channel_id")
     assert 'class="row flat-alt' in _row_start("alerts_channel_id")
 
     # A feed group never gets .flat-alt — it uses .sub, not zebra-striping.

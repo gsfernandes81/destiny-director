@@ -54,9 +54,9 @@
       .row.sub .name { font-size: .88rem; }
       /* Peers within a categorised group (Branding, Logging & Alerts, ...) render
          "flat" — no indent, no smaller name — since none of them is a parent of the
-         others (see autopost_settings.py's _render_row docs). Zebra-striping every
-         other one on .flat-alt keeps the same two-tone rhythm .sub gives feed groups,
-         without implying a parent/child relationship that isn't there. */
+         others (see autopost_settings.py's _render_row docs). .flat-alt (driven by
+         each setting's `dim`) still dims the "detail" rows, so the group keeps the
+         same two-tone rhythm .sub gives feed groups. */
       .row.flat-alt { background: var(--surface-2); }
       .row .text { min-width: 0; }
       .row .name { font-size: .95rem; }

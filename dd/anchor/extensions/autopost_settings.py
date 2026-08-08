@@ -136,6 +136,17 @@ class _Setting(t.NamedTuple):
     #: that first setting's own ``label``, since the header names the *category*
     #: ("Branding"), not that one row ("Default accent colour").
     category: str = ""
+    #: Only meaningful on a categorised group's setting. A feed group already gets its
+    #: light-parent/dark-subs two-tone for free from ``sub`` (the toggle row light, its
+    #: subs dark). A categorised group has no such parent row — its header is a label,
+    #: not a setting — so this says explicitly which of its (all structurally
+    #: ``sub=False`` or forced-first) settings should read as the dark "detail" tier.
+    #: ``False`` for the one flagship setting a category is named after (e.g. "Default
+    #: accent colour" IS what "Branding" means); ``True`` for everything else, including
+    #: a category's forced-first setting when it isn't that flagship (e.g. "Alert
+    #: level" — "Logging & Alerts" has no single flagship row, so every one of its
+    #: settings is a detail).
+    dim: bool = False
 
 
 # Ordered for display: each sub-row immediately follows its parent, and a parent always
@@ -160,6 +171,7 @@ _SETTINGS: tuple[_Setting, ...] = (
         "Shown on error/failure messages (e.g. a permissions problem).",
         True,
         "color",
+        dim=True,
     ),
     _Setting(
         "default_url",
@@ -168,6 +180,7 @@ _SETTINGS: tuple[_Setting, ...] = (
         "autoembed).",
         True,
         "url",
+        dim=True,
     ),
     # --- Logging & Alerts: the ops pipeline that forwards records to Discord ---------
     _Setting(
@@ -179,6 +192,7 @@ _SETTINGS: tuple[_Setting, ...] = (
         options=_ALERT_LEVELS,
         default="ERROR",
         category="Logging & Alerts",
+        dim=True,
     ),
     _Setting(
         "disable_bad_channels",
@@ -186,6 +200,7 @@ _SETTINGS: tuple[_Setting, ...] = (
         "Disable a legacy mirror destination once it stays unreachable past the grace "
         "window.",
         True,
+        dim=True,
     ),
     _Setting(
         "log_channel_id",
@@ -196,6 +211,7 @@ _SETTINGS: tuple[_Setting, ...] = (
         "channel",
         channel_scope="kyber_control",
         announce_only=False,
+        dim=True,
     ),
     _Setting(
         "alerts_channel_id",
@@ -206,6 +222,7 @@ _SETTINGS: tuple[_Setting, ...] = (
         "channel",
         channel_scope="kyber_control",
         announce_only=False,
+        dim=True,
     ),
     # --- Lost Sector ------------------------------------------------------------------
     _Setting(
@@ -376,31 +393,30 @@ def _render_row(
     state: bool | str | None,
     *,
     flat: bool = False,
-    alt: bool = False,
 ) -> str:
     """Render one settings row: label + description, then its control.
 
-    ``flat`` overrides the indented/dimmer ".sub" styling ``setting.sub`` would
-    otherwise select. It's set by the caller for every row in a *categorised* general
-    group (Branding, Logging & Alerts, ...): every setting there is a peer under the
-    category header, not a refinement of whichever setting happens to be first — unlike
-    a feed group, where ``lost_sector_details`` genuinely IS a sub-setting of
-    ``lost_sector``. Without it, the first setting in a category (which must have
-    ``sub=False`` — something has to start the group) would render as if it were that
-    category's "parent" row, visually singling it out for no reason other than being
-    first in the list.
+    ``flat`` overrides the indented ".sub" styling ``setting.sub`` would otherwise
+    select. It's set by the caller for every row in a *categorised* general group
+    (Branding, Logging & Alerts, ...): every setting there is a peer under the category
+    header, not a refinement of whichever setting happens to be first — unlike a feed
+    group, where ``lost_sector_details`` genuinely IS a sub-setting of ``lost_sector``.
+    Without it, the first setting in a category (which must have ``sub=False`` —
+    something has to start the group) would render as if it were that category's
+    "parent" row, visually singling it out for no reason other than being first in the
+    list.
 
-    ``alt`` (only meaningful when ``flat``) zebra-stripes every other row via
-    ``.flat-alt`` — the same dimmer background ``.sub`` uses, without the indent or
-    smaller name, so a categorised group keeps the two-tone rhythm of a feed group's
-    parent/sub rows without implying any row there is a "child" of another.
+    The dimmer background itself still applies when ``flat`` — via ``.flat-alt``,
+    driven by ``setting.dim`` rather than ``setting.sub`` — since a categorised group
+    still wants a light "flagship" row (e.g. "Default accent colour" for Branding) set
+    off from its darker "detail" rows (e.g. "Error accent colour"), the same two-tone a
+    feed group's light-parent/dark-subs gives it for free; ``dim`` just says so
+    explicitly, since ``sub``'s ``False`` here is a grouping necessity, not that.
     """
-    base_class = "row"
     if flat:
-        if alt:
-            base_class = "row flat-alt"
-    elif setting.sub:
-        base_class = "row sub"
+        base_class = "row flat-alt" if setting.dim else "row"
+    else:
+        base_class = "row sub" if setting.sub else "row"
 
     def _label_block(actions_html: str = "") -> str:
         return (
@@ -529,15 +545,12 @@ async def _current_state(setting: _Setting, session: t.Any) -> bool | str | None
 def _wrap_group(
     entries: list[tuple[_Setting, bool | str | None]], category: str
 ) -> str:
-    # Every row in a categorised group renders flat (no .sub indent/dim) — see
+    # Every row in a categorised group renders flat (no .sub indent) — see
     # _render_row's `flat` docs: within a category, the first setting is not that
-    # category's "parent", just whichever one happens to start the list. Every other
-    # one alternates onto .flat-alt (`alt`) so the group keeps a two-tone background.
+    # category's "parent", just whichever one happens to start the list. Each row's own
+    # `dim` still picks light vs dark, so the group keeps a two-tone background.
     flat = bool(category)
-    rows = "".join(
-        _render_row(setting, state, flat=flat, alt=flat and bool(idx % 2))
-        for idx, (setting, state) in enumerate(entries)
-    )
+    rows = "".join(_render_row(setting, state, flat=flat) for setting, state in entries)
     header = (
         f'<div class="groupheader">{html.escape(category)}</div>' if category else ""
     )
