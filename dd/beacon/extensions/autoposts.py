@@ -57,13 +57,16 @@ def resolve_followable_channel(feed: str, display_name: str) -> int:
     ``settings.get_followable_channel_sync(feed)``: a never-configured channel used to
     raise ``KeyError`` here and crash the bot at boot. That's too loud for what both
     bots otherwise treat as a normal, correctable state (nobody has picked a channel on
-    the Autopost Settings page yet), so this logs at ERROR instead — forwarded to the
-    alerts channel by ``dd.common.discord_logging`` — and returns 0, leaving the feed
-    dormant like every other "channel unset" case already behaves.
+    the Autopost Settings page yet) — but a dormant feed is still a real gap in
+    coverage nobody may notice on their own, so this logs at CRITICAL (not ERROR):
+    forwarded to the alerts channel AND pings the bot owner(s) directly, per
+    ``dd.common.discord_logging``'s "owners are pinged only for CRITICAL alerts" rule
+    (debounced by ``cfg.alert_escalation_debounce``, so this can't page-storm). Returns
+    0, leaving the feed dormant like every other "channel unset" case already behaves.
     """
     channel_id = settings.get_followable_channel_sync(feed)
     if not channel_id:
-        logger.error(
+        logger.critical(
             "%s autopost channel is not configured — dormant until a channel is "
             "picked on the Autopost Settings page.",
             display_name,

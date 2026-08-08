@@ -47,8 +47,9 @@ async def refresh_message_for_command(bot: CachedFetchBot):
     except (h.NotFoundError, h.ForbiddenError):
         # The configured channel was deleted, or the bot lost access to it, since it
         # was set — alert instead of letting this raise out of a StartedEvent/message
-        # listener where nothing else would report it.
-        logging.error(
+        # listener where nothing else would report it. CRITICAL, not ERROR, pages the
+        # bot owner(s) directly (see nav.py's identical rationale).
+        logging.critical(
             "Free Games followable channel %s is configured but no longer "
             "reachable (deleted, or the bot lost access) — feed is dormant until "
             "it's fixed on the Autopost Settings page.",

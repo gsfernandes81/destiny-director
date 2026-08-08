@@ -598,8 +598,24 @@ async def test_render_followable_channels_are_announce_only_log_alerts_are_not()
         )
 
 
+async def _allow_channel_permission(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for a confirmed "the bot can post here" — the channel-persistence
+    tests below aren't exercising the permission gate itself (see the dedicated
+    _channel_permission_problem tests for that), and fail-closed means a save with no
+    bot mocked would otherwise be rejected before it ever reaches persistence."""
+
+    async def _no_problem(_channel_id: int) -> str | None:
+        return None
+
+    monkeypatch.setattr(aps, "_channel_permission_problem", _no_problem)
+
+
 @pytest.mark.integration
-async def test_handle_save_persists_channel_value() -> None:
+async def test_handle_save_persists_channel_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _allow_channel_permission(monkeypatch)
+
     resp = await aps._handle_save(
         _as_request(_FakeRequest({"settings": {"xur_channel": "999"}}))
     )
@@ -610,11 +626,15 @@ async def test_handle_save_persists_channel_value() -> None:
 
 
 @pytest.mark.integration
-async def test_handle_save_refreshes_sync_readers_too() -> None:
+async def test_handle_save_refreshes_sync_readers_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # _handle_save awaits dd.common.settings.preload() (not just invalidate()) so a
     # *_sync getter — e.g. the one HybridPostSpec.channel_id uses to route an actual
     # message send — reflects the save immediately in THIS process too, not only
     # whenever some unrelated async getter happens to trigger a refresh next.
+    await _allow_channel_permission(monkeypatch)
+
     resp = await aps._handle_save(
         _as_request(_FakeRequest({"settings": {"xur_channel": "999"}}))
     )
@@ -741,7 +761,10 @@ async def test_channel_permission_problem_before_bot_ready(
 ) -> None:
     monkeypatch.setattr(aps, "_bot", None)
 
-    assert await aps._channel_permission_problem(555) is None
+    problem = await aps._channel_permission_problem(555)
+
+    assert problem is not None
+    assert "starting" in problem
 
 
 async def test_channel_permission_problem_when_bot_cannot_see_the_channel(
@@ -824,7 +847,7 @@ async def test_channel_permission_problem_when_fully_permitted(
     assert await aps._channel_permission_problem(555) is None
 
 
-async def test_channel_permission_problem_fails_open_on_cache_failure(
+async def test_channel_permission_problem_fails_closed_on_cache_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def _raise_cache_failure(_member: t.Any, _channel: t.Any) -> h.Permissions:
@@ -833,9 +856,13 @@ async def test_channel_permission_problem_fails_open_on_cache_failure(
     monkeypatch.setattr(aps, "_bot", _fake_channel_bot())
     monkeypatch.setattr(aps, "calculate_permissions", _raise_cache_failure)
 
-    # A permission calc that can't resolve (no gateway cache yet) must not block the
-    # save — see _channel_permission_problem's fail-open rationale.
-    assert await aps._channel_permission_problem(555) is None
+    # A permission calc that can't resolve (no gateway cache yet) rejects the save
+    # rather than letting it through unconfirmed — see
+    # _channel_permission_problem's fail-closed rationale.
+    problem = await aps._channel_permission_problem(555)
+
+    assert problem is not None
+    assert "cache" in problem
 
 
 # --- /autopost_settings/channels ----------------------------------------------------

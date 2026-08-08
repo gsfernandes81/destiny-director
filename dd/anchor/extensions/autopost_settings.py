@@ -485,12 +485,7 @@ def _render_row(
 
     def _row(kind_class: str, control_html: str, *, block: str = "") -> str:
         classes = f"{base_class} {kind_class}" if kind_class else base_class
-        return (
-            f'<div class="{classes}">'
-            f"{block or _label_block()}"
-            f"{control_html}"
-            "</div>"
-        )
+        return f'<div class="{classes}">{block or _label_block()}{control_html}</div>'
 
     if setting.kind == "url":
         value = html.escape(state or "") if isinstance(state, str) else ""
@@ -674,15 +669,18 @@ async def _channel_permission_problem(channel_id: int) -> str | None:
     """``None`` if the bot can fully post (view/send/embed/external-emoji) in
     ``channel_id``; otherwise a human-readable reason to reject the save for.
 
-    Fails OPEN — returns ``None`` (allow the save) — on anything short of a definite
-    "this won't work": the bot not started yet, an unresolvable permission-cache
-    lookup, or an unexpected REST hiccup. This is a courtesy check at set time, not the
-    only safety net (a channel that goes bad later still alerts rather than silently
-    failing — see resolve_followable_channel/nav.py); the cost of wrongly blocking a
-    good save outweighs occasionally letting a bad one through undetected here.
+    Fails CLOSED — rejects the save — on anything short of a confirmed "yes, the bot
+    can post here": the bot not started yet, an unresolvable permission-cache lookup,
+    or an unexpected REST hiccup all reject, same as a confirmed missing permission
+    does. A channel setting is worth being unable to save for a moment (retry once the
+    bot's finished starting, or once its permission cache is warm) rather than risk
+    accepting one silently unusable — this is the primary safety net, not just a
+    courtesy check (a channel that goes bad *after* being saved still alerts rather
+    than failing silently — see resolve_followable_channel/nav.py — but this is what
+    stops a bad one going in to begin with).
     """
     if _bot is None:
-        return None
+        return "the bot hasn't finished starting yet — try again in a moment."
     try:
         channel = await _bot.rest.fetch_channel(channel_id)
     except (h.NotFoundError, h.ForbiddenError):
@@ -691,17 +689,22 @@ async def _channel_permission_problem(channel_id: int) -> str | None:
         logger.warning(
             "Channel permission check failed for %s", channel_id, exc_info=True
         )
-        return None
+        return (
+            "couldn't confirm the bot's access to that channel right now — try again."
+        )
     if not isinstance(channel, h.PermissibleGuildChannel):
         return "that channel doesn't support posting (not a text/announcement channel)."
     me = _bot.get_me()
     if me is None:
-        return None
+        return "the bot's own identity isn't available yet — try again in a moment."
     try:
         member = await _bot.rest.fetch_member(channel.guild_id, me.id)
         perms = calculate_permissions(member, channel)
     except CacheFailureError:
-        return None
+        return (
+            "couldn't confirm the bot's permissions there yet (its cache isn't warm) "
+            "— try again shortly."
+        )
     except (h.NotFoundError, h.ForbiddenError):
         return "the bot isn't a member of that server."
     missing = [name for perm, name in _REQUIRED_CHANNEL_PERMS if not (perms & perm)]
