@@ -154,12 +154,11 @@ async def test_render_category_rows_are_flat_peers_not_indented() -> None:
 
 
 @pytest.mark.integration
-async def test_render_category_rows_dim_by_flagship_not_position() -> None:
+async def test_render_category_rows_are_all_dark_under_a_light_header() -> None:
     # A categorised group's rows are flat peers (see the test above), but they still
-    # need the same two-tone rhythm a feed group's light-parent/dark-subs gives it.
-    # Branding's flagship setting (what "Branding" IS) stays light; Logging & Alerts has
-    # no single flagship, so every one of its settings — including the one that must
-    # structurally start the group — is dark. See _Setting.dim's docstring.
+    # need the same two-tone rhythm a feed group's light-parent/dark-subs gives it — the
+    # category header itself is the group's only "parent", so every one of its
+    # settings, including the one that must structurally start the group, is dark.
     html_out = await aps._render_html()
     by_slug = {s.slug: s for s in aps._SETTINGS}
 
@@ -168,16 +167,20 @@ async def test_render_category_rows_dim_by_flagship_not_position() -> None:
         idx = html_out.index(label)
         return html_out[max(0, idx - 120) : idx]
 
-    assert 'class="row flat-alt' not in _row_start("embed_default_color")
-    assert 'class="row flat-alt' in _row_start("embed_error_color")
-    assert 'class="row flat-alt' in _row_start("default_url")
+    for slug in (
+        "embed_default_color",
+        "embed_error_color",
+        "default_url",
+        "alert_min_level",
+        "disable_bad_channels",
+        "log_channel_id",
+        "alerts_channel_id",
+    ):
+        assert 'class="row flat-alt' in _row_start(slug), f"{slug} row is not dark"
 
-    assert 'class="row flat-alt' in _row_start("alert_min_level")
-    assert 'class="row flat-alt' in _row_start("disable_bad_channels")
-    assert 'class="row flat-alt' in _row_start("log_channel_id")
-    assert 'class="row flat-alt' in _row_start("alerts_channel_id")
-
-    # A feed group never gets .flat-alt — it uses .sub, not zebra-striping.
+    # A feed group never gets .flat-alt — it uses .sub instead, and only for its subs;
+    # the parent toggle row itself (unlike a category header) is a real light setting.
+    assert 'class="row flat-alt' not in _row_start("lost_sector")
     assert 'class="row flat-alt' not in _row_start("lost_sector_details")
 
 
