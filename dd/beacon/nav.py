@@ -897,33 +897,50 @@ class NavPagesHolder:
 
     def __init__(self) -> None:
         self.pages: NavPages | None = None
+        #: Why ``pages`` is None, phrased for a user (one of ``utils.FEED_*``). Set
+        #: when the source channel turns out to be unusable at startup, so the command
+        #: can say what is wrong instead of raising — see make_navigator_command.
+        self.unavailable: str | None = None
 
 
 def setup_nav_pages(
     loader: lb.Loader,
     *,
-    followable_channel: int,
+    feed: str,
+    display_name: str,
     pages_cls: type[NavPages] = NavPages,
     **from_channel_kwargs: t.Any,
 ) -> NavPagesHolder:
     """Register a ``StartedEvent`` listener that builds the pages into a holder.
 
-    ``pages_cls`` is built from ``followable_channel`` once the bot starts.
-    Extra keyword arguments are forwarded to :meth:`NavPages.from_channel`
-    (``period``, ``reference_date``, ``history_len``, ``lookahead_len``,
-    ``suppress_content_autoembeds``, ``no_data_message`` ...).
+    ``pages_cls`` is built once the bot starts, from whatever channel ``feed`` is
+    configured with *then* — resolved at startup rather than taken as an import-time
+    id, so a channel set on the Autopost Settings page between import and start is
+    still picked up. Extra keyword arguments are forwarded to
+    :meth:`NavPages.from_channel` (``period``, ``reference_date``, ``history_len``,
+    ``lookahead_len``, ``suppress_content_autoembeds``, ``no_data_message`` ...).
+
+    An unusable channel never stops the listener registering, and never raises out of
+    it: it records why on the holder (so the command can answer for itself) and logs
+    CRITICAL, which forwards to the alerts channel AND pings the bot owner(s) — a
+    source channel is ours to fix, and a user hitting it can do nothing about it.
     """
     holder = NavPagesHolder()
 
     @loader.listener(h.StartedEvent)
     async def _on_start(event: h.StartedEvent) -> None:
-        if not followable_channel:
-            # Unconfigured — resolve_followable_channel already alerted about this at
-            # import time; nothing to fetch.
+        channel_id = await settings.get_followable_channel(feed)
+        if not channel_id:
+            holder.unavailable = utils.FEED_UNCONFIGURED
+            logging.critical(
+                "%s has no channel set — its commands will answer 'unavailable' until "
+                "one is picked on the Autopost Settings page.",
+                display_name,
+            )
             return
         try:
             holder.pages = await pages_cls.from_channel(
-                event.app, followable_channel, **from_channel_kwargs
+                event.app, channel_id, **from_channel_kwargs
             )
         except (h.NotFoundError, h.ForbiddenError):
             # The configured channel was deleted, or the bot lost access to it, since
@@ -933,11 +950,13 @@ def setup_nav_pages(
             # resolve_followable_channel's identical rationale in autoposts.py) — a
             # channel vanishing out from under a configured feed is exactly the kind of
             # silent regression nobody watches for on their own.
+            holder.unavailable = utils.FEED_UNREACHABLE
             logging.critical(
-                "Followable channel %s is configured but no longer reachable "
-                "(deleted, or the bot lost access) — feed is dormant until it's "
+                "%s channel %s is configured but no longer reachable (deleted, or the "
+                "bot lost access) — its commands will answer 'unavailable' until it's "
                 "fixed on the Autopost Settings page.",
-                followable_channel,
+                display_name,
+                channel_id,
             )
 
     return holder
@@ -948,6 +967,7 @@ def make_navigator_command(
     *,
     name: str,
     description: str,
+    display_name: str = "",
     allow_start_on_blank_page: bool = False,
     display_date_offset: dt.timedelta = dt.timedelta(days=0),
 ) -> type[lb.SlashCommand]:
@@ -955,13 +975,26 @@ def make_navigator_command(
 
     The returned class is *not* registered; the caller registers it with
     ``loader.command(...)`` or ``group.register(...)`` as appropriate.
+
+    ``display_name`` (defaulting to ``name``) names the feed in the "unavailable"
+    answer this gives when its source channel turned out to be unusable at startup.
     """
 
     class _NavCommand(lb.SlashCommand, name=name, description=description):
         @lb.invoke
         async def invoke(self, ctx: lb.Context):
             if holder.pages is None:
-                raise RuntimeError(f"Navigator pages for '{name}' not yet initialised")
+                # No pages: either the source channel is unusable (setup_nav_pages
+                # recorded why and already paged us), or the bot hasn't finished
+                # starting. Either way this is ours, not the user's — say so plainly
+                # rather than raising an unhandled error at them.
+                await ctx.respond(
+                    await utils.feed_unavailable_embed(
+                        display_name or name,
+                        holder.unavailable or "the bot is still starting up",
+                    )
+                )
+                return
             navigator = NavigatorView(
                 pages=holder.pages,
                 allow_start_on_blank_page=allow_start_on_blank_page,

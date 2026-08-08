@@ -25,7 +25,7 @@ FOLLOWABLE_CHANNEL = resolve_followable_channel(
 )
 
 follow_control_command_maker(
-    FOLLOWABLE_CHANNEL,
+    "emblems_and_cosmetics",
     "emblems_and_cosmetics",
     "Emblems and Cosmetics",
     "D2 Emblems and Cosmetics auto posts",

@@ -22,5 +22,5 @@ loader = lb.Loader()
 FOLLOWABLE_CHANNEL = resolve_followable_channel("iron_banner", "Iron Banner")
 
 follow_control_command_maker(
-    FOLLOWABLE_CHANNEL, "iron_banner", "Iron Banner", "Iron Banner auto posts"
+    "iron_banner", "iron_banner", "Iron Banner", "Iron Banner auto posts"
 )

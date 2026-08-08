@@ -28,7 +28,8 @@ EVERVERSE = resolve_followable_channel("eververse", "Eververse")
 
 _pages = setup_nav_pages(
     loader,
-    followable_channel=EVERVERSE,
+    feed="eververse",
+    display_name="Eververse",
     history_len=14,
     period=dt.timedelta(days=1),
     reference_date=REFERENCE_DATE,
@@ -46,7 +47,7 @@ loader.command(
 )
 
 follow_control_command_maker(
-    EVERVERSE,
+    "eververse",
     "eververse",
     "Eververse",
     "Eververse auto posts",

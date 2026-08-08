@@ -17,6 +17,7 @@ import datetime as dt
 
 import lightbulb as lb
 
+from .. import utils
 from ..nav import NO_DATA_HERE_EMBED, NavigatorView, setup_nav_pages
 from .autoposts import follow_control_command_maker, resolve_followable_channel
 
@@ -30,7 +31,8 @@ SINGLE_PAGE_MODE = True
 
 _pages = setup_nav_pages(
     loader,
-    followable_channel=FOLLOWABLE_CHANNEL,
+    feed="ada",
+    display_name="Ada",
     history_len=12,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,
@@ -45,7 +47,15 @@ class AdaCommand(
     async def invoke(self, ctx: lb.Context):
         pages = _pages.pages
         if pages is None:
-            raise RuntimeError("Ada pages not yet initialised")
+            # Source channel unset/unreachable (setup_nav_pages recorded why and paged
+            # us), or the bot is still starting — ours to fix, so say so rather than
+            # raising at the user. Same answer make_navigator_command gives.
+            await ctx.respond(
+                await utils.feed_unavailable_embed(
+                    "Ada-1", _pages.unavailable or "the bot is still starting up"
+                )
+            )
+            return
 
         if not SINGLE_PAGE_MODE:
             navigator = NavigatorView(pages=pages, timeout=60)
@@ -72,6 +82,4 @@ class AdaCommand(
 
 loader.command(AdaCommand)
 
-follow_control_command_maker(
-    FOLLOWABLE_CHANNEL, "ada", "Ada", "Ada's weekly item auto posts"
-)
+follow_control_command_maker("ada", "ada", "Ada", "Ada's weekly item auto posts")

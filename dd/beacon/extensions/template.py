@@ -90,4 +90,4 @@ if not IGNORE:
 
     loader.command(SlashCommand)
 
-    follow_control_command_maker(FOLLOWABLE_CHANNEL, "xur", "Xur", "Xur auto posts")
+    follow_control_command_maker("xur", "xur", "Xur", "Xur auto posts")

@@ -71,3 +71,17 @@ include = ["dd/sector_accounting/tests/test_sector_accounting.py"]
 # defaultdict/SectorData but a dict suffices at runtime (mirrors the overrides on
 # dd/sector_accounting/sector_accounting.py).
 invalid-argument-type = "ignore"
+
+[[overrides]]
+include = ["dd/beacon/tests/test_feed_unavailable.py"]
+
+[overrides.rules]
+# Driving a command callback or a StartedEvent listener without standing up a real
+# lightbulb client means reaching past its DI wrappers: `Loader._loadables`, a
+# loadable's `_callback`, and `SlashCommand.invoke._func` are all runtime-real but
+# absent from the public types. The alternative — a live client and a dispatched
+# gateway event — is far more machinery than "call the function" warrants.
+unresolved-attribute = "ignore"
+# A one-method stub stands in for `pages_cls` (it only needs `from_channel` to raise),
+# and CommandBase is what `make_navigator_command` actually returns.
+invalid-argument-type = "ignore"

@@ -531,15 +531,21 @@ async def _enable_autopost(
 
 
 def follow_control_command_maker(
-    followable_channel: int,
+    feed: str,
     autoposts_name: str,
     autoposts_friendly_name: str,
     autoposts_desc: str,
 ):
-    """Create a follow control command for a given followable channel
+    """Create a follow control command for a given followable feed
+
+    The command registers unconditionally and resolves ``feed``'s channel when it is
+    *invoked*, not at import: a feed whose channel is unset would otherwise either
+    vanish from the command list (indistinguishable from a broken bot) or, worse,
+    happily record a mirror against channel 0 — a subscription that can never deliver.
+    An unset channel answers with the standard "unavailable" embed and pages us.
 
     Args:
-        followable_channel (int): The channel ID of the followable channel
+        feed (str): The followable feed slug (``dd.common.settings.FOLLOWABLE_SLUGS``)
         autoposts_name (str): The name of the autoposts command
         autoposts_friendly_name (str): The friendly name to show users for
             the autoposts command. Must be singular and correctly capitalized
@@ -571,6 +577,25 @@ def follow_control_command_maker(
 
             enabling = bool(self.option)
             ping_role: h.Role | None = self.ping_role
+
+            # Resolved live rather than closed over at import, so a channel set (or
+            # changed) on the Autopost Settings page since boot is honoured without a
+            # restart — and so an unset one is caught here, before a mirror row against
+            # channel 0 can be written.
+            followable_channel = await settings.get_followable_channel(feed)
+            if not followable_channel:
+                logger.critical(
+                    "%s has no channel set — /autopost %s answered 'unavailable'. "
+                    "Pick one on the Autopost Settings page.",
+                    autoposts_friendly_name,
+                    autoposts_name,
+                )
+                await ctx.respond(
+                    await utils.feed_unavailable_embed(
+                        autoposts_friendly_name, utils.FEED_UNCONFIGURED
+                    )
+                )
+                return
 
             async with db_session() as session, session.begin():
                 try:

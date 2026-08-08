@@ -352,3 +352,35 @@ def ignore_own_user(
         await func(*args)
 
     return _wrapped
+
+
+# --- a feed whose source channel is unusable -----------------------------------------
+#
+# Beacon's commands are the *reader* side of a followable: they page through, or repeat,
+# whatever anchor (or a human) posted in the feed's Kyber announce channel. When that
+# channel is unset, deleted, or unreadable, the command has nothing to show — but it is
+# registered regardless, because a command that silently stops existing is indistin-
+# guishable to a user from the bot being broken, and Discord keeps serving the stale
+# command list anyway. So: register always, answer clearly, and page us — the source
+# channel is on OUR side, so a user seeing this can do nothing about it and we can.
+#
+# Note this has no bearing on mirroring. The mirror system runs off MirroredChannel
+# rows keyed by source channel id and is always on: anything posted in a watched
+# announce channel is relayed, whatever these settings say. Only the commands degrade.
+
+FEED_UNCONFIGURED = "no channel has been set for it yet"
+FEED_UNREACHABLE = "its channel has been deleted, or the bot lost access to it"
+
+
+async def feed_unavailable_embed(display_name: str, reason: str) -> h.Embed:
+    """The user-facing answer for a command whose source channel is unusable."""
+    from dd.common import settings
+
+    return h.Embed(
+        title=f"{display_name} isn't available right now",
+        description=(
+            f"This command reads from the {display_name} channel, and {reason}. "
+            "The bot owners have been alerted — nothing to do on your end."
+        ),
+        color=await settings.get_embed_error_color(),
+    )

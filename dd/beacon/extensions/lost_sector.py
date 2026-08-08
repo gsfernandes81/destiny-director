@@ -76,7 +76,8 @@ class SectorMessages(NavPages):
 _pages = setup_nav_pages(
     loader,
     pages_cls=SectorMessages,
-    followable_channel=FOLLOWABLE_CHANNEL,
+    feed="lost_sector",
+    display_name="Lost Sector",
     history_len=14,
     lookahead_len=7,
     period=dt.timedelta(days=1),
@@ -102,5 +103,5 @@ loader.command(ls_group)
 loader.command(ls_group_2)
 
 follow_control_command_maker(
-    FOLLOWABLE_CHANNEL, "lost_sector", "Lost sector", "Lost sector auto posts"
+    "lost_sector", "lost_sector", "Lost sector", "Lost sector auto posts"
 )

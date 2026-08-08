@@ -29,7 +29,8 @@ FOLLOWABLE_CHANNEL = resolve_followable_channel("weekly_reset", "Weekly Reset")
 _pages = setup_nav_pages(
     loader,
     pages_cls=ResetPages,
-    followable_channel=FOLLOWABLE_CHANNEL,
+    feed="weekly_reset",
+    display_name="Weekly Reset",
     history_len=12,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,
@@ -47,7 +48,7 @@ weekly_reset_command_group.register(
 loader.command(weekly_reset_command_group)
 
 follow_control_command_maker(
-    FOLLOWABLE_CHANNEL,
+    "weekly_reset",
     "weekly_reset",
     "Weekly reset",
     "Weekly reset auto posts",

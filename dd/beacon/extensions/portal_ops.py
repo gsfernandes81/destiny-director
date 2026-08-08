@@ -19,9 +19,10 @@ Mirrors the anchor's Portal Ops autopost (see ``dd/anchor/extensions/portal_ops.
 into per-guild channels and exposes a ``/portal ops`` navigator over the mirrored
 channel history. The post is daily (period = 1 day, daily reset anchor).
 
-Guarded on the ``portal_ops`` followable channel id: if it has not been set on the
-Autopost Settings page the module loads cleanly and registers nothing (the bot is
-unaffected) until the channel is set — ``resolve_followable_channel`` alerts either way.
+Both commands register whether or not a channel has been set: a command that silently
+stops existing reads to a user as a broken bot, and Discord serves the stale command
+list anyway. With no channel they answer "unavailable" and page us instead — see
+``dd.beacon.utils.feed_unavailable_embed``.
 """
 
 import datetime as dt
@@ -36,41 +37,36 @@ loader = lb.Loader()
 # Daily reset anchor (Tue/any day 17:00 UTC); the period is one day.
 REFERENCE_DATE = dt.datetime(2025, 7, 15, 17, tzinfo=dt.UTC)
 
+# Import-time read purely for the boot-time alert on an unconfigured feed; every
+# command below resolves the channel live when it runs.
 FOLLOWABLE_CHANNEL = resolve_followable_channel("portal_ops", "Portal Ops")
 
-if not FOLLOWABLE_CHANNEL:
-    # No followable channel configured — load cleanly and register nothing. The
-    # navigator + follow command come online once a channel is set on the settings
-    # page (resolve_followable_channel already logged the alert above).
-    pass
-else:
-    # Narrowed non-None channel id for the helpers below.
-    _followable_channel: int = FOLLOWABLE_CHANNEL
+_pages = setup_nav_pages(
+    loader,
+    pages_cls=ResetPages,
+    feed="portal_ops",
+    display_name="Portal Ops",
+    history_len=14,
+    period=dt.timedelta(days=1),
+    reference_date=REFERENCE_DATE,
+    cv2=True,
+)
 
-    _pages = setup_nav_pages(
-        loader,
-        pages_cls=ResetPages,
-        followable_channel=_followable_channel,
-        history_len=14,
-        period=dt.timedelta(days=1),
-        reference_date=REFERENCE_DATE,
-        cv2=True,
+portal_command_group = lb.Group("portal", "Destiny 2 Portal Ops")
+portal_command_group.register(
+    make_navigator_command(
+        _pages,
+        name="ops",
+        display_name="Portal Ops",
+        description="Find out about today's featured Portal ops",
     )
+)
 
-    portal_command_group = lb.Group("portal", "Destiny 2 Portal Ops")
-    portal_command_group.register(
-        make_navigator_command(
-            _pages,
-            name="ops",
-            description="Find out about today's featured Portal ops",
-        )
-    )
+loader.command(portal_command_group)
 
-    loader.command(portal_command_group)
-
-    follow_control_command_maker(
-        _followable_channel,
-        "portal_ops",
-        "Portal ops",
-        "Portal ops auto posts",
-    )
+follow_control_command_maker(
+    "portal_ops",
+    "portal_ops",
+    "Portal ops",
+    "Portal ops auto posts",
+)

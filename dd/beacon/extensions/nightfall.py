@@ -75,7 +75,8 @@ class NightfallPages(NavPages):
 _pages = setup_nav_pages(
     loader,
     pages_cls=NightfallPages,
-    followable_channel=FOLLOWABLE_CHANNEL,
+    feed="weekly_nightfall",
+    display_name="Weekly Nightfall",
     history_len=12,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,
@@ -90,7 +91,7 @@ loader.command(
 )
 
 follow_control_command_maker(
-    FOLLOWABLE_CHANNEL,
+    "weekly_nightfall",
     "nightfall",
     "Nightfall",
     "Nightfall weekly auto posts",

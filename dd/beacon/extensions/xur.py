@@ -31,7 +31,8 @@ FOLLOWABLE_CHANNEL = resolve_followable_channel("xur", "Xûr")
 
 _pages = setup_nav_pages(
     loader,
-    followable_channel=FOLLOWABLE_CHANNEL,
+    feed="xur",
+    display_name="Xûr",
     history_len=12,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,
@@ -56,4 +57,4 @@ loader.command(
     )
 )
 
-follow_control_command_maker(FOLLOWABLE_CHANNEL, "xur", "Xur", "Xur auto posts")
+follow_control_command_maker("xur", "xur", "Xur", "Xur auto posts")

@@ -30,7 +30,8 @@ FOLLOWABLE_CHANNEL = resolve_followable_channel("trials", "Trials")
 
 _pages = setup_nav_pages(
     loader,
-    followable_channel=FOLLOWABLE_CHANNEL,
+    feed="trials",
+    display_name="Trials",
     history_len=12,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,
@@ -48,6 +49,4 @@ loader.command(
     )
 )
 
-follow_control_command_maker(
-    FOLLOWABLE_CHANNEL, "trials", "Trials", "Trials weekly auto posts"
-)
+follow_control_command_maker("trials", "trials", "Trials", "Trials weekly auto posts")

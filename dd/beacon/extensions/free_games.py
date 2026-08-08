@@ -21,47 +21,77 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
+from ...common import settings
 from ...common.bot import CachedFetchBot
+from .. import utils
 from .autoposts import follow_control_command_maker, resolve_followable_channel
 
 loader = lb.Loader()
 
-# Followable channel from which to pull messages for the command and autoposts
+# Read once at import purely for the boot-time alert on an unconfigured feed; the
+# listeners and the command below resolve the channel live (see _followable_channel).
 FOLLOWABLE_CHANNEL = resolve_followable_channel("free_games", "Free Games")
 
 HELP_STRING = "See the current free games on The Epic Store, etc"
 
-last_message_in_channel: h.PartialMessage
-last_message_in_channel_id: int
+# The most recent message in the followable channel, which /free games repeats. None
+# until a StartedEvent has fetched one — an unset or unreachable channel leaves it that
+# way, and `unavailable_reason` says which so the command can answer for itself instead
+# of raising NameError at whoever ran it.
+last_message_in_channel: h.PartialMessage | None = None
+last_message_in_channel_id: int = 0
+unavailable_reason: str | None = None
 
 
 async def refresh_message_for_command(bot: CachedFetchBot):
     global last_message_in_channel_id
     global last_message_in_channel
+    global unavailable_reason
 
-    if not FOLLOWABLE_CHANNEL:
-        # Unconfigured — resolve_followable_channel already alerted at import time.
+    channel_id = await settings.get_followable_channel("free_games")
+    if not channel_id:
+        unavailable_reason = utils.FEED_UNCONFIGURED
+        # resolve_followable_channel already alerted at import; this path is reached
+        # again on every message event, so don't re-page for the same known state.
         return
     try:
-        channel = await bot.fetch_channel(FOLLOWABLE_CHANNEL)
+        channel = await bot.fetch_channel(channel_id)
     except (h.NotFoundError, h.ForbiddenError):
         # The configured channel was deleted, or the bot lost access to it, since it
         # was set — alert instead of letting this raise out of a StartedEvent/message
         # listener where nothing else would report it. CRITICAL, not ERROR, pages the
         # bot owner(s) directly (see nav.py's identical rationale).
+        unavailable_reason = utils.FEED_UNREACHABLE
         logging.critical(
             "Free Games followable channel %s is configured but no longer "
-            "reachable (deleted, or the bot lost access) — feed is dormant until "
-            "it's fixed on the Autopost Settings page.",
-            FOLLOWABLE_CHANNEL,
+            "reachable (deleted, or the bot lost access) — /free games will answer "
+            "'unavailable' until it's fixed on the Autopost Settings page.",
+            channel_id,
         )
         return
     if not isinstance(channel, h.TextableChannel):
-        raise TypeError("Free games followable channel is not textable")
+        unavailable_reason = utils.FEED_UNREACHABLE
+        logging.critical(
+            "Free Games followable channel %s is not a textable channel — /free games "
+            "will answer 'unavailable' until it's fixed on the Autopost Settings page.",
+            channel_id,
+        )
+        return
     async for message in channel.fetch_history():
         last_message_in_channel = message
         last_message_in_channel_id = message.id
+        unavailable_reason = None
         break
+
+
+def _followable_channel() -> int:
+    """The free-games channel as configured *now* (a cached read, no DB round trip).
+
+    The listeners below fire on every message the bot can see, so they resolve here
+    rather than closing over the import-time id: a channel set or changed on the
+    settings page otherwise wouldn't be watched until the next restart.
+    """
+    return settings.get_followable_channel_sync("free_games")
 
 
 @loader.listener(h.MessageCreateEvent)
@@ -69,7 +99,7 @@ async def on_message_create(event: h.MessageCreateEvent):
     global last_message_in_channel
     global last_message_in_channel_id
 
-    if event.channel_id == FOLLOWABLE_CHANNEL:
+    if event.channel_id == _followable_channel():
         last_message_in_channel = event.message
         last_message_in_channel_id = event.message.id
 
@@ -80,7 +110,7 @@ async def on_message_update(event: h.MessageUpdateEvent):
     global last_message_in_channel_id
 
     if (
-        event.channel_id == FOLLOWABLE_CHANNEL
+        event.channel_id == _followable_channel()
         and event.message.id == last_message_in_channel_id
     ):
         last_message_in_channel = event.message
@@ -94,7 +124,7 @@ async def on_message_delete(
     global last_message_in_channel
     global last_message_in_channel_id
     if (
-        event.channel_id == FOLLOWABLE_CHANNEL
+        event.channel_id == _followable_channel()
         and event.message_id == last_message_in_channel_id
     ):
         await refresh_message_for_command(bot)
@@ -114,6 +144,14 @@ slash_command_group = lb.Group(
 class FreeGames(lb.SlashCommand, name="games", description=HELP_STRING):
     @lb.invoke
     async def invoke(self, ctx: lb.Context):
+        if last_message_in_channel is None:
+            await ctx.respond(
+                await utils.feed_unavailable_embed(
+                    "Free Games",
+                    unavailable_reason or "the bot is still starting up",
+                )
+            )
+            return
         await ctx.respond(
             **(HMessage.from_message(last_message_in_channel).to_message_kwargs())
         )
@@ -121,6 +159,4 @@ class FreeGames(lb.SlashCommand, name="games", description=HELP_STRING):
 
 loader.command(slash_command_group)
 
-follow_control_command_maker(
-    FOLLOWABLE_CHANNEL, "free_games", "Free Games", HELP_STRING
-)
+follow_control_command_maker("free_games", "free_games", "Free Games", HELP_STRING)

@@ -92,7 +92,8 @@ class TWIDPages(NavPages):
 _pages = setup_nav_pages(
     loader,
     pages_cls=TWIDPages,
-    followable_channel=FOLLOWABLE_CHANNEL,
+    feed="twab",
+    display_name="This Week At Bungie",
     history_len=4,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,
@@ -108,7 +109,7 @@ loader.command(
 )
 
 follow_control_command_maker(
-    FOLLOWABLE_CHANNEL,
+    "twab",
     "twid",
     "TWID",
     "This Week In Destiny weekly auto posts",
