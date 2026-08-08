@@ -175,10 +175,22 @@ def _user_command_response_func_builder(
                 await asyncio.gather(*(follow_link_single_step(link) for link in links))
             )
             substituted = cfg.url_regex.sub(lambda _m: next(followed), text)
-            row = h.impl.MessageActionRowBuilder().add_link_button(
-                await settings.get_default_url(), label="See more on Kyber's Corner!"
-            )
-            await ctx.respond(substituted, components=[row])
+            # Only attach the "See more" button when there is somewhere to send people:
+            # default_url is a DB setting now, not the env var prod always populated, so
+            # a fresh install (its _DEFAULTS entry is "") or a clear on the settings
+            # page legitimately leaves it blank. hikari does no url validation — it
+            # would put `"url": ""` in the payload — and Discord rejects that. That
+            # fails the *entire* response rather than dropping the button, i.e. every
+            # text user command at once. A response missing its button is far better.
+            default_url = await settings.get_default_url()
+            components: h.UndefinedOr[list[h.api.ComponentBuilder]] = h.UNDEFINED
+            if default_url:
+                components = [
+                    h.impl.MessageActionRowBuilder().add_link_button(
+                        default_url, label="See more on Kyber's Corner!"
+                    )
+                ]
+            await ctx.respond(substituted, components=components)
 
     elif cmd.response_type == 2:
 
