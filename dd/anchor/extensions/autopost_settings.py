@@ -31,9 +31,8 @@ separate:
   env fallback and no seeding path exists behind it, so every value in the DB got there
   through the validation in :func:`_channel_problem` / :data:`_VALIDATORS`. A followable
   with an existing feed toggle above gets its channel field folded into that feed's
-  group; the rest (beacon-only feeds with
-  no toggle — twab, trials, weekly_reset, weekly_nightfall, free_games,
-  emblems_and_cosmetics) get their own single-row group.
+  group; the rest (beacon-only feeds with no toggle — twab, trials, weekly_reset,
+  weekly_nightfall, free_games, emblems_and_cosmetics) get their own single-row group.
 
 Scope is settings only — no "send now" / preview beyond the existing per-feed actions,
 and no per-guild follow management (that is end-user ``/autopost <feed>`` territory,
@@ -111,9 +110,10 @@ class _Setting(t.NamedTuple):
     - ``"channel"`` — a searchable channel picker (see autopost_settings.js), ``value``
       as ``str(channel_id)`` (``"0"`` for "none configured" — an explicit clear stores
       "0" rather than NULL, so a cleared channel reads back as *dormant* rather than as
-      "never set"). ``channel_scope`` picks which
-      guild(s) the picker offers: ``"kyber"`` (where every followable posts) or
-      ``"kyber_control"`` (log/alerts channels, which could be in either).
+      "never set"; a followable's channel cannot be cleared at all, see
+      :data:`_UNCLEARABLE_CHANNEL_SLUGS`). ``channel_scope`` picks which guild(s) the
+      picker offers: ``"kyber"`` (where every followable posts) or ``"kyber_control"``
+      (log/alerts channels, which could be in either).
     """
 
     slug: str
@@ -303,7 +303,8 @@ _SETTINGS: tuple[_Setting, ...] = (
     _Setting(
         "portal_ops_channel",
         "Post to channel",
-        "The Kyber channel this feed posts to. Leave unset to keep this feed dormant.",
+        "The Kyber channel this feed posts to. Dormant until one is set; switch the "
+        "feed off above to stop it after that.",
         True,
         "channel",
     ),
@@ -317,7 +318,8 @@ _SETTINGS: tuple[_Setting, ...] = (
     _Setting(
         "iron_banner_channel",
         "Post to channel",
-        "The Kyber channel this feed posts to. Leave unset to keep this feed dormant.",
+        "The Kyber channel this feed posts to. Dormant until one is set; switch the "
+        "feed off above to stop it after that.",
         True,
         "channel",
     ),
@@ -382,6 +384,16 @@ _CHANNEL_SLUGS = frozenset(s.slug for s in _SETTINGS if s.kind == "channel")
 _CHANNEL_SETTINGS: dict[str, _Setting] = {
     s.slug: s for s in _SETTINGS if s.kind == "channel"
 }
+# A followable's post channel cannot be cleared: this page is the only writer, and a
+# followable with no channel is a feed that silently produces nothing — every producer,
+# mirror row and web action downstream then has to carry a "what if it's 0" branch. The
+# log/alerts channels are NOT in this set: "unset" is a defined, useful state for them
+# (the log is simply inert; alerts fall back to discovery), so they stay clearable.
+# Note this bounds what can be *written*, not what can be read: a slug with no row at
+# all still reads as 0/dormant on a fresh install, which resolve_followable_channel
+# alerts on at boot.
+_UNCLEARABLE_CHANNEL_SLUGS = frozenset(dd_settings.FOLLOWABLE_SLUGS.values())
+_NO_CHANNEL_OPTION = '<option value="">— none configured —</option>'
 
 
 # One validator per non-toggle kind (a toggle just needs bool(), handled inline in
@@ -389,7 +401,12 @@ _CHANNEL_SETTINGS: dict[str, _Setting] = {
 # value, and returns (value_to_store, error) — exactly one of the two is set. A blank
 # url/color clears the setting (None -> stored as NULL, "use the default"); a blank
 # channel stores "0" (explicitly dormant — see _Setting's "channel" kind docs on why
-# that must NOT be NULL).
+# that must NOT be NULL) unless the slug is unclearable, which rejects instead.
+#
+# JSON ``null`` never reaches a validator: it means "unchanged" (the page sends it for
+# every field the operator didn't touch — see autopost_settings.js) and is skipped in
+# _handle_save. That distinction is what keeps the unclearable rule from locking the
+# page: an already-unset followable submits null, not "", so it isn't a *clear*.
 def _validate_url(slug: str, raw: object) -> tuple[str | None, str | None]:
     if not isinstance(raw, str):
         return None, f"'{slug}' must be a string."
@@ -418,14 +435,20 @@ def _validate_select(slug: str, raw: object) -> tuple[str | None, str | None]:
 def _validate_channel(slug: str, raw: object) -> tuple[str | None, str | None]:
     if isinstance(raw, str):
         raw = raw.strip()
-    if raw in ("", None):
-        return "0", None
-    try:
-        channel_id = int(t.cast(str, raw))
-    except (TypeError, ValueError):
-        return None, f"'{slug}' must be a Discord channel id."
+    if raw == "":
+        channel_id = 0
+    else:
+        try:
+            channel_id = int(t.cast(str, raw))
+        except (TypeError, ValueError):
+            return None, f"'{slug}' must be a Discord channel id."
     if channel_id < 0:
         return None, f"'{slug}' must be a Discord channel id."
+    if not channel_id and slug in _UNCLEARABLE_CHANNEL_SLUGS:
+        return None, (
+            f"'{slug}' needs a channel — a feed's post channel can't be cleared. "
+            "Switch the feed off instead if it shouldn't post."
+        )
     return str(channel_id), None
 
 
@@ -548,12 +571,20 @@ def _render_row(
             if channel_id
             else ""
         )
+        # data-required drives the picker's clear affordance (autopost_settings.js): a
+        # followable's channel can't be cleared, so don't offer an X that only produces
+        # a rejected save. The empty option is still rendered while the field HAS no
+        # value, because that is the honest state of an unconfigured feed and the page
+        # has to be able to show it — the save gate is what refuses to write it back.
+        required = setting.slug in _UNCLEARABLE_CHANNEL_SLUGS
+        empty_opt = "" if required and channel_id else _NO_CHANNEL_OPTION
         return _row(
             "channelrow",
             f'<select class="channelfield" data-slug="{html.escape(setting.slug)}"'
             f' data-scope="{html.escape(setting.channel_scope)}"'
+            f' data-required="{"true" if required else "false"}"'
             f' data-announce-only="{"true" if setting.announce_only else "false"}">'
-            '<option value="">— none configured —</option>'
+            f"{empty_opt}"
             f"{current_opt}"
             "</select>",
         )
@@ -806,12 +837,19 @@ async def _handle_save(request: aiohttp.web.Request) -> aiohttp.web.Response:
             {"error": "Expected a 'settings' object."}, status=400
         )
 
-    # Validate every non-toggle field up front (one validator per kind — see
-    # _VALIDATORS) so a bad value fails the whole save (before opening a transaction)
-    # rather than persisting something a producer can't use.
+    # Validate every non-toggle field the operator actually CHANGED (one validator per
+    # kind — see _VALIDATORS) so a bad value fails the whole save (before opening a
+    # transaction) rather than persisting something a producer can't use.
+    #
+    # ``null`` is "unchanged", not "empty": the page sends it for every field it was
+    # given and the operator didn't touch (see autopost_settings.js), so an untouched
+    # field is never re-validated and never rewritten. Without that distinction, one
+    # field that is invalid-but-untouched — or one already-unset followable, which the
+    # unclearable rule rejects as a *clear* — would block every unrelated save on the
+    # page.
     value_updates: dict[str, str | None] = {}
     for slug, validate in _VALIDATORS.items():
-        if slug not in settings_in:
+        if settings_in.get(slug) is None:
             continue
         value, error = validate(slug, settings_in[slug])
         if error:
@@ -838,7 +876,8 @@ async def _handle_save(request: aiohttp.web.Request) -> aiohttp.web.Response:
     # key set to spawn rows). One transaction so a batch save is all-or-nothing.
     async with schemas.db_session() as session, session.begin():
         for slug, value in settings_in.items():
-            if slug in _TOGGLE_SLUGS:
+            # Same "null is unchanged" rule as the value fields above.
+            if slug in _TOGGLE_SLUGS and value is not None:
                 await schemas.AutoPostSettings.set_enabled(
                     slug, bool(value), session=session
                 )

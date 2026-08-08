@@ -579,13 +579,14 @@ async def test_render_followable_channels_are_announce_only_log_alerts_are_not()
 
     assert 'data-slug="lost_sector_channel"' in html_out
     assert (
-        'data-scope="kyber" data-announce-only="true"'
-        in html_out.split('data-slug="lost_sector_channel"')[1][:100]
+        'data-scope="kyber" data-required="true" data-announce-only="true"'
+        in html_out.split('data-slug="lost_sector_channel"')[1][:150]
     )
     for slug in ("log_channel_id", "alerts_channel_id"):
         assert (
-            'data-scope="kyber_control" data-announce-only="false"'
-            in html_out.split(f'data-slug="{slug}"')[1][:100]
+            'data-scope="kyber_control" data-required="false" '
+            'data-announce-only="false"'
+            in html_out.split(f'data-slug="{slug}"')[1][:150]
         )
 
 
@@ -638,15 +639,77 @@ async def test_handle_save_refreshes_sync_readers_too(
 async def test_handle_save_blank_channel_stores_zero_not_null() -> None:
     # Unlike a url/color row, a cleared channel stores "0" rather than NULL, so a
     # cleared channel reads back as an explicit "dormant" rather than as "no row yet".
+    await schemas.AutoPostSettings.set_value("log_channel_id", "999")
+
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"log_channel_id": ""}}))
+    )
+
+    assert resp.status == 200
+    assert await schemas.AutoPostSettings.get_value("log_channel_id") == "0"
+    assert await settings.get_log_channel_id() == 0
+
+
+@pytest.mark.integration
+async def test_handle_save_refuses_to_clear_a_followable_channel() -> None:
+    # A feed's post channel is the one thing on this page that cannot be blanked: a
+    # followable with no channel is a feed that silently produces nothing.
     await schemas.AutoPostSettings.set_value("xur_channel", "999")
 
     resp = await aps._handle_save(
         _as_request(_FakeRequest({"settings": {"xur_channel": ""}}))
     )
+    payload = t.cast(dict, json.loads(resp.text or ""))
+
+    assert resp.status == 400
+    assert "can't be cleared" in payload["error"]
+    assert await schemas.AutoPostSettings.get_value("xur_channel") == "999"
+
+
+@pytest.mark.integration
+async def test_handle_save_refuses_an_explicit_zero_for_a_followable() -> None:
+    # "0" spelled out is the same clear as a blank, and gets the same answer.
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"xur_channel": "0"}}))
+    )
+
+    assert resp.status == 400
+    assert await schemas.AutoPostSettings.get_value("xur_channel") is None
+
+
+@pytest.mark.integration
+async def test_handle_save_ignores_an_unchanged_field_sent_as_null(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # null is "unchanged", not "empty" — the distinction that keeps an unconfigured
+    # followable (which submits null, never "") from reading as an attempt to clear an
+    # unclearable channel and blocking every other edit on the page.
+    await _allow_channel_permission(monkeypatch)
+    await schemas.AutoPostSettings.set_value("xur_channel", "999")
+
+    resp = await aps._handle_save(
+        _as_request(
+            _FakeRequest(
+                {"settings": {"xur_channel": None, "eververse_channel": "777"}}
+            )
+        )
+    )
 
     assert resp.status == 200
-    assert await schemas.AutoPostSettings.get_value("xur_channel") == "0"
-    assert await settings.get_followable_channel("xur") == 0
+    assert await schemas.AutoPostSettings.get_value("xur_channel") == "999"
+    assert await schemas.AutoPostSettings.get_value("eververse_channel") == "777"
+
+
+@pytest.mark.integration
+async def test_handle_save_ignores_an_unchanged_toggle_sent_as_null() -> None:
+    await schemas.AutoPostSettings.set_enabled("lost_sector", True)
+
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"lost_sector": None}}))
+    )
+
+    assert resp.status == 200
+    assert await schemas.AutoPostSettings.get_enabled("lost_sector") is True
 
 
 @pytest.mark.integration
@@ -745,12 +808,12 @@ async def test_handle_save_clearing_a_channel_skips_the_permission_check(
     monkeypatch.setattr(aps, "_channel_problem", _record)
 
     resp = await aps._handle_save(
-        _as_request(_FakeRequest({"settings": {"xur_channel": ""}}))
+        _as_request(_FakeRequest({"settings": {"log_channel_id": ""}}))
     )
 
     assert resp.status == 200
     assert calls == []  # clearing to dormant never needs a permission check
-    assert await schemas.AutoPostSettings.get_value("xur_channel") == "0"
+    assert await schemas.AutoPostSettings.get_value("log_channel_id") == "0"
 
 
 async def test_channel_problem_before_bot_ready(

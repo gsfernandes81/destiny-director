@@ -86,12 +86,16 @@ document.addEventListener("DOMContentLoaded", () => {
         (id) => `Unknown channel (${id})`,
       );
 
+      // data-required marks a field the save gate refuses to clear (a followable's
+      // post channel — see _UNCLEARABLE_CHANNEL_SLUGS). Offering an X there would only
+      // produce a rejected save, so the clear button is for the clearable fields.
+      const required = select.dataset.required === "true";
       const ts = new TomSelect(select, {
         options,
         maxOptions: 200,
         placeholder: "Search channels…",
-        plugins: ["clear_button"],
-        allowEmptyOption: true,
+        plugins: required ? [] : ["clear_button"],
+        allowEmptyOption: !required,
       });
       if (current) ts.setValue(current, true);
     });
@@ -99,31 +103,46 @@ document.addEventListener("DOMContentLoaded", () => {
   initChannelPickers();
 
   // --- save ------------------------------------------------------------------------
+  //
+  // The page submits every field it renders, but sends `null` for the ones the
+  // operator did not touch: 0-signal and no-signal are different answers. The server
+  // skips a null outright — it is neither validated nor rewritten — which is what lets
+  // one invalid or deliberately-empty field coexist with a save of something unrelated,
+  // and what keeps an already-unconfigured feed from reading as an attempt to *clear*
+  // its (unclearable) channel. Baselines are captured synchronously at load, before
+  // Tom Select rewrites the channel selects, so they reflect what was rendered.
+
+  const FIELD_SELECTOR =
+    "input[type=checkbox][data-slug], input.urlfield[data-slug], " +
+    "input.colorfield[data-slug], select.selectfield[data-slug], " +
+    "select.channelfield[data-slug]";
+
+  /** The value a field currently holds: checked for a toggle, value for the rest. */
+  const readField = (el) => (el.type === "checkbox" ? el.checked : el.value);
+
+  const baseline = new Map();
+  document
+    .querySelectorAll(FIELD_SELECTOR)
+    .forEach((el) => baseline.set(el, readField(el)));
 
   const btn = byId("save");
   const status = byId("status");
   btn.addEventListener("click", async () => {
     const settings = {};
-    document
-      .querySelectorAll("input[type=checkbox][data-slug]")
-      .forEach((el) => {
-        settings[el.dataset.slug] = el.checked;
-      });
-    document
-      .querySelectorAll("input.urlfield[data-slug], input.colorfield[data-slug]")
-      .forEach((el) => {
-        settings[el.dataset.slug] = el.value;
-      });
-    document
-      .querySelectorAll("select.selectfield[data-slug], select.channelfield[data-slug]")
-      .forEach((el) => {
-        settings[el.dataset.slug] = el.value;
-      });
+    document.querySelectorAll(FIELD_SELECTOR).forEach((el) => {
+      const value = readField(el);
+      settings[el.dataset.slug] = value === baseline.get(el) ? null : value;
+    });
     btn.disabled = true;
     busy(status, "Saving…");
     try {
       const res = await window.api("/autopost_settings/save", { settings });
       if (res.ok) {
+        // What is on the page is now what is in the DB, so the next save starts from
+        // a clean slate — otherwise every later save would resubmit these same fields.
+        document
+          .querySelectorAll(FIELD_SELECTOR)
+          .forEach((el) => baseline.set(el, readField(el)));
         say(status, "Saved.", false);
       } else {
         let msg = "Save failed.";
