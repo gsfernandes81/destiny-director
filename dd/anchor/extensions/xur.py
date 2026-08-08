@@ -30,7 +30,7 @@ import regex as re
 
 from dd.hmessage import HMessage
 
-from ...common import cfg, schemas
+from ...common import cfg, schemas, settings
 from ...common.bot import CachedFetchBot
 from ...common.components import (
     build_container,
@@ -497,12 +497,12 @@ async def format_xur_vendor(
     # Components V2: the whole post is one text display, with the optional default
     # image as a trailing full-width media gallery (mirroring the old set_image).
     container = h.impl.ContainerComponentBuilder(
-        accent_color=h.Color(cfg.embed_default_color)
+        accent_color=await settings.get_embed_default_color()
     )
     container.add_text_display(header + body + XUR_FOOTER)
 
     if await schemas.AutoPostSettings.get_xur_default_image_enabled():
-        container.add_component(url_media_gallery(cfg.xur_image_url))
+        container.add_component(url_media_gallery(await settings.get_xur_image_url()))
     container.add_component(footer_buttons_row(guides=XUR_GUIDES))
 
     # Resolve :emoji: then cap CV2 text (naive front-to-back truncate + CRITICAL alert
@@ -588,7 +588,7 @@ async def api_to_discord_announcer(
             embeds=[
                 h.Embed(
                     description="Waiting for data from the API...",
-                    color=cfg.embed_default_color,
+                    color=await settings.get_embed_default_color(),
                 )
             ]
         )
@@ -684,7 +684,7 @@ async def on_start_schedule_autoposts(
     async def autopost_xur():
         await api_to_discord_announcer(
             bot,
-            channel_id=cfg.followables["xur"],
+            channel_id=await settings.get_followable_channel("xur"),
             check_enabled=True,
             enabled_check_coro=schemas.AutoPostSettings.get_xur_enabled,
             construct_message_coro=xur_message_constructor,
@@ -692,13 +692,11 @@ async def on_start_schedule_autoposts(
         )
 
 
-
-
 # Contribute this feed's producer wiring to the web feed page (Preview / Send now).
 register_feed(
     Feed(
         name="xur",
-        channel_id=cfg.followables["xur"],
+        channel_id=settings.get_followable_channel_sync("xur"),
         message_constructor_coro=xur_message_constructor,
         message_announcer_coro=api_to_discord_announcer,
     )

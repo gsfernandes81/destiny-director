@@ -42,7 +42,7 @@ import hikari as h
 import lightbulb as lb
 import regex as re
 
-from ...common import cfg
+from ...common import cfg, settings
 from ...common.auth import owner_only
 from ...common.bot import CachedFetchBot
 from ...common.emoji_store import AppEmojiStore
@@ -57,7 +57,6 @@ from ...common.utils import (
     ErrorClass,
     classify_error,
     discord_error_logger,
-    followable_name,
     format_duration,
     guild_scope,
     parse_channel_ref,
@@ -335,6 +334,12 @@ async def _post_run_summary_line(
     send can never swallow the failure escalation. Detail lives on the web mirror-log
     page (``/mirror-logs``); this line is the at-a-glance Discord confirmation.
     """
+    log_channel_id = await settings.get_log_channel_id()
+    if not log_channel_id:
+        # No log channel configured (Autopost Settings) — inert by design, not by the
+        # suppress(Exception) below happening to swallow a fetch_channel(0) error.
+        return
+
     counts = view.counts
     label = (
         _get_message_summary(source_message)
@@ -349,7 +354,7 @@ async def _post_run_summary_line(
         f"in {elapsed}. Detail on the mirror-logs page."
     )
     with contextlib.suppress(Exception):
-        log_channel = await bot.fetch_channel(cfg.log_channel)
+        log_channel = await bot.fetch_channel(log_channel_id)
         if isinstance(log_channel, h.TextableGuildChannel):
             await log_channel.send(text)
 
@@ -366,7 +371,7 @@ async def reachability_sweep(bot: CachedFetchBot = lb.di.INJECTED):
     and a pair is disabled only after it has stayed confirmed-unreachable for
     ``cfg.mirror_unreachable_grace_hours``, so a transient blip never disables a mirror.
     """
-    if not cfg.disable_bad_channels:
+    if not await settings.get_disable_bad_channels():
         return
     await aio.sleep(randint(30, 300))
 
@@ -528,12 +533,12 @@ async def handle_waiting_for_crosspost(
             logging.warning(
                 "Giving up crosspost wait for message %s in channel %s after %dh.",
                 msg.id,
-                str(followable_name(id=channel.id)),
+                str(settings.followable_name(id=channel.id)),
                 _CROSSPOST_WAIT_CEILING_SECONDS // 3600,
             )
             return
         try:
-            channel_name_or_id = str(followable_name(id=channel.id))
+            channel_name_or_id = str(settings.followable_name(id=channel.id))
             logging.info(
                 f"MessageCreateEvent received for message in channel: "
                 f"{channel_name_or_id}"
@@ -577,7 +582,7 @@ async def handle_waiting_for_crosspost(
                     "Skipping crosspost wait for message %s in channel %s: source not "
                     "fetchable (%s).",
                     msg.id,
-                    str(followable_name(id=channel.id)),
+                    str(settings.followable_name(id=channel.id)),
                     type(e).__name__,
                 )
                 return
@@ -984,7 +989,7 @@ class MirrorSourceDetails(
         legacy_sources = await MirroredChannel.fetch_srcs(channel_id, legacy=True)
         new_style_sources = await MirroredChannel.fetch_srcs(channel_id, legacy=False)
 
-        sources = {val: key for key, val in cfg.followables.items()}
+        sources = {val: key for key, val in (await settings.get_followables()).items()}
 
         legacy_sources = [
             sources.get(legacy_source, f"Unknown Source: {legacy_source}")

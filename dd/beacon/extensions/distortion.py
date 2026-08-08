@@ -30,7 +30,6 @@ import datetime as dt
 import hikari as h
 import lightbulb as lb
 
-from ...common import cfg
 from ...common.components import build_container
 
 loader = lb.Loader()
@@ -114,7 +113,7 @@ def render_distortion(now: dt.datetime) -> list[h.api.ComponentBuilder]:
         f"**Upcoming**\n{upcoming_lines}",
         "-# Rotation is computed from a known cycle; may drift if Bungie realigns it.",
     ]
-    return [build_container(sections, accent_color=cfg.embed_default_color)]
+    return [build_container(sections)]
 
 
 class Distortion(

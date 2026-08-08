@@ -27,7 +27,7 @@ from dd.beacon.extensions.distortion import (
     render_distortion,
     rotation_schedule,
 )
-from dd.common import cfg
+from dd.common import settings
 
 
 def test_reference_date_is_cosmodrome():
@@ -95,4 +95,4 @@ def test_render_distortion_returns_accent_coloured_container():
     assert len(components) == 1
     container = components[0]
     assert isinstance(container, h.impl.ContainerComponentBuilder)
-    assert container.accent_color == cfg.embed_default_color
+    assert container.accent_color == settings.get_embed_default_color_sync()

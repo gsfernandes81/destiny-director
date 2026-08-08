@@ -32,7 +32,7 @@ import hikari as h
 import lightbulb as lb
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...common import cfg
+from ...common import cfg, settings
 from ...common.auth import NotBotOwnerError, owner_only
 from ...common.bot import CachedFetchBot
 from ...common.discord_logging import log_command_failure
@@ -176,7 +176,7 @@ def _user_command_response_func_builder(
             )
             substituted = cfg.url_regex.sub(lambda _m: next(followed), text)
             row = h.impl.MessageActionRowBuilder().add_link_button(
-                cfg.default_url, label="See more on Kyber's Corner!"
+                await settings.get_default_url(), label="See more on Kyber's Corner!"
             )
             await ctx.respond(substituted, components=[row])
 
@@ -200,7 +200,9 @@ def _user_command_response_func_builder(
 
     elif cmd.response_type == 3:
         embed_kwargs = json.loads(cmd.response_data)
-        embed_kwargs["color"] = embed_kwargs.get("color") or cfg.embed_default_color
+        embed_kwargs["color"] = (
+            embed_kwargs.get("color") or settings.get_embed_default_color_sync()
+        )
 
         async def handler(self: t.Any, ctx: lb.Context) -> None:
             kwargs = dict(embed_kwargs)

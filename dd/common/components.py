@@ -48,7 +48,7 @@ import hikari as h
 import lightbulb as lb
 from lightbulb import components as lbc
 
-from . import cfg
+from . import cfg, settings
 
 if t.TYPE_CHECKING:
     from dd.hmessage.message import HMessage
@@ -100,6 +100,7 @@ def footer_buttons_row(
 ) -> h.impl.MessageActionRowBuilder:
     """The standard footer link-button row (see :func:`footer_button_specs`)."""
     return link_button_row(footer_button_specs(guides=guides))
+
 
 _PREV_CUSTOM_ID = "dd_paginator:prev"
 _INDICATOR_CUSTOM_ID = "dd_paginator:indicator"
@@ -412,13 +413,13 @@ def build_container(
     Args:
         text_sections: Markdown blocks; each becomes its own text display with a
             divider separator in between.
-        accent_color: The container accent colour (defaults to
-            ``cfg.embed_default_color``).
+        accent_color: The container accent colour (defaults to the
+            ``embed_default_color`` Autopost Setting, see :mod:`dd.common.settings`).
     """
     container = h.impl.ContainerComponentBuilder(
         accent_color=accent_color
         if accent_color is not None
-        else cfg.embed_default_color
+        else settings.get_embed_default_color_sync()
     )
     for i, section in enumerate(text_sections):
         if i:
@@ -614,8 +615,8 @@ def embeds_to_container(
     Each embed part is mapped to its closest CV2 primitive:
 
     - accent colour -> the container accent. A container has a single accent, so with
-      multiple embeds the first embed's colour wins (falling back to
-      ``cfg.embed_default_color``).
+      multiple embeds the first embed's colour wins (falling back to the
+      ``embed_default_color`` Autopost Setting, see :mod:`dd.common.settings`).
     - author -> a ``-#`` subtext line (masked-linked to ``author.url``; icon dropped);
     - title / description -> ``## title`` (masked-linked to ``embed.url``) + description
       text displays, wrapped in a section with the thumbnail as its accessory when the
@@ -637,7 +638,7 @@ def embeds_to_container(
     if accent_color is None:
         accent_color = next(
             (embed.color for embed in embeds if embed.color is not None),
-            cfg.embed_default_color,
+            settings.get_embed_default_color_sync(),
         )
 
     container = h.impl.ContainerComponentBuilder(accent_color=accent_color)

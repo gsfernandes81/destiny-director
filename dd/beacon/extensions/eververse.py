@@ -17,7 +17,7 @@ import datetime as dt
 
 import lightbulb as lb
 
-from ...common import cfg
+from ...common import settings
 from ..nav import make_navigator_command, setup_nav_pages
 from .autoposts import follow_control_command_maker
 
@@ -25,7 +25,7 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 18, 17, tzinfo=dt.UTC)
 
-EVERVERSE = cfg.followables["eververse"]
+EVERVERSE = settings.get_followable_channel_sync("eververse")
 
 _pages = setup_nav_pages(
     loader,

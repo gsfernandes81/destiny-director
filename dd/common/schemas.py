@@ -2062,9 +2062,7 @@ class MirrorOperationLog(Base):
         ),  # prune + daily agg
     )
 
-    id: Mapped[int] = mapped_column(
-        "id", Integer, primary_key=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column("id", Integer, primary_key=True, autoincrement=True)
     src_msg_id = Column("src_msg_id", BigInteger, nullable=False)
     src_ch_id = Column("src_ch_id", BigInteger, nullable=True)
     op_type = Column("op_type", String(8), nullable=False)
@@ -2880,6 +2878,19 @@ class AutoPostSettings(Base):
 
     @classmethod
     @ensure_session(db_session)
+    async def get_all_rows(
+        cls, session: AsyncSession = _UNSET
+    ) -> dict[str, tuple[bool | None, str | None]]:
+        """Every row as ``{name: (enabled, value)}`` — one query, for a startup preload.
+
+        Used by :mod:`dd.common.settings` to warm its process-local cache rather than
+        issuing one query per setting.
+        """
+        rows = (await session.execute(select(cls.name, cls.enabled, cls.value))).all()
+        return {name: (enabled, value) for name, enabled, value in rows}
+
+    @classmethod
+    @ensure_session(db_session)
     async def get_value(
         cls, auto_post_name: str, session: AsyncSession = _UNSET
     ) -> str | None:
@@ -3445,3 +3456,20 @@ if __name__ == "__main__":
 
     if "--create-all" in sys.argv:
         aio.run(create_all())
+
+    if "--seed-followables" in sys.argv:
+        # Deferred import: dd.common.settings imports this module, so importing it at
+        # schemas.py's top level would be circular. Safe here — this branch only runs
+        # when schemas.py is executed directly, never on a normal package import.
+        from . import settings as _settings
+
+        _written = aio.run(_settings.seed_followables_from_env())
+        if _written:
+            print(f"Seeded {len(_written)} followable channel(s) from FOLLOWABLES:")
+            for feed, channel_id in _written.items():
+                print(f"  {feed}: {channel_id}")
+        else:
+            print(
+                "Nothing to seed — every followable channel already has a DB row "
+                "(or FOLLOWABLES is empty)."
+            )

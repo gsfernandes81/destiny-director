@@ -290,11 +290,11 @@
           ]
         ]
       },
-      "expected_html": "<div class=\"cv2-root\"><div class=\"cv2-container\" style=\"border-left-color:#000000\"><div class=\"cv2-text\">&lt;script&gt;alert(1)&lt;/script&gt;</div><hr class=\"cv2-sep\"><div class=\"cv2-buttons\"><a class=\"cv2-button\" href=\"https://example.com/ok\" target=\"_blank\" rel=\"noopener noreferrer\">&lt;script&gt;x&lt;/script&gt;</a></div></div></div>",
+      "expected_html": "<div class=\"cv2-root\"><div class=\"cv2-container\" style=\"border-left-color:#ec42a5\"><div class=\"cv2-text\">&lt;script&gt;alert(1)&lt;/script&gt;</div><hr class=\"cv2-sep\"><div class=\"cv2-buttons\"><a class=\"cv2-button\" href=\"https://example.com/ok\" target=\"_blank\" rel=\"noopener noreferrer\">&lt;script&gt;x&lt;/script&gt;</a></div></div></div>",
       "nodes": [
         {
           "type": 17,
-          "accent_color": 0,
+          "accent_color": 15483557,
           "components": [
             {
               "type": 10,

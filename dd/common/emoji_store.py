@@ -176,9 +176,7 @@ class AppEmojiStore:
         )
         self._emoji[name] = emoji
         self._icon_url[name] = icon_url
-        await schemas.AppEmojiCache.upsert(
-            self._app_id, name, int(emoji.id), icon_url
-        )
+        await schemas.AppEmojiCache.upsert(self._app_id, name, int(emoji.id), icon_url)
         return emoji
 
     async def _delete(self, name: str) -> None:

@@ -10,7 +10,7 @@ import regex as re
 
 from dd.hmessage import HMessage
 
-from ...common import cfg, components, schemas
+from ...common import components, schemas, settings
 from ...common.bot import CachedFetchBot
 from ...common.utils import fetch_emoji_dict
 from ..autopost import Feed, register_feed
@@ -354,7 +354,7 @@ async def format_eververse_vendor(
     # Components V2: a container with one text display per block (raw :emoji: tokens),
     # with separators giving visual space between each section's heading and contents.
     container = h.impl.ContainerComponentBuilder(
-        accent_color=h.Color(cfg.embed_default_color)
+        accent_color=await settings.get_embed_default_color()
     )
     container.add_text_display(
         "# :eververse: [Today 𝘢𝘵 Eververse](https://kyber3000.com/Eververse)"
@@ -398,7 +398,7 @@ async def on_start_schedule_autoposts(
     async def autopost_eververse():
         await xur.api_to_discord_announcer(
             bot,
-            channel_id=cfg.followables["eververse"],
+            channel_id=await settings.get_followable_channel("eververse"),
             check_enabled=True,
             enabled_check_coro=schemas.AutoPostSettings.get_eververse_enabled,
             construct_message_coro=eververse_message_constructor,
@@ -406,13 +406,11 @@ async def on_start_schedule_autoposts(
         )
 
 
-
-
 # Contribute this feed's producer wiring to the web feed page (Preview / Send now).
 register_feed(
     Feed(
         name="eververse",
-        channel_id=cfg.followables["eververse"],
+        channel_id=settings.get_followable_channel_sync("eververse"),
         message_constructor_coro=eververse_message_constructor,
         message_announcer_coro=xur.api_to_discord_announcer,
     )

@@ -49,7 +49,7 @@ import hikari as h
 
 from dd.hmessage import HMessage
 
-from ..common import cfg, schemas
+from ..common import schemas, settings
 from ..common.bot import CachedFetchBot
 from ..common.components import footer_button_specs, link_button_row
 from ..common.utils import fetch_emoji_dict
@@ -155,8 +155,16 @@ def build_cv2(
     :func:`dd.common.components.footer_button_specs`); when given, a divider + a single
     action row of link buttons is appended. The old ``-# via Destiny Director (Kyber)``
     credit line is gone — the button row is the footer now.
+
+    Deliberately sync (uses ``get_embed_default_color_sync``, not the awaitable getter):
+    called from too many sync call sites, on both bots and in tests, and its output must
+    stay byte-identical to :func:`post_spec_nodes`'s (see that function's docstring and
+    ``test_post_spec_nodes_matches_build_cv2``) — an async split between the two would
+    threaten that.
     """
-    container = h.impl.ContainerComponentBuilder(accent_color=cfg.embed_default_color)
+    container = h.impl.ContainerComponentBuilder(
+        accent_color=settings.get_embed_default_color_sync()
+    )
     container.add_text_display(body)
     if image_url:
         gallery = h.impl.MediaGalleryComponentBuilder()
@@ -205,7 +213,7 @@ def post_spec_nodes(spec: "PostSpec") -> list[dict[str, t.Any]]:
     return [
         {
             "type": 17,
-            "accent_color": cfg.embed_default_color,
+            "accent_color": settings.get_embed_default_color_sync(),
             "components": children,
         }
     ]
@@ -399,7 +407,7 @@ class HybridPostSpec:
     ``weekly_reset``'s spec construction.
     """
 
-    #: Key into ``cfg.followables`` for the channel this post publishes to.
+    #: feed slug this post publishes to (dd.common.settings.FOLLOWABLE_SLUGS key).
     followable_key: str
     #: Human name of the post for the Create/Edit 409 messages (e.g. "Trials post").
     post_noun: str
@@ -449,7 +457,10 @@ class HybridPostSpec:
 
     @property
     def channel_id(self) -> int:
-        return cfg.followables[self.followable_key]
+        # Sync (a property can't be awaited) — see
+        # settings.get_followable_channel_sync's docstring; call sites needing the
+        # live value use the async getter directly.
+        return settings.get_followable_channel_sync(self.followable_key)
 
 
 # ---------------------------------------------------------------------------

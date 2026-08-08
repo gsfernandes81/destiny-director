@@ -47,8 +47,7 @@ from pathlib import Path
 import aiohttp.web
 import lightbulb as lb
 
-from ...common import schemas
-from ...common.utils import followable_name
+from ...common import schemas, settings
 from .. import web
 from ..cv2_render import diff_payload
 
@@ -86,7 +85,7 @@ async def _collect_runs() -> dict:
     for run in runs:
         # Resolve the source channel to its configured feed name (else None → the page
         # falls back to the id). followable_name returns the id itself when unknown.
-        name = followable_name(id=run["src_ch_id"])
+        name = settings.followable_name(id=run["src_ch_id"])
         run["src_name"] = name if isinstance(name, str) else None
         snap = latest.get(run["src_msg_id"])
         run["summary"] = snap["summary"] if snap else None

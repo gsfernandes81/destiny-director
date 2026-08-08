@@ -37,6 +37,16 @@ from dd.common.schemas import DeliveryState
 pytestmark = pytest.mark.asyncio
 
 SRC = 31337
+# The log channel must be explicitly *inert* (no fetch at all) when unconfigured — see
+# dd.common.settings — so every test here that expects a result line configures one.
+_LOG_CHANNEL_ID = 555
+
+
+@pytest.fixture(autouse=True)
+def _log_channel_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        mirror.settings, "get_log_channel_id", AsyncMock(return_value=_LOG_CHANNEL_ID)
+    )
 
 
 def _view() -> RunView:

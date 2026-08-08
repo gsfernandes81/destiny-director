@@ -35,7 +35,7 @@ import typing as t
 import hikari as h
 import lightbulb as lb
 
-from ...common import cfg, components
+from ...common import components
 from ...common.bot import ServerEmojiEnabledBot
 from ...common.components import cv2_error, respond_cv2
 from ...common.legacy_activities import (
@@ -71,9 +71,7 @@ def _page(sections: list[str]) -> components.Page:
     Fresh per call by contract: the Paginator injects its nav row into the returned
     container on every render, so a reused builder would pile up rows on revisits.
     """
-    return lambda secs=sections: [
-        components.build_container(secs, accent_color=cfg.embed_default_color)
-    ]
+    return lambda secs=sections: [components.build_container(secs)]
 
 
 async def build_pages(
@@ -168,11 +166,7 @@ def make_legacy_command(
                     links=rotation.item_links,
                 )
                 await ctx.respond(
-                    components=[
-                        components.build_container(
-                            sections, accent_color=cfg.embed_default_color
-                        )
-                    ],
+                    components=[components.build_container(sections)],
                     flags=h.MessageFlag.IS_COMPONENTS_V2,
                 )
                 return

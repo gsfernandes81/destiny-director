@@ -46,7 +46,7 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import cfg, components, schemas
+from ...common import components, schemas, settings
 from ...common.bot import CachedFetchBot
 from ...common.utils import fetch_emoji_dict
 from ..autopost import Feed, register_feed
@@ -453,7 +453,7 @@ async def portal_ops_message_constructor(bot: CachedFetchBot) -> HMessage:
     # Components V2: the whole post is one text display (no image/fields), matching
     # the Eververse/Ada layout — raw :emoji: tokens, resolved on the message below.
     container = h.impl.ContainerComponentBuilder(
-        accent_color=h.Color(cfg.embed_default_color)
+        accent_color=await settings.get_embed_default_color()
     )
     container.add_text_display(description)
     # No post-specific guide (Portal Ops has no dedicated page) — just the shared
@@ -478,7 +478,7 @@ def _next_daily_reset_unix() -> int:
 
 # ── Autopost wiring (guarded: dormant until the followable channel is configured) ─
 
-_PORTAL_OPS_CHANNEL = cfg.followables.get("portal_ops")
+_PORTAL_OPS_CHANNEL = settings.get_followable_channel_sync("portal_ops")
 
 
 if not _PORTAL_OPS_CHANNEL:
@@ -491,8 +491,6 @@ if not _PORTAL_OPS_CHANNEL:
         "Add the followable channel id to enable it."
     )
 else:
-    # Narrowed non-None channel id for the closures + command builder below.
-    _portal_ops_channel: int = _PORTAL_OPS_CHANNEL
 
     @loader.listener(h.StartedEvent)
     async def on_start_schedule_autoposts(
@@ -506,12 +504,13 @@ else:
         async def autopost_portal_ops():
             await xur.api_to_discord_announcer(
                 bot,
-                channel_id=_portal_ops_channel,
+                channel_id=await settings.get_followable_channel("portal_ops"),
                 check_enabled=True,
                 enabled_check_coro=schemas.AutoPostSettings.get_portal_ops_enabled,
                 construct_message_coro=portal_ops_message_constructor,
                 cv2=True,
             )
+
 
 # Contribute this feed's producer wiring to the web feed page (Preview / Send now).
 # Registered unconditionally, outside the dormancy gate above — see the same note in

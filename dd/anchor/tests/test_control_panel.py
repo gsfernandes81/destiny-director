@@ -196,9 +196,7 @@ async def test_bot_stop_schedules_a_clean_shutdown(
 
     sentinel = object()
     monkeypatch.setattr(control_panel, "_bot", sentinel)
-    monkeypatch.setattr(
-        control_panel.lifecycle, "request_shutdown", _request_shutdown
-    )
+    monkeypatch.setattr(control_panel.lifecycle, "request_shutdown", _request_shutdown)
 
     resp = await control_panel._handle_bot_stop(_as_request(_FakeRequest()))
     assert json.loads(_text(resp)) == {"ok": True, "stopping": True}

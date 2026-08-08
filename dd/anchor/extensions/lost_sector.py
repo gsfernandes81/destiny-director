@@ -19,7 +19,7 @@ import aiocron
 import hikari as h
 import lightbulb as lb
 
-from ...common import cfg, schemas
+from ...common import cfg, schemas, settings
 from ...common.bot import CachedFetchBot
 from ...common.components import cv2_error, cv2_notice, cv2_success, respond_cv2
 from ...common.lost_sector import format_post
@@ -71,7 +71,7 @@ async def on_start_schedule_autoposts(
     async def autopost_ls():
         await discord_announcer(
             bot,
-            channel_id=cfg.followables["lost_sector"],
+            channel_id=await settings.get_followable_channel("lost_sector"),
             check_enabled=True,
             enabled_check_coro=schemas.AutoPostSettings.get_lost_sector_enabled,
             construct_message_coro=format_post,
@@ -95,7 +95,7 @@ loader.command(
 register_feed(
     Feed(
         name="lost_sector",
-        channel_id=cfg.followables["lost_sector"],
+        channel_id=settings.get_followable_channel_sync("lost_sector"),
         message_constructor_coro=format_post,
         message_announcer_coro=discord_announcer,
     )

@@ -29,7 +29,7 @@ import logging
 import hikari as h
 import lightbulb as lb
 
-from ...common import cfg, schemas
+from ...common import schemas, settings
 
 loader = lb.Loader()
 
@@ -79,7 +79,9 @@ async def _snapshot_autopost_reach(followables: dict[str, int] | None = None) ->
     is an idempotent overwrite, so running this more than once a day — including at
     every boot — simply refreshes today's value rather than double-counting.
     """
-    followables = cfg.followables if followables is None else followables
+    followables = (
+        await settings.get_followables() if followables is None else followables
+    )
     today = dt.datetime.now(tz=dt.UTC).date()
     for feed, src_id in followables.items():
         follows = await schemas.MirroredChannel.count_dests(src_id, legacy_only=False)

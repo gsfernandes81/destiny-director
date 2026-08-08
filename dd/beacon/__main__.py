@@ -29,7 +29,7 @@ import dd.beacon.extensions
 import dd.beacon.extensions.user_commands
 from dd.beacon.extensions.statistics import track_command_usage
 
-from ..common import cfg, schemas
+from ..common import cfg, schemas, settings
 from ..common.auth import owner_check_error_handler
 from ..common.bot import CachedFetchBot, ServerEmojiEnabledBot
 from ..common.discord_logging import (
@@ -126,6 +126,10 @@ async def on_starting_event(_event: h.StartingEvent):
     # the initial GUILD_CREATE burst is filtered against a populated set (an empty set
     # would refuse every channel until the first refresh).
     await _refresh_relevant_channel_ids()
+    # Also before extensions import: a handful of them read a followable's channel id
+    # at module level (see dd.common.settings' docstring), so the DB-backed settings
+    # cache needs to be warm by the time load_extensions_strict imports them.
+    await settings.preload()
     await load_extensions_strict(client, dd.beacon.extensions)
     await dd.beacon.extensions.user_commands.resync_user_commands(client, sync=False)
     await client.start()

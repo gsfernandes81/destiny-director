@@ -396,7 +396,7 @@ def _ctx() -> tr.TrialsContext:
 @pytest.mark.asyncio
 async def test_post_or_edit_unpublished_creates_then_edits(fake_publish_env) -> None:
     bot = _FakeBot()
-    channel = tr.cfg.followables["trials"]
+    channel = tr.settings.get_followable_channel_sync("trials")
     meta = await hpc.post_or_edit_unpublished(
         tr._SPEC, _bot(bot), _ctx(), tr.DraftMeta()
     )
@@ -412,7 +412,7 @@ async def test_post_or_edit_unpublished_creates_then_edits(fake_publish_env) -> 
 @pytest.mark.asyncio
 async def test_publish_draft_edits_then_crossposts(fake_publish_env) -> None:
     bot = _FakeBot()
-    channel = tr.cfg.followables["trials"]
+    channel = tr.settings.get_followable_channel_sync("trials")
     meta = tr.DraftMeta(message_id=42, status="posted", crossposted=False)
     out, note = await hpc.publish_draft(tr._SPEC, _bot(bot), _ctx(), meta)
     assert bot.rest.edited == [(channel, 42)]
@@ -444,7 +444,7 @@ async def test_handle_create_posts_and_returns_warnings(
     data = json.loads(resp.text or "")
     assert data["ok"] is True and data["warnings"]
     assert data["post_this_period"] is True and data["crossposted"] is False
-    channel = tr.cfg.followables["trials"]
+    channel = tr.settings.get_followable_channel_sync("trials")
     assert fake_publish_env.sent == [{"channel": channel, "crosspost": False}]
     meta = await tr.load_meta()
     assert meta.message_id == 555 and meta.status == "posted"
@@ -475,7 +475,7 @@ async def test_handle_create_publish_crossposts(
         _req(body={"reset_ts": SAMPLE_RESET, "maps_text": "Burnout", "publish": True})
     )
     assert resp.status == 200 and json.loads(resp.text or "")["crossposted"] is True
-    channel = tr.cfg.followables["trials"]
+    channel = tr.settings.get_followable_channel_sync("trials")
     assert fake_publish_env.crossposted == [(channel, 555)]
 
 
@@ -494,7 +494,7 @@ async def test_handle_edit_edits_existing_in_place(
     assert resp.status == 200
     data = json.loads(resp.text or "")
     assert data["ok"] is True and data["post_this_period"] is True
-    channel = tr.cfg.followables["trials"]
+    channel = tr.settings.get_followable_channel_sync("trials")
     assert bot.rest.edited == [(channel, 42)] and fake_publish_env.sent == []
 
 
@@ -598,7 +598,7 @@ async def test_handle_delete_removes_and_clears_reset_ts(monkeypatch) -> None:
     )
     resp = await tr._handle_delete(_req())
     assert resp.status == 200 and json.loads(resp.text or "") == {"ok": True}
-    assert bot.rest.deleted == [(tr.cfg.followables["trials"], 77)]
+    assert bot.rest.deleted == [(tr.settings.get_followable_channel_sync("trials"), 77)]
     meta = await tr.load_meta()
     assert meta.message_id == 0 and meta.reset_ts == 0
     assert meta.crossposted is False and meta.status == "draft"

@@ -17,7 +17,7 @@ import datetime as dt
 
 import lightbulb as lb
 
-from ...common import cfg
+from ...common import settings
 from ..nav import ResetPages, make_navigator_command, setup_nav_pages
 from .autoposts import follow_control_command_maker
 
@@ -25,7 +25,7 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 18, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = cfg.followables["weekly_reset"]
+FOLLOWABLE_CHANNEL = settings.get_followable_channel_sync("weekly_reset")
 
 _pages = setup_nav_pages(
     loader,

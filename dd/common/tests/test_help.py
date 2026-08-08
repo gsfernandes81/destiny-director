@@ -21,6 +21,7 @@ import typing as t
 
 import hikari as h
 import lightbulb as lb
+import pytest
 
 from dd.common import (
     cfg,
@@ -164,9 +165,10 @@ def test_render_detail_sections_omits_empty_blocks() -> None:
     assert help_mod.render_detail_sections(detail) == ["## T\nS"]
 
 
-def test_paginate_detail_single_page() -> None:
+@pytest.mark.asyncio
+async def test_paginate_detail_single_page() -> None:
     detail = CommandDetail("x", "T", "S", steps=("a",), notes=("b",))
-    pages = help_mod.paginate_detail(detail)
+    pages = await help_mod.paginate_detail(detail)
 
     assert len(pages) == 1
     rendered = pages[0]()
@@ -174,10 +176,11 @@ def test_paginate_detail_single_page() -> None:
     assert isinstance(rendered[0], h.impl.ContainerComponentBuilder)
 
 
-def test_paginate_detail_splits_long_content() -> None:
+@pytest.mark.asyncio
+async def test_paginate_detail_splits_long_content() -> None:
     big_steps = tuple(f"step {i} " + "x" * 200 for i in range(60))
     detail = CommandDetail("x", "T", "S", steps=big_steps)
-    assert len(help_mod.paginate_detail(detail)) >= 2
+    assert len(await help_mod.paginate_detail(detail)) >= 2
 
 
 # -- visibility + autocomplete choices ---------------------------------------

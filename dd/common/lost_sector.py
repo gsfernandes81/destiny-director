@@ -9,7 +9,7 @@ import hikari as h
 
 from dd.hmessage import HMessage
 
-from ..common import cfg, components, schemas
+from ..common import components, schemas, settings
 from ..common.utils import fetch_emoji_dict
 from ..sector_accounting import sector_accounting
 from .utils import follow_link_single_step, space
@@ -166,9 +166,11 @@ async def format_post(
 
     # Follow the hyperlink to have the newest image embedded
     try:
-        ls_gif_url = await follow_link_single_step(cfg.lost_sector_gif_url)
+        ls_image_url = await follow_link_single_step(
+            await settings.get_lost_sector_image_url()
+        )
     except aiohttp.InvalidURL:
-        ls_gif_url = None
+        ls_image_url = None
 
     ls_extra_details_enabled = (
         await schemas.AutoPostSettings.get_lost_sector_details_enabled()
@@ -179,13 +181,13 @@ async def format_post(
     # markdown (build_body) is unchanged so the post looks the same as the old embed did
     # — and is shared with the web preview wall.
     container = h.impl.ContainerComponentBuilder(
-        accent_color=h.Color(cfg.embed_default_color)
+        accent_color=await settings.get_embed_default_color()
     )
     container.add_text_display(build_body(sectors, bool(ls_extra_details_enabled)))
-    if ls_gif_url:
-        # URL-referenced (Discord fetches it) rather than uploaded — the gif is ~15 MB,
-        # which would 413 on upload and re-download from the host on every send.
-        container.add_component(components.url_media_gallery(ls_gif_url))
+    if ls_image_url:
+        # URL-referenced (Discord fetches it) rather than uploaded — the image can be
+        # large, which would 413 on upload and re-download from the host on every send.
+        container.add_component(components.url_media_gallery(ls_image_url))
     container.add_component(components.footer_buttons_row(guides=GUIDES))
 
     # Resolve :emoji: then cap CV2 text (naive front-to-back truncate + CRITICAL alert

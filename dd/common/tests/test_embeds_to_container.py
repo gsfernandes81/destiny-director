@@ -19,7 +19,7 @@
 
 import hikari as h
 
-from dd.common import cfg, components
+from dd.common import components, settings
 
 
 def _text(child: h.api.ComponentBuilder) -> str:
@@ -125,7 +125,7 @@ def test_first_embed_color_wins_else_default() -> None:
     # No colour anywhere -> the shared embed default.
     assert (
         components.embeds_to_container(h.Embed(description="z")).accent_color
-        == cfg.embed_default_color
+        == settings.get_embed_default_color_sync()
     )
 
 

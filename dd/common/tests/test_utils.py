@@ -21,14 +21,13 @@ import typing as t
 import hikari as h
 import pytest
 
-from dd.common import cfg, utils
+from dd.common import utils
 from dd.common.utils import (
     FriendlyValueError,
     accumulate,
     check_number_of_layers,
     construct_emoji_substituter,
     ensure_session,
-    followable_name,
     get_ordinal_suffix,
     guild_scope,
     re_user_side_emoji,
@@ -117,19 +116,6 @@ def test_check_number_of_layers_too_few_raises_plain_value_error():
     with pytest.raises(ValueError) as exc:
         check_number_of_layers([])
     assert not isinstance(exc.value, FriendlyValueError)
-
-
-# --- followable_name -----------------------------------------------------------
-
-
-def test_followable_name_returns_configured_name(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(cfg, "followables", {"raids": 42})
-    assert followable_name(id=42) == "raids"
-
-
-def test_followable_name_falls_back_to_id(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(cfg, "followables", {"raids": 42})
-    assert followable_name(id=99) == 99
 
 
 # --- construct_emoji_substituter -----------------------------------------------

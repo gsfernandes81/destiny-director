@@ -15,12 +15,12 @@
 
 import lightbulb as lb
 
-from ...common import cfg
+from ...common import settings
 from .autoposts import follow_control_command_maker
 
 loader = lb.Loader()
 
-FOLLOWABLE_CHANNEL = cfg.followables["iron_banner"]
+FOLLOWABLE_CHANNEL = settings.get_followable_channel_sync("iron_banner")
 
 follow_control_command_maker(
     FOLLOWABLE_CHANNEL, "iron_banner", "Iron Banner", "Iron Banner auto posts"

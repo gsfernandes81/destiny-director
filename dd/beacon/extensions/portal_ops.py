@@ -29,7 +29,7 @@ import logging
 
 import lightbulb as lb
 
-from ...common import cfg
+from ...common import settings
 from ..nav import ResetPages, make_navigator_command, setup_nav_pages
 from .autoposts import follow_control_command_maker
 
@@ -40,7 +40,7 @@ loader = lb.Loader()
 # Daily reset anchor (Tue/any day 17:00 UTC); the period is one day.
 REFERENCE_DATE = dt.datetime(2025, 7, 15, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = cfg.followables.get("portal_ops")
+FOLLOWABLE_CHANNEL = settings.get_followable_channel_sync("portal_ops")
 
 if not FOLLOWABLE_CHANNEL:
     # No followable channel configured (absent, or the 0 placeholder) → load cleanly

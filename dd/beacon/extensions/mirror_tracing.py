@@ -29,7 +29,7 @@ from typing import override
 import hikari as h
 import lightbulb as lb
 
-from ...common import cfg
+from ...common import cfg, settings
 from ...common.schemas import MirroredChannel
 
 loader = lb.Loader()
@@ -134,7 +134,7 @@ async def on_start(event: h.StartedEvent):
 
     retry_count = 0
 
-    for followable in cfg.followables.values():
+    for followable in (await settings.get_followables()).values():
         while True:
             try:
                 non_legacy_mirrors[followable] = await MirroredChannel.fetch_dests(

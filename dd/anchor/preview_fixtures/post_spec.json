@@ -10,11 +10,11 @@
       "spec": {
         "body": "# Weekly reset\n\n## Nightfall\n\n- **Warden of Nothing**"
       },
-      "expected_html": "<div class=\"cv2-root\"><div class=\"cv2-container\" style=\"border-left-color:#000000\"><div class=\"cv2-text\"><span class=\"md-h1\">Weekly reset</span>\n\n<span class=\"md-h2\">Nightfall</span>\n<span class=\"md-bullet\"><strong>Warden of Nothing</strong></span></div></div></div>",
+      "expected_html": "<div class=\"cv2-root\"><div class=\"cv2-container\" style=\"border-left-color:#ec42a5\"><div class=\"cv2-text\"><span class=\"md-h1\">Weekly reset</span>\n\n<span class=\"md-h2\">Nightfall</span>\n<span class=\"md-bullet\"><strong>Warden of Nothing</strong></span></div></div></div>",
       "nodes": [
         {
           "type": 17,
-          "accent_color": 0,
+          "accent_color": 15483557,
           "components": [
             {
               "type": 10,
@@ -31,11 +31,11 @@
         "body": "## Trials of Osiris",
         "image_url": "https://example.com/trials.png"
       },
-      "expected_html": "<div class=\"cv2-root\"><div class=\"cv2-container\" style=\"border-left-color:#000000\"><div class=\"cv2-text\"><span class=\"md-h2\">Trials of Osiris</span></div><div class=\"cv2-media n1\"><a class=\"cv2-media-item\" href=\"https://example.com/trials.png\" target=\"_blank\" rel=\"noopener noreferrer\"><img src=\"https://example.com/trials.png\" alt=\"\" loading=\"lazy\"></a></div></div></div>",
+      "expected_html": "<div class=\"cv2-root\"><div class=\"cv2-container\" style=\"border-left-color:#ec42a5\"><div class=\"cv2-text\"><span class=\"md-h2\">Trials of Osiris</span></div><div class=\"cv2-media n1\"><a class=\"cv2-media-item\" href=\"https://example.com/trials.png\" target=\"_blank\" rel=\"noopener noreferrer\"><img src=\"https://example.com/trials.png\" alt=\"\" loading=\"lazy\"></a></div></div></div>",
       "nodes": [
         {
           "type": 17,
-          "accent_color": 0,
+          "accent_color": 15483557,
           "components": [
             {
               "type": 10,
@@ -71,11 +71,11 @@
           ]
         ]
       },
-      "expected_html": "<div class=\"cv2-root\"><div class=\"cv2-container\" style=\"border-left-color:#000000\"><div class=\"cv2-text\">Rotation update <img class=\"emoji\" src=\"https://cdn.discordapp.com/emojis/1234567890.png\" alt=\":kyber:\"></div><hr class=\"cv2-sep\"><div class=\"cv2-buttons\"><a class=\"cv2-button\" href=\"https://example.com/site\" target=\"_blank\" rel=\"noopener noreferrer\">Website</a><a class=\"cv2-button\" href=\"https://example.com/support\" target=\"_blank\" rel=\"noopener noreferrer\">Support</a></div></div></div>",
+      "expected_html": "<div class=\"cv2-root\"><div class=\"cv2-container\" style=\"border-left-color:#ec42a5\"><div class=\"cv2-text\">Rotation update <img class=\"emoji\" src=\"https://cdn.discordapp.com/emojis/1234567890.png\" alt=\":kyber:\"></div><hr class=\"cv2-sep\"><div class=\"cv2-buttons\"><a class=\"cv2-button\" href=\"https://example.com/site\" target=\"_blank\" rel=\"noopener noreferrer\">Website</a><a class=\"cv2-button\" href=\"https://example.com/support\" target=\"_blank\" rel=\"noopener noreferrer\">Support</a></div></div></div>",
       "nodes": [
         {
           "type": 17,
-          "accent_color": 0,
+          "accent_color": 15483557,
           "components": [
             {
               "type": 10,
@@ -122,11 +122,11 @@
           ]
         ]
       },
-      "expected_html": "<div class=\"cv2-root\"><div class=\"cv2-container\" style=\"border-left-color:#000000\"><div class=\"cv2-text\">check the links</div><hr class=\"cv2-sep\"><div class=\"cv2-buttons\"><a class=\"cv2-button\" href=\"https://example.com/ok\" target=\"_blank\" rel=\"noopener noreferrer\">Fine</a></div></div></div>",
+      "expected_html": "<div class=\"cv2-root\"><div class=\"cv2-container\" style=\"border-left-color:#ec42a5\"><div class=\"cv2-text\">check the links</div><hr class=\"cv2-sep\"><div class=\"cv2-buttons\"><a class=\"cv2-button\" href=\"https://example.com/ok\" target=\"_blank\" rel=\"noopener noreferrer\">Fine</a></div></div></div>",
       "nodes": [
         {
           "type": 17,
-          "accent_color": 0,
+          "accent_color": 15483557,
           "components": [
             {
               "type": 10,
@@ -158,11 +158,11 @@
         "body": "no image should render",
         "image_url": "ftp://x/y.png"
       },
-      "expected_html": "<div class=\"cv2-root\"><div class=\"cv2-container\" style=\"border-left-color:#000000\"><div class=\"cv2-text\">no image should render</div></div></div>",
+      "expected_html": "<div class=\"cv2-root\"><div class=\"cv2-container\" style=\"border-left-color:#ec42a5\"><div class=\"cv2-text\">no image should render</div></div></div>",
       "nodes": [
         {
           "type": 17,
-          "accent_color": 0,
+          "accent_color": 15483557,
           "components": [
             {
               "type": 10,
@@ -185,11 +185,11 @@
           ]
         ]
       },
-      "expected_html": "<div class=\"cv2-root\"><div class=\"cv2-container\" style=\"border-left-color:#000000\"><div class=\"cv2-text\"><span class=\"md-h1\">Title</span>\n\n<span class=\"md-h2\">Sub</span>\nBody with <img class=\"emoji\" src=\"https://cdn.discordapp.com/emojis/1234567890.png\" alt=\":kyber:\"> and Jul 30, 2026 5:00 PM and <a href=\"https://example.com/l\" target=\"_blank\" rel=\"noopener noreferrer\">a link</a>.</div><div class=\"cv2-media n1\"><a class=\"cv2-media-item\" href=\"https://example.com/hero.png\" target=\"_blank\" rel=\"noopener noreferrer\"><img src=\"https://example.com/hero.png\" alt=\"\" loading=\"lazy\"></a></div><hr class=\"cv2-sep\"><div class=\"cv2-buttons\"><a class=\"cv2-button\" href=\"https://example.com/open\" target=\"_blank\" rel=\"noopener noreferrer\">Open</a></div></div></div>",
+      "expected_html": "<div class=\"cv2-root\"><div class=\"cv2-container\" style=\"border-left-color:#ec42a5\"><div class=\"cv2-text\"><span class=\"md-h1\">Title</span>\n\n<span class=\"md-h2\">Sub</span>\nBody with <img class=\"emoji\" src=\"https://cdn.discordapp.com/emojis/1234567890.png\" alt=\":kyber:\"> and Jul 30, 2026 5:00 PM and <a href=\"https://example.com/l\" target=\"_blank\" rel=\"noopener noreferrer\">a link</a>.</div><div class=\"cv2-media n1\"><a class=\"cv2-media-item\" href=\"https://example.com/hero.png\" target=\"_blank\" rel=\"noopener noreferrer\"><img src=\"https://example.com/hero.png\" alt=\"\" loading=\"lazy\"></a></div><hr class=\"cv2-sep\"><div class=\"cv2-buttons\"><a class=\"cv2-button\" href=\"https://example.com/open\" target=\"_blank\" rel=\"noopener noreferrer\">Open</a></div></div></div>",
       "nodes": [
         {
           "type": 17,
-          "accent_color": 0,
+          "accent_color": 15483557,
           "components": [
             {
               "type": 10,

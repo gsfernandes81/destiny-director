@@ -132,6 +132,13 @@ destroy-schemas: .env
 create-schemas: .env
 	uv run python -m dd.common.schemas --create-all
 
+# One-time bridge for retiring FOLLOWABLES/cfg.followables: backfill any followable
+# channel DB row that doesn't exist yet from the current FOLLOWABLES env var.
+# Idempotent (never overwrites an existing row) — see
+# dd.common.settings.seed_followables_from_env's docstring for the full cutover plan.
+seed-followables: .env
+	uv run python -m dd.common.schemas --seed-followables
+
 # Render the SQLAlchemy models to DDL (.atlas/desired.sql, gitignored), then let
 # Atlas diff it against migrations/ and write a new migration if they differ. The
 # DDL is generated here rather than via Atlas's `external_schema` provider so the

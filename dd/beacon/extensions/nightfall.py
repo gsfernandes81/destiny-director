@@ -22,7 +22,7 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import cfg
+from ...common import settings
 from ...common.utils import accumulate
 from .. import utils
 from ..nav import NavPages, make_navigator_command, setup_nav_pages
@@ -32,7 +32,7 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 18, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = cfg.followables["weekly_nightfall"]
+FOLLOWABLE_CHANNEL = settings.get_followable_channel_sync("weekly_nightfall")
 
 
 class NightfallPages(NavPages):
@@ -48,7 +48,9 @@ class NightfallPages(NavPages):
             msg_proto = (
                 accumulate([HMessage.from_message(m) for m in messages])
                 .merge_content_into_embed()
-                .merge_attachements_into_embed(default_url=cfg.default_url)
+                .merge_attachements_into_embed(
+                    default_url=settings.get_default_url_sync()
+                )
             )
         except ValueError as e:
             e.add_note(
@@ -60,7 +62,7 @@ class NightfallPages(NavPages):
                 embeds=[
                     h.Embed(
                         title="Error",
-                        color=cfg.embed_error_color,
+                        color=settings.get_embed_error_color_sync(),
                         description="There was an issue processing the information "
                         "for this week.",
                     )

@@ -32,7 +32,7 @@ from lightbulb import components as lbc
 
 from dd.hmessage import HMessage
 
-from ..common import cfg
+from ..common import settings
 from ..common.utils import (
     construct_emoji_substituter,
     fetch_emoji_dict,
@@ -196,7 +196,7 @@ async def build_embed_with_user(
     embed = existing_embed or h.Embed(
         title="Embed Builder",
         description="Use the buttons below to build your embed!\n",
-        color=cfg.embed_default_color,
+        color=await settings.get_embed_default_color(),
     )
     state = _BuilderState(embed)
 
@@ -246,7 +246,14 @@ async def build_embed_with_user(
     _register(
         "embed:color",
         "Edit Color",
-        lambda e: [("Color", str(e.color or cfg.embed_default_color), False, False)],
+        lambda e: [
+            (
+                "Color",
+                str(e.color or settings.get_embed_default_color_sync()),
+                False,
+                False,
+            )
+        ],
         _mutate_color,
     )
     _register("embed:author", "Edit Author", _author_fields, _mutate_author)

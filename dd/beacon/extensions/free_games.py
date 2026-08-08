@@ -19,14 +19,14 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import cfg
+from ...common import settings
 from ...common.bot import CachedFetchBot
 from .autoposts import follow_control_command_maker
 
 loader = lb.Loader()
 
 # Followable channel from which to pull messages for the command and autoposts
-FOLLOWABLE_CHANNEL = cfg.followables["free_games"]
+FOLLOWABLE_CHANNEL = settings.get_followable_channel_sync("free_games")
 
 HELP_STRING = "See the current free games on The Epic Store, etc"
 

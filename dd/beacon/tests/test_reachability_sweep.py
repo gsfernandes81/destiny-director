@@ -36,8 +36,11 @@ _sweep = getattr(getattr(mirror.reachability_sweep, "_func"), "_func")  # noqa: 
 
 
 async def test_early_return_when_bad_channels_disabled(monkeypatch):
-    """When ``cfg.disable_bad_channels`` is off, the sweep must not even fetch."""
-    monkeypatch.setattr(mirror.cfg, "disable_bad_channels", False)
+    """When the ``disable_bad_channels`` setting is off, the sweep must not even
+    fetch."""
+    monkeypatch.setattr(
+        mirror.settings, "get_disable_bad_channels", AsyncMock(return_value=False)
+    )
     monkeypatch.setattr(mirror.aio, "sleep", AsyncMock())
 
     fetch = AsyncMock()
@@ -50,7 +53,9 @@ async def test_early_return_when_bad_channels_disabled(monkeypatch):
 
 async def test_bucketing_reachable_unreachable(monkeypatch):
     """Verdicts sort into reachable / unreachable; UNKNOWN and raises are neither."""
-    monkeypatch.setattr(mirror.cfg, "disable_bad_channels", True)
+    monkeypatch.setattr(
+        mirror.settings, "get_disable_bad_channels", AsyncMock(return_value=True)
+    )
     monkeypatch.setattr(mirror.aio, "sleep", AsyncMock())
 
     candidates = [(1, 2), (1, 3), (1, 4), (1, 5), (1, 6)]
@@ -101,7 +106,9 @@ async def test_bucketing_reachable_unreachable(monkeypatch):
 )
 async def test_escalation_by_disabled_count(monkeypatch, num_disabled, expected_method):
     """The health-logger level escalates with the number of disabled mirrors."""
-    monkeypatch.setattr(mirror.cfg, "disable_bad_channels", True)
+    monkeypatch.setattr(
+        mirror.settings, "get_disable_bad_channels", AsyncMock(return_value=True)
+    )
     monkeypatch.setattr(mirror.aio, "sleep", AsyncMock())
 
     monkeypatch.setattr(

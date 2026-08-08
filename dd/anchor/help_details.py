@@ -87,7 +87,7 @@ EDIT_POST_DETAIL = CommandDetail(
     notes=(
         "Only works on messages posted by this bot.",
         "Embed posts must contain exactly one embed; CV2 posts open the block builder.",
-        "Editing never changes a post's format — use \"Convert to components\" to turn "
+        'Editing never changes a post\'s format — use "Convert to components" to turn '
         "an embed into a Components V2 message.",
     ),
 )

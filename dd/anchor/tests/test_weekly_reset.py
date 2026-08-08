@@ -889,7 +889,7 @@ def fake_publish_env(monkeypatch: pytest.MonkeyPatch):
 async def test_post_or_edit_unpublished_creates_when_no_post(fake_publish_env) -> None:
     bot = _FakeBot()
     meta = await wr.post_or_edit_unpublished(_bot(bot), _full_ctx(), wr.DraftMeta())
-    channel = wr.cfg.followables["weekly_reset"]
+    channel = wr.settings.get_followable_channel_sync("weekly_reset")
     # First time: send uncrossposted; never edits; never crossposts.
     assert fake_publish_env.sent == [{"channel": channel, "crosspost": False}]
     assert not bot.rest.edited and fake_publish_env.crossposted == []
@@ -905,7 +905,7 @@ async def test_post_or_edit_unpublished_edits_when_posted(fake_publish_env) -> N
     meta = await wr.post_or_edit_unpublished(
         _bot(bot), _full_ctx(), wr.DraftMeta(message_id=42, status="posted")
     )
-    channel = wr.cfg.followables["weekly_reset"]
+    channel = wr.settings.get_followable_channel_sync("weekly_reset")
     # Already posted: edit in place, no new send, still no crosspost.
     assert fake_publish_env.sent == []
     assert bot.rest.edited == [(channel, 42)]
@@ -918,7 +918,7 @@ async def test_publish_draft_edits_then_crossposts_existing(fake_publish_env) ->
     bot = _FakeBot()
     meta = wr.DraftMeta(message_id=42, status="posted", crossposted=False)
     out, note = await wr.publish_draft(_bot(bot), _full_ctx(), meta)
-    channel = wr.cfg.followables["weekly_reset"]
+    channel = wr.settings.get_followable_channel_sync("weekly_reset")
     assert bot.rest.edited == [(channel, 42)] and fake_publish_env.sent == []
     assert fake_publish_env.crossposted == [(channel, 42)]
     assert out.crossposted is True and out.status == "published"
@@ -931,7 +931,7 @@ async def test_publish_draft_posts_then_crossposts_when_absent(
 ) -> None:
     bot = _FakeBot()
     out, _note = await wr.publish_draft(_bot(bot), _full_ctx(), wr.DraftMeta())
-    channel = wr.cfg.followables["weekly_reset"]
+    channel = wr.settings.get_followable_channel_sync("weekly_reset")
     # Fallback path: post uncrossposted first, then crosspost that new message id.
     assert fake_publish_env.sent == [{"channel": channel, "crosspost": False}]
     assert fake_publish_env.crossposted == [(channel, 555)]
@@ -943,7 +943,7 @@ async def test_publish_draft_reedit_is_idempotent(fake_publish_env) -> None:
     bot = _FakeBot()
     meta = wr.DraftMeta(message_id=42, status="published", crossposted=True)
     _out, note = await wr.publish_draft(_bot(bot), _full_ctx(), meta)
-    channel = wr.cfg.followables["weekly_reset"]
+    channel = wr.settings.get_followable_channel_sync("weekly_reset")
     # Re-publish: sync the edit + (idempotent) crosspost; note reads as an edit.
     assert bot.rest.edited == [(channel, 42)]
     assert fake_publish_env.crossposted == [(channel, 42)]
@@ -1046,7 +1046,7 @@ async def test_handle_create_posts_and_returns_warnings(
     data = json.loads(resp.text or "")
     assert data["ok"] is True and data["warnings"]
     assert data["post_this_period"] is True and data["crossposted"] is False
-    channel = wr.cfg.followables["weekly_reset"]
+    channel = wr.settings.get_followable_channel_sync("weekly_reset")
     assert fake_publish_env.sent == [{"channel": channel, "crosspost": False}]
     meta = await wr.load_meta()
     assert meta.message_id == 555 and meta.status == "posted"
@@ -1124,7 +1124,7 @@ async def test_handle_edit_edits_existing_in_place(
     data = json.loads(resp.text or "")
     assert data["ok"] is True
     assert data["post_this_period"] is True and data["crossposted"] is True
-    channel = wr.cfg.followables["weekly_reset"]
+    channel = wr.settings.get_followable_channel_sync("weekly_reset")
     assert bot.rest.edited == [(channel, 42)] and fake_publish_env.sent == []
     meta = await wr.load_meta()
     assert meta.message_id == 42
@@ -1246,7 +1246,9 @@ async def test_handle_delete_removes_post_and_resets(monkeypatch) -> None:
     )
     resp = await wr._handle_delete(_req())
     assert resp.status == 200 and json.loads(resp.text or "") == {"ok": True}
-    assert bot.rest.deleted == [(wr.cfg.followables["weekly_reset"], 77)]
+    assert bot.rest.deleted == [
+        (wr.settings.get_followable_channel_sync("weekly_reset"), 77)
+    ]
     meta = await wr.load_meta()
     assert meta.message_id == 0 and meta.crossposted is False and meta.status == "draft"
 

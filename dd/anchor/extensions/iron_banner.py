@@ -44,10 +44,10 @@ import lightbulb as lb
 from dd.hmessage import HMessage
 
 from ...common import (
-    cfg,
     components,
     iron_banner as ib,
     schemas,
+    settings,
 )
 from ...common.bot import CachedFetchBot
 from ...common.utils import fetch_emoji_dict
@@ -61,7 +61,7 @@ loader = lb.Loader()
 META_SLUG = "iron_banner_meta"
 #: The followable channel this post publishes to (None if not configured — the cron and
 #: owner command are then skipped, mirroring the Trials gate).
-_CHANNEL_ID: int | None = cfg.followables.get("iron_banner")
+_CHANNEL_ID: int | None = settings.get_followable_channel_sync("iron_banner")
 
 
 async def format_post(bot: CachedFetchBot) -> HMessage:
@@ -87,7 +87,7 @@ async def format_post(bot: CachedFetchBot) -> HMessage:
     )
 
     container = h.impl.ContainerComponentBuilder(
-        accent_color=h.Color(cfg.embed_default_color)
+        accent_color=await settings.get_embed_default_color()
     )
     container.add_text_display(ib.build_body(event, pool_lines))
     # The standard footer button row (Iron Banner Guide + Support).
@@ -138,8 +138,6 @@ async def _schedule_iron_banner(
 ) -> None:
     if not _CHANNEL_ID:
         return
-    # Bind to a local ``int`` so the nested cron closure keeps the narrowed type.
-    channel_id = _CHANNEL_ID
 
     # Prewarm the manifest weapon pool so the first post's weapon resolution is fast
     # (best-effort; a failure just means the first resolve pays the manifest cost).
@@ -168,7 +166,7 @@ async def _schedule_iron_banner(
             return  # already posted this event's reset period
         await discord_announcer(
             bot,
-            channel_id=channel_id,
+            channel_id=await settings.get_followable_channel("iron_banner"),
             construct_message_coro=format_post,
             publish_message=True,
             cv2=True,

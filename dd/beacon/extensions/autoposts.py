@@ -22,7 +22,7 @@ import hikari as h
 import lightbulb as lb
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...common import cfg
+from ...common import settings
 from ...common.auth import check_invoker_is_owner
 from ...common.bot import CachedFetchBot
 from ...common.schemas import MirroredChannel, db_session
@@ -248,7 +248,7 @@ def permission_error_embed(
         h.Embed(
             title="Permission Error",
             description=description,
-            color=cfg.embed_error_color,
+            color=settings.get_embed_error_color_sync(),
         ),
         bot_owners,
     )
@@ -421,7 +421,7 @@ def insufficient_permissions_embed(bot_owners: list[h.User]) -> h.Embed:
             + "Make sure that you have this permission in this channel and not "
             + "just in this guild\n"
             + "Feel free to contact me on discord if you are having issues!\n",
-            color=cfg.embed_error_color,
+            color=settings.get_embed_error_color_sync(),
         ),
         bot_owners,
     )
@@ -434,7 +434,7 @@ def autopost_error_embed(bot_owners: list[h.User], error_reference: str) -> h.Em
             description="An error occurred while trying to update autopost settings. "
             + "Please contact me **(username at the bottom of the embed)** with the "
             + f"error reference `{error_reference}` and we will fix this for you.",
-            color=cfg.embed_error_color,
+            color=settings.get_embed_error_color_sync(),
         ),
         bot_owners,
     )
@@ -642,7 +642,7 @@ def follow_control_command_maker(
                             title=f"{autoposts_friendly_name} autoposts "
                             + ("enabled" if enabling else "disabled")
                             + "!",
-                            color=cfg.embed_default_color,
+                            color=await settings.get_embed_default_color(),
                         )
                     )
 

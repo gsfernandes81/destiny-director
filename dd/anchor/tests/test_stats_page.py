@@ -72,9 +72,7 @@ async def test_data_endpoint_returns_seeded_rows() -> None:
             )
         )
         session.add(
-            schemas.AutopostDailyStat(
-                date=today, feed="xur", kind="follow", count=9
-            )
+            schemas.AutopostDailyStat(date=today, feed="xur", kind="follow", count=9)
         )
     await schemas.ServerStatistics.add_server(123456789012345678, 5000)
 
@@ -122,8 +120,6 @@ async def test_page_shell_served() -> None:
 
 
 async def test_card_is_registered() -> None:
-    card = next(
-        (c for c in web.registered_cards() if c.title == "Statistics"), None
-    )
+    card = next((c for c in web.registered_cards() if c.title == "Statistics"), None)
     assert card is not None
     assert card.href == "/stats"

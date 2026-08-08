@@ -46,7 +46,7 @@ import aiohttp.web
 import hikari as h
 import lightbulb as lb
 
-from ...common import cfg, lifecycle
+from ...common import cfg, lifecycle, settings
 from ...common.bot import CachedFetchBot
 from ...common.components import cv2_error, cv2_notice, respond_cv2
 from .. import web
@@ -140,7 +140,7 @@ async def _handle_bot_info(request: aiohttp.web.Request) -> aiohttp.web.Response
             "channels": await asyncio.gather(
                 *(
                     _channel_entry(feed, channel_id)
-                    for feed, channel_id in cfg.followables.items()
+                    for feed, channel_id in (await settings.get_followables()).items()
                 )
             ),
         }

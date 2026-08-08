@@ -59,9 +59,10 @@ def register_feed(feed: Feed) -> None:
     too, so its page exists and explains itself rather than 404-ing behind a link the
     settings page shows regardless.
 
-    **Dormancy is normalised here.** Producers pass ``cfg.followables.get(name)``, and a
-    followable that is present-but-unset in ``FOLLOWABLES`` — which is how portal_ops
-    and iron_banner ship (``"portal_ops": 0``) — yields the integer ``0``, not ``None``.
+    **Dormancy is normalised here.** Producers pass
+    ``settings.get_followable_channel_sync(name)``, and a followable that is
+    present-but-unset — which is how portal_ops and iron_banner ship by default — yields
+    the integer ``0``, not ``None``.
     The producers' own gates are falsy checks so they were right either way; the web
     handler's was ``is None``, so Send answered "started" and announced into channel 0,
     failing where only the log could see it. Collapsing the two spellings at the single

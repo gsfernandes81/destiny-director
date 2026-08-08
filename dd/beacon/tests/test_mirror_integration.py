@@ -49,7 +49,7 @@ from dd.beacon import (
     utils,
 )
 from dd.beacon.extensions import mirror
-from dd.common import cfg, schemas
+from dd.common import cfg, schemas, settings
 from dd.common.bot import CachedFetchBot
 from dd.common.components import build_container
 from dd.common.schemas import DeliveryState, MirrorDelivery, MirroredChannel
@@ -224,7 +224,7 @@ async def mirror_env() -> AsyncIterator[_MirrorEnv]:
 
 @pytest.fixture(autouse=True)
 def _silence_progress(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stop the handlers spawning a drain watcher / posting to ``cfg.log_channel``."""
+    """Stop the handlers spawning a drain watcher / posting to the log channel."""
 
     def _noop(*_args: object, **_kwargs: object) -> None:
         return None
@@ -290,7 +290,8 @@ async def test_failing_dest_is_disabled(
 ) -> None:
     """A destination that probes unreachable past the grace window is auto-disabled by
     the reachability sweep, while a healthy one keeps delivering."""
-    monkeypatch.setattr(cfg, "disable_bad_channels", True)
+    await schemas.AutoPostSettings.set_enabled("disable_bad_channels", True)
+    settings.invalidate()
 
     src = await mirror_env.make_channel("src-fail")
     good = await mirror_env.make_channel("dst-good")

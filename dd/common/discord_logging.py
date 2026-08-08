@@ -15,11 +15,11 @@
 
 """Forward Python ``logging`` records to the Discord alerts channel.
 
-A single :class:`DiscordLogHandler` is attached to the root logger (at
-``cfg.alert_min_level``) per process. Its ``emit`` is synchronous and only
-enqueues a lightweight snapshot; a background coroutine batches records over a
-short window, collapses duplicates by *signature*, renders each group as a
-Components V2 container, and posts it to ``cfg.alerts_channel``.
+A single :class:`DiscordLogHandler` is attached to the root logger (at the
+``alert_min_level`` Autopost Setting, see :mod:`dd.common.settings`) per process. Its
+``emit`` is synchronous and only enqueues a lightweight snapshot; a background coroutine
+batches records over a short window, collapses duplicates by *signature*, renders each
+group as a Components V2 container, and posts it to the ``alerts_channel_id`` setting.
 
 High-priority flagging:
     - Repeated errors at high frequency: a per-signature rolling window counts
@@ -47,7 +47,7 @@ from collections import defaultdict, deque
 import hikari as h
 import lightbulb as lb
 
-from . import cfg
+from . import cfg, settings
 from .bot import CachedFetchBot
 from .components import build_container, cv2_error, respond_cv2
 
@@ -63,9 +63,11 @@ __all__ = ["identity_for_exc", "reference_code"]
 # the handler back into itself.
 _IGNORED_LOGGER_PREFIXES = ("hikari", "lightbulb", "asyncio", "aiosqlite")
 
-# Severity styling: emoji + accent colour per level bucket.
+# Severity styling: emoji + accent colour per level bucket. Warning/critical are plain
+# cfg constants (never per-deploy overridden); error is a DB-backed setting (see
+# dd.common.settings), so its style is resolved at call time by _style() below instead
+# of being a module-level tuple like the other two.
 _WARNING_STYLE = ("⚠️", cfg.embed_warning_color)
-_ERROR_STYLE = ("🛑", cfg.embed_error_color)
 _CRITICAL_STYLE = ("🚨", cfg.embed_critical_color)
 
 # Discord component budgets (kept conservatively under the hard limits).
@@ -122,11 +124,11 @@ class _ReferenceFormatter(logging.Formatter):
         return base
 
 
-def _style(levelno: int) -> tuple[str, h.Color]:
+async def _style(levelno: int) -> tuple[str, h.Color]:
     if levelno >= logging.CRITICAL:
         return _CRITICAL_STYLE
     if levelno >= logging.ERROR:
-        return _ERROR_STYLE
+        return "🛑", await settings.get_embed_error_color()
     return _WARNING_STYLE
 
 
@@ -311,7 +313,7 @@ class DiscordLogHandler(logging.Handler):
             and bool(self._owner_ids)
             and self._ping_allowed(rec.signature, now)
         )
-        components = self._render(rec, effective_level=effective_level, ping=ping)
+        components = await self._render(rec, effective_level=effective_level, ping=ping)
 
         try:
             channel = self._bot.cache.get_guild_channel(
@@ -326,10 +328,10 @@ class DiscordLogHandler(logging.Handler):
         except Exception as exc:  # noqa: BLE001 - must not re-enter logging
             self._stderr(f"failed to send alert ({rec.signature}): {exc!r}")
 
-    def _render(
+    async def _render(
         self, rec: _AlertRecord, *, effective_level: int, ping: bool
     ) -> list[h.api.ComponentBuilder]:
-        emoji, color = _style(effective_level)
+        emoji, color = await _style(effective_level)
         levelname = "CRITICAL" if effective_level >= logging.CRITICAL else rec.levelname
         code = rec.reference
 
@@ -476,8 +478,11 @@ async def install_discord_logging(
     if _installed_handler is not None:
         return _installed_handler
 
-    if not cfg.alerts_channel:
-        DiscordLogHandler._stderr("ALERTS_CHANNEL_ID unset; Discord logging disabled")
+    alerts_channel = await settings.get_alerts_channel_id()
+    if not alerts_channel:
+        DiscordLogHandler._stderr(
+            "Alerts channel unset (Autopost Settings); Discord logging disabled"
+        )
         _detach_startup_buffer(replay_into=None)
         return None
 
@@ -485,10 +490,10 @@ async def install_discord_logging(
 
     handler = DiscordLogHandler(
         bot,
-        channel_id=int(cfg.alerts_channel),
+        channel_id=alerts_channel,
         bot_name=bot_name,
         owner_ids=owner_ids,
-        level=_resolve_level(cfg.alert_min_level),
+        level=_resolve_level(await settings.get_alert_min_level()),
     )
     handler._task = aio.create_task(handler._consumer())
     logging.getLogger().addHandler(handler)
@@ -572,9 +577,12 @@ def install_command_error_reporting(client: lb.Client) -> None:
 
 # Attach the startup buffer at import time (before any bot startup logging) so
 # ERROR+ records emitted before ``install_discord_logging`` runs are retained and
-# replayed to Discord once the bot is online.
+# replayed to Discord once the bot is online. This runs before the DB is connected, so
+# it can't read the live alert_min_level setting (dd.common.settings) — ERROR matches
+# that setting's own default, so an unconfigured deploy behaves identically either way.
+# install_discord_logging re-applies the live level to the real handler once it can.
 _startup_buffer: "_StartupBufferHandler | None"
-_buffer = _StartupBufferHandler(level=_resolve_level(cfg.alert_min_level))
+_buffer = _StartupBufferHandler(level=logging.ERROR)
 logging.getLogger().addHandler(_buffer)
 _startup_buffer = _buffer
 

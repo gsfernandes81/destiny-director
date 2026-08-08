@@ -30,18 +30,21 @@ from lightbulb import components as lbc
 
 from dd.hmessage import HMessage
 
-from ..common import components as dd_components
-from ..common.bot import CachedFetchBot
-from ..common.cfg import (
-    default_url,
-    embed_default_color,
-    navigator_timeout,
-    url_regex,
+from ..common import (
+    components as dd_components,
+    settings,
 )
+from ..common.bot import CachedFetchBot
+from ..common.cfg import navigator_timeout, url_regex
 from ..common.utils import accumulate, discord_error_logger, get_ordinal_suffix
 from . import utils
 
-NO_DATA_HERE_EMBED = h.Embed(title="No data here!", color=embed_default_color)
+# A stable sentinel compared by equality elsewhere (e.g. ada.py checks
+# `page.embeds[0] == NO_DATA_HERE_EMBED`), so it is built once at import time rather
+# than re-resolved per read — see settings.get_embed_default_color_sync's docstring.
+NO_DATA_HERE_EMBED = h.Embed(
+    title="No data here!", color=settings.get_embed_default_color_sync()
+)
 
 # Tolerance for binning Destiny reset-time messages into periods: a message
 # posted up to this long before a reset still bins into the period it belongs to.
@@ -626,7 +629,7 @@ class NavPages(DateRangeDict):
         containers: list[h.api.ComponentBuilder] = list(msg.components)
         if msg.embeds:
             container = dd_components.embeds_to_container(
-                msg.embeds, accent_color=embed_default_color
+                msg.embeds, accent_color=settings.get_embed_default_color_sync()
             )
             if container.components:
                 containers.append(container)
@@ -873,7 +876,7 @@ class ResetPages(NavPages):
             return msg_proto
 
         msg_proto = msg_proto.merge_content_into_embed().merge_attachements_into_embed(
-            default_url=default_url
+            default_url=settings.get_default_url_sync()
         )
 
         # Remove duplicate From/Till text from anchor embed

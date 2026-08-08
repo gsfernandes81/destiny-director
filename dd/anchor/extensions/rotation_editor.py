@@ -37,7 +37,7 @@ import aiohttp.web
 import hikari as h
 import lightbulb as lb
 
-from ...common import cfg, iron_banner, lost_sector, rotation_schema, schemas
+from ...common import iron_banner, lost_sector, rotation_schema, schemas, settings
 from ...common.bot import CachedFetchBot
 from ...common.components import footer_button_specs
 from ...common.legacy_activities import iter_wall_posts, load_seed_doc, weapon_values
@@ -97,7 +97,7 @@ def _vocab() -> dict[str, t.Any]:
     }
 
 
-def _lost_sector_posts(
+async def _lost_sector_posts(
     rotation: sector_accounting.Rotation,
     details_enabled: bool,
 ) -> list[tuple[str, hybrid_post_core.PostSpec]]:
@@ -107,6 +107,7 @@ def _lost_sector_posts(
     editor previews exactly what will post; ``details_enabled`` mirrors the live
     champions/shields toggle.
     """
+    image_url = await settings.get_lost_sector_image_url()
     now = dt.datetime.now(dt.UTC)
     # Align to the daily 17:00 UTC reset so entry 0 is the currently-live post.
     base = now.replace(hour=17, minute=0, second=0, microsecond=0)
@@ -130,7 +131,7 @@ def _lost_sector_posts(
                 label,
                 hybrid_post_core.PostSpec.cv2(
                     body,
-                    cfg.lost_sector_gif_url,
+                    image_url,
                     buttons=footer_button_specs(guides=lost_sector.GUIDES),
                 ),
             )
@@ -290,7 +291,7 @@ async def _render_preview(
         posts = _legacy_posts(key, obj)
     else:
         details = bool(await schemas.AutoPostSettings.get_lost_sector_details_enabled())
-        posts = _lost_sector_posts(obj, details)
+        posts = await _lost_sector_posts(obj, details)
 
     return {
         "kind": "wall",

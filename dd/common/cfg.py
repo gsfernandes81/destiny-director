@@ -162,27 +162,24 @@ logging.basicConfig(
 test_env = _test_env("TEST_ENV")
 discord_token_anchor = _getenv("DISCORD_TOKEN_ANCHOR", default="")
 discord_token_beacon = _getenv("DISCORD_TOKEN_BEACON", default="")
-disable_bad_channels = _getbool("DISABLE_BAD_CHANNELS", False)
 
 # Discord control server config
 control_discord_server_id = int(_getenv("CONTROL_DISCORD_SERVER_ID", "-1"))
 kyber_discord_server_id = _getenv("KYBER_DISCORD_SERVER_ID", default=-1)
-log_channel = _getenv("LOG_CHANNEL_ID", default=0)
-alerts_channel = _getenv("ALERTS_CHANNEL_ID", default=0)
 
-
-# Discord constants
-embed_default_color = h.Color(int(_getenv("EMBED_DEFAULT_COLOR", "0"), 16))
-embed_error_color = h.Color(int(_getenv("EMBED_ERROR_COLOR", "0"), 16))
+# Followable (anchor-posted) channel ids, keyed by feed slug. This is now a DB-editable
+# seed rather than the live source of truth: dd.common.settings reads it only as the
+# fallback for a feed with no AutoPostSettings row yet (fresh install, or a feed nobody
+# has touched on the settings page). Once a feed's channel is set from the Autopost
+# Settings web page, the DB row wins from then on, on every future read, in every
+# process. Still required at import time by a handful of extensions (see settings.py's
+# docstring), which is why this stays a plain synchronous constant.
 followables: dict[str, int] = json.loads(_getenv("FOLLOWABLES", "{}"), parse_int=int)
-default_url = _getenv("DEFAULT_URL", "")
 # Seconds a paginator waits for interaction before timing out. Baked in — prod ran
 # NAVIGATOR_TIMEOUT=900, never per-deploy overridden.
 navigator_timeout = 900
 
 # Discord logging / alerting config (see dd/common/discord_logging.py)
-# Minimum log level forwarded to the alerts channel.
-alert_min_level = _getenv("ALERT_MIN_LEVEL", "ERROR")
 # Seconds the consumer waits collecting records before flushing a batch (lets
 # duplicate records within the window collapse into a single alert).
 # The knobs below have baked-in sensible defaults and are never overridden
@@ -231,10 +228,6 @@ embed_critical_color = h.Color(0x992D22)
 
 # Database URLs
 db_url, db_url_async = _db_urls("MYSQL_PRIVATE_URL", "MYSQL_URL")
-
-# Static Images / Resources
-lost_sector_gif_url = _getenv("LOST_SECTOR_GIF_URL")
-xur_image_url = _getenv("XUR_IMAGE_URL")
 
 # Bungie credentials
 bungie_api_key = _getenv("BUNGIE_API_KEY", "")

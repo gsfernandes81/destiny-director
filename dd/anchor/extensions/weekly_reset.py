@@ -26,8 +26,8 @@ mirrored it. This extension automates that authoring:
    owner-authenticated **web form** (``/weekly_reset create`` links to it; the routes
    live at the bottom of this module, and Discord-OAuth auth is enforced centrally by
    the ``web_auth.py`` middleware), backed by the same data/render/publish core below.
-3. On publish the assembled post is crossposted to
-   :data:`cfg.followables["weekly_reset"]`; beacon mirrors it as usual.
+3. On publish the assembled post is crossposted to the ``weekly_reset`` followable
+   channel (see :mod:`dd.common.settings`); beacon mirrors it as usual.
 
 Everything the API can't supply (editorial prose, the featured raid/dungeon rotators,
 Iron Banner/Trials schedule, Pantheon pair) carries over week-to-week in the
@@ -57,7 +57,7 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import cfg, schemas
+from ...common import schemas, settings
 from ...common.bot import CachedFetchBot
 from ...common.components import (
     finalize_cv2_post,
@@ -764,8 +764,11 @@ def validate_post(ctx: WeeklyResetContext) -> list[str]:
         )
     if ctx.image_url and not ctx.image_url.startswith(("http://", "https://")):
         problems.append("Image URL must start with http:// or https://.")
-    if "weekly_reset" not in cfg.followables:
-        problems.append("No 'weekly_reset' entry in FOLLOWABLES — nowhere to publish.")
+    if not settings.get_followable_channel_sync("weekly_reset"):
+        problems.append(
+            "No 'weekly_reset' channel configured (Autopost Settings) — nowhere to "
+            "publish."
+        )
     return problems
 
 
@@ -1419,7 +1422,7 @@ async def _build_bootstrap(
         # when this week's image already is the default.
         "default_image_url": config.default_image_url or "",
         # The CV2 container's accent colour, mirrored as the preview's left bar.
-        "accent_color": str(cfg.embed_default_color),
+        "accent_color": str(await settings.get_embed_default_color()),
         # Whether a post already exists *for the current reset week* (drives which
         # action buttons show: Create-* when there's none, Edit/Delete when there is),
         # and whether that post has been crossposted (hides the Edit-and-publish button
@@ -1510,7 +1513,7 @@ web.register_card(
 async def _on_started(
     event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED
 ) -> None:
-    if not cfg.followables.get("weekly_reset"):
+    if not await settings.get_followable_channel("weekly_reset"):
         return
 
     # Stash the live bot so the web form's create/edit routes can reach the REST client.

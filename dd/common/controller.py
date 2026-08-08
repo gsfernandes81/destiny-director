@@ -55,7 +55,7 @@ import hikari as h
 import lightbulb as lb
 from lightbulb import components as lbc
 
-from . import cfg, lifecycle
+from . import cfg, lifecycle, settings
 from .auth import owner_only
 from .bot import CachedFetchBot
 from .components import (
@@ -212,7 +212,9 @@ def make_controller_group(
             if mirror_check is not None:
                 lines.append("\n**Mirror status**")
                 lines.append(f"- Operations in progress: {await mirror_check()}")
-                followed = [(n, c) for n, c in cfg.followables.items() if c]
+                followed = [
+                    (n, c) for n, c in (await settings.get_followables()).items() if c
+                ]
                 try:
                     counts = await asyncio.gather(
                         *(

@@ -322,11 +322,6 @@ async def follow_link_single_step(
         return url
 
 
-def followable_name(*, id: int) -> str | int:
-    """Return the configured name for a followable channel id, or the id itself."""
-    return next((key for key, value in cfg.followables.items() if value == id), id)
-
-
 class FriendlyValueError(ValueError):
     pass
 

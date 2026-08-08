@@ -28,7 +28,7 @@ from dataclasses import dataclass
 import hikari as h
 import lightbulb as lb
 
-from . import cfg, components
+from . import cfg, components, settings
 from .bot import CachedFetchBot
 
 # Catch-all category title for loose/ungrouped commands. User-facing.
@@ -329,10 +329,12 @@ def _detail_page_factory(
     return factory
 
 
-def paginate_detail(
-    detail: CommandDetail, *, color: h.Color = cfg.embed_default_color
+async def paginate_detail(
+    detail: CommandDetail, *, color: h.Color | None = None
 ) -> list[components.Cv2PageFactory]:
     """Split a command's detail into CV2 page factories (one page for short content)."""
+    if color is None:
+        color = await settings.get_embed_default_color()
     pages: list[list[str]] = []
     current: list[str] = []
     current_len = 0
@@ -394,7 +396,7 @@ async def render_help(
     ctx: lb.Context,
     *,
     title: str = HELP_HEADING,
-    color: h.Color = cfg.embed_default_color,
+    color: h.Color | None = None,
     is_admin: bool = False,
 ) -> None:
     """Render and send the paginated ``/help`` message.
@@ -404,6 +406,8 @@ async def render_help(
     Components V2 message (a single page when everything fits), attaching the
     paginator's controls.
     """
+    if color is None:
+        color = await settings.get_embed_default_color()
     categories = group_commands(ctx.client, is_admin=is_admin)
 
     if not categories:
@@ -506,6 +510,6 @@ def make_help_command(
                 )
                 return
 
-            await components.Paginator(paginate_detail(detail)).send(ctx)
+            await components.Paginator(await paginate_detail(detail)).send(ctx)
 
     return Help

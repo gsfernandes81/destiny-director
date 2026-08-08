@@ -21,7 +21,7 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import cfg
+from ...common import settings
 from ...common.utils import accumulate
 from .. import utils
 from ..nav import NavigatorView, NavPages
@@ -33,7 +33,9 @@ loader = lb.Loader()
 IGNORE = True
 
 # Followable channel from which to pull messages for the command and autoposts
-FOLLOWABLE_CHANNEL = 123456789  # cfg.followables[<Something Here>]
+FOLLOWABLE_CHANNEL = (
+    123456789  # settings.get_followable_channel_sync(<"something-here">)
+)
 
 # CODE FOR PAGES BELOW. CAN BE SAFELY REMOVED IF ONLY AUTOPOSTS ARE NEEDED
 
@@ -56,7 +58,7 @@ class Pages(NavPages):
         msg_proto = (
             accumulate([HMessage.from_message(m) for m in messages])
             .merge_content_into_embed()
-            .merge_attachements_into_embed(default_url=cfg.default_url)
+            .merge_attachements_into_embed(default_url=settings.get_default_url_sync())
         )
 
         return msg_proto

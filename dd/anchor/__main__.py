@@ -24,7 +24,7 @@ import lightbulb as lb
 
 import dd.anchor.extensions
 
-from ..common import cfg, utils
+from ..common import cfg, schemas, settings, utils
 from ..common.auth import owner_check_error_handler, owner_only
 from ..common.bot import CachedFetchBot
 from ..common.discord_logging import (
@@ -77,6 +77,11 @@ install_command_error_reporting(client)
 
 @bot.listen(h.StartingEvent)
 async def on_starting_event(_event: h.StartingEvent):
+    await schemas.wait_for_db()
+    # Before extensions import: a handful of them read a followable's channel id at
+    # module level (see dd.common.settings' docstring), so the DB-backed settings cache
+    # needs to be warm by the time load_extensions_strict imports them.
+    await settings.preload()
     await load_extensions_strict(client, dd.anchor.extensions)
     await client.start()
 

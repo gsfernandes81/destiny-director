@@ -72,7 +72,8 @@ def test_emit_carries_operation_and_reference_onto_alert_record():
     assert alert.reference == dl.reference_code(dl._record_identity(rec))
 
 
-def test_emit_stamps_a_monotonic_sequence_and_render_shows_it():
+@pytest.mark.asyncio
+async def test_emit_stamps_a_monotonic_sequence_and_render_shows_it():
     """Each emit gets the next ordinal (the authoritative order signal), and the ordinal
     is rendered into the alert header so it's visible in the channel."""
     handler = dl.DiscordLogHandler.__new__(dl.DiscordLogHandler)
@@ -87,7 +88,9 @@ def test_emit_stamps_a_monotonic_sequence_and_render_shows_it():
     handler.emit(_record("dd.error", logging.ERROR, "second"))
     assert [a.seq for a in queued] == [1, 2]  # strictly increasing in emit order
 
-    components = handler._render(queued[1], effective_level=logging.ERROR, ping=False)
+    components = await handler._render(
+        queued[1], effective_level=logging.ERROR, ping=False
+    )
     text = "\n".join(
         getattr(child, "content", "")
         for c in components

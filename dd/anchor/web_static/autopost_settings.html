@@ -20,6 +20,11 @@
          together (asset_links.test.js enforces it). Both are here for the post
          preview shown inside this page's modals. -->
     <link rel="stylesheet" href="/static/cv2_preview.css" />
+    <!-- Tom Select (vendored, window.TomSelect) backs the channel pickers below — same
+         widget and dark-theme override as weekly_reset_form.html; the override lives in
+         the <style> block after this <link> (not shared.css) so it stays after the
+         vendored light theme in cascade order — see that block's comment. -->
+    <link rel="stylesheet" href="/static/vendor/tom-select.min.css" />
     <style>
       /* Base/reset/theme lives in shared.css (linked above); only this page's own
          styles are inlined here. Palette mirrors control_panel.html. */
@@ -31,6 +36,12 @@
         overflow: hidden;
       }
       .group:hover { border-color: var(--border-hover); }
+      /* A general (non-feed) group's title — a feed group needs none, since its own
+         toggle row already names it (see autopost_settings.py's _wrap_group). */
+      .groupheader {
+        padding: .55rem .9rem .3rem; font-size: .78rem; font-weight: 600;
+        letter-spacing: .04em; text-transform: uppercase; color: var(--text-faint);
+      }
       .row {
         display: flex; align-items: center; justify-content: space-between; gap: 1rem;
         padding: .7rem .9rem;
@@ -41,6 +52,12 @@
       .row + .row { border-top: 1px solid #30333a; }
       .row.sub { padding-left: 1.7rem; background: var(--surface-2); }
       .row.sub .name { font-size: .88rem; }
+      /* Peers within a categorised group (Branding, Logging & Alerts, ...) render
+         "flat" — no indent, no smaller name — since none of them is a parent of the
+         others (see autopost_settings.py's _render_row docs). Zebra-striping every
+         other one on .flat-alt keeps the same two-tone rhythm .sub gives feed groups,
+         without implying a parent/child relationship that isn't there. */
+      .row.flat-alt { background: var(--surface-2); }
       .row .text { min-width: 0; }
       .row .name { font-size: .95rem; }
       /* Per-feed actions, inline on the row: one horizontal pair that wraps rather
@@ -87,6 +104,76 @@
         outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent);
       }
 
+      /* Colour setting: a native swatch + its hex text, side by side on the right (the
+         row stays the label-left/control-right shape, unlike .urlrow). Swatch styling
+         mirrors cv2_builder.css's .cv2b-row > input[type="color"] (the only other place
+         this app picks a colour) so the two pages agree. */
+      .colorpicker { display: flex; align-items: center; gap: .5rem; flex: none; }
+      .colorswatch {
+        width: 2.1rem; height: 1.9rem; padding: 0; flex: none;
+        border: 1px solid var(--border); border-radius: var(--radius-sm);
+        background: var(--surface-1);
+      }
+      .colorfield {
+        width: 7rem; box-sizing: border-box; padding: .45rem .6rem;
+        border: 1px solid var(--border); border-radius: var(--radius);
+        background: var(--surface-1); color: var(--text-1); font-size: .9rem;
+        font-family: monospace;
+      }
+      .colorfield:focus-visible {
+        outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent);
+      }
+
+      /* Alert-level setting: a plain native dropdown (a fixed 5-item enum needs no
+         search widget — Tom Select is reserved for the channel pickers below). */
+      .selectfield {
+        padding: .4rem .55rem; border: 1px solid var(--border); border-radius: var(--radius);
+        background: var(--surface-1); color: var(--text-1); font-size: .9rem;
+      }
+      .selectfield:focus-visible {
+        outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent);
+      }
+
+      /* Channel setting: Tom Select (see the script tag at the bottom) turns .channelfield
+         into a searchable single-item picker; the plain <select> beneath is only the
+         pre-JS fallback markup. min-width keeps it from collapsing to nothing next to a
+         long label on a narrow viewport, while still fitting beside it on desktop. */
+      .row.channelrow { flex-wrap: wrap; }
+      .channelfield { min-width: 14rem; flex: 1 1 14rem; }
+
+      /* Tom Select dark theme (overrides the vendored light stylesheet linked above).
+         Duplicated from weekly_reset_form.css rather than shared — that sheet loads
+         tom-select.min.css AFTER shared.css, so a shared copy would lose the cascade
+         (the vendored light theme, loaded later there, would win); see this page's own
+         <link> order instead, which puts the override after the vendored sheet already. */
+      .ts-wrapper { width: 100%; min-width: 0; }
+      .ts-wrapper.single .ts-control, .ts-wrapper.multi .ts-control,
+      .ts-wrapper.single.input-active .ts-control, .ts-wrapper.multi.input-active .ts-control,
+      .ts-wrapper.single.dropdown-active .ts-control, .ts-wrapper.multi.dropdown-active .ts-control {
+        background: var(--surface-3); color: var(--text-1);
+        border: 1px solid var(--border); border-radius: var(--radius-sm);
+        box-shadow: none; padding: .35rem .5rem;
+      }
+      .ts-control, .ts-control input, .ts-control input::placeholder { color: var(--text-1); }
+      .ts-control input {
+        background: transparent; color: var(--text-1); -webkit-text-fill-color: #e6e6e6;
+      }
+      .ts-control input::placeholder, .ts-control > .ts-placeholder { color: var(--text-muted); }
+      .ts-wrapper.focus .ts-control, .ts-control.focus { border-color: var(--accent); box-shadow: none; }
+      .ts-control input:focus-visible { outline: none; }
+      .ts-wrapper.disabled .ts-control { opacity: .55; }
+      .ts-dropdown {
+        background: var(--surface-2); color: var(--text-1);
+        border: 1px solid var(--border); border-radius: var(--radius-sm);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, .45); margin-top: .2rem; z-index: 30;
+      }
+      .ts-dropdown .option { padding: .4rem .55rem; }
+      .ts-dropdown .active { background: #2a2f37; color: #fff; }
+      .ts-dropdown .option.selected { color: var(--link); }
+      .ts-dropdown .no-results { color: var(--text-faint); padding: .4rem .55rem; }
+      .ts-wrapper .clear-button { color: var(--text-faint); opacity: .8; }
+      .ts-wrapper .clear-button:hover { color: var(--text-1); opacity: 1; }
+
       /* Toggle switch — a checkbox restyled as an iOS-style slider. The <input> stays a
          checkbox (visually hidden) so nothing about the save/read path changes. */
       .switch {
@@ -121,9 +208,13 @@
       <p class="nav"><a href="/" class="backlink">← Control panel</a></p>
       <h1>Autopost Settings</h1>
       <p class="muted">
-        Toggle whether anchor produces each feed. These are global, bot-wide switches —
-        they don't change which servers follow a feed. Changes take effect on the next
-        scheduled post.
+        Toggle whether anchor produces each feed, which channel each posts to, and
+        general bot settings (accent colours, the alerts/log channels, and the rest).
+        These are global, bot-wide switches — they don't change which servers follow a
+        feed. Most changes apply on the next scheduled post; a few — mainly a feed's
+        very first channel (going from unconfigured to configured) — only take effect
+        after a bot restart, since that also decides whether the feed's cron/command
+        registers at all.
       </p>
     </header>
     <main class="settings">
@@ -170,10 +261,13 @@
 
     <!-- shared.js (deferred) defines window.api; defer preserves order, so it is
          ready before autopost_settings.js runs. cv2_model must precede cv2_render,
-         which draws the post preview inside the modals above. -->
+         which draws the post preview inside the modals above. Tom Select (vendored, no
+         build step, same as weekly_reset_form.html) must precede autopost_settings.js,
+         which turns each .channelfield <select> into a picker with it. -->
     <script src="/static/cv2_model.js" defer></script>
     <script src="/static/cv2_render.js" defer></script>
     <script src="/static/shared.js" defer></script>
+    <script src="/static/vendor/tom-select.complete.min.js" defer></script>
     <script src="/static/autopost_settings.js" defer></script>
   </body>
 </html>

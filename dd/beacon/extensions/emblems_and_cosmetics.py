@@ -15,13 +15,13 @@
 
 import lightbulb as lb
 
-from ...common import cfg
+from ...common import settings
 from .autoposts import follow_control_command_maker
 
 loader = lb.Loader()
 
 # Followable channel from which to pull messages for the command and autoposts
-FOLLOWABLE_CHANNEL = cfg.followables["emblems_and_cosmetics"]
+FOLLOWABLE_CHANNEL = settings.get_followable_channel_sync("emblems_and_cosmetics")
 
 follow_control_command_maker(
     FOLLOWABLE_CHANNEL,

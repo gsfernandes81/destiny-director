@@ -34,7 +34,7 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import cfg, components, schemas
+from ...common import components, schemas, settings
 from ...common.bot import CachedFetchBot
 from ...common.utils import fetch_emoji_dict
 from ..autopost import Feed, register_feed
@@ -132,7 +132,7 @@ async def format_ada_vendor(
     # Components V2 container with a linked title over a divider, matching Eververse
     # (raw :emoji: tokens — resolved on the assembled message below).
     container = h.impl.ContainerComponentBuilder(
-        accent_color=h.Color(cfg.embed_default_color)
+        accent_color=await settings.get_embed_default_color()
     )
     container.add_text_display(ADA_TITLE + "\n" + _inventory_changes_line())
     container.add_separator(divider=True)
@@ -165,7 +165,7 @@ async def on_start_schedule_autoposts(
     async def autopost_ada():
         await xur.api_to_discord_announcer(
             bot,
-            channel_id=cfg.followables["ada"],
+            channel_id=await settings.get_followable_channel("ada"),
             check_enabled=True,
             enabled_check_coro=schemas.AutoPostSettings.get_ada_enabled,
             construct_message_coro=ada_message_constructor,
@@ -173,13 +173,11 @@ async def on_start_schedule_autoposts(
         )
 
 
-
-
 # Contribute this feed's producer wiring to the web feed page (Preview / Send now).
 register_feed(
     Feed(
         name="ada",
-        channel_id=cfg.followables["ada"],
+        channel_id=settings.get_followable_channel_sync("ada"),
         message_constructor_coro=ada_message_constructor,
         message_announcer_coro=xur.api_to_discord_announcer,
     )

@@ -58,7 +58,7 @@ import aiohttp.web
 import hikari as h
 import lightbulb as lb
 
-from ...common import cfg
+from ...common import cfg, settings
 from ...common.bot import CachedFetchBot
 from ...common.schemas import Cv2Draft
 from ...common.utils import fetch_emoji_dict
@@ -186,7 +186,7 @@ async def _handle_data(request: aiohttp.web.Request) -> aiohttp.web.Response:
             "action": draft.action,
             "nodes": draft.nodes or [],
             "emoji": await _emoji_map(),
-            "default_accent": int(cfg.embed_default_color),
+            "default_accent": int(await settings.get_embed_default_color()),
             "target_channel_mention": channel_mention,
             "published_message_link": published_link,
         }

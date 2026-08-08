@@ -21,7 +21,7 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import cfg
+from ...common import cfg, settings
 from ...common.utils import accumulate
 from .. import utils
 from ..nav import NavPages, make_navigator_command, setup_nav_pages
@@ -31,7 +31,7 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2025, 3, 20, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = cfg.followables["twab"]
+FOLLOWABLE_CHANNEL = settings.get_followable_channel_sync("twab")
 
 
 class TWIDPages(NavPages):
@@ -74,7 +74,9 @@ class TWIDPages(NavPages):
         msg.merge_content_into_embed(0)
 
         for embed in list(image_autoembeds_from_discord):
-            msg.merge_url_as_image_into_embed(embed.url, 0, default_url=cfg.default_url)
+            msg.merge_url_as_image_into_embed(
+                embed.url, 0, default_url=settings.get_default_url_sync()
+            )
 
         msg.remove_all_embed_thumbnails()
         msg.embeds = list(filter(lambda embed: embed.description, msg.embeds))

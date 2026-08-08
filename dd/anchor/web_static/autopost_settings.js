@@ -3,7 +3,8 @@
 // This file is part of "dd" henceforth referred to as "destiny-director".
 // Licensed under the GNU AGPL v3 or later; see the project LICENSE.
 
-// The autopost settings page: the save button, plus each feed row's two actions.
+// The autopost settings page: the save button, the colour/channel pickers, plus each
+// feed row's two actions.
 //
 // Preview and Send now replaced the `/<feed> show` and `send` slash commands. They live
 // on the row rather than a per-feed page — a feed has no state a page could show that
@@ -11,12 +12,89 @@
 // a list of toggles.
 //
 // Extracted from an inline <script> so `script-src 'self'` holds (see SECURITY_HEADERS
-// in dd/anchor/web.py). Loaded deferred after shared.js (window.api) and cv2_render.js.
+// in dd/anchor/web.py). Loaded deferred after shared.js (window.api), cv2_render.js and
+// Tom Select (window.TomSelect — see the vendored-widgets note by initChannelPickers).
 
 "use strict";
 
 document.addEventListener("DOMContentLoaded", () => {
   const byId = (id) => document.getElementById(id);
+
+  // --- colour pickers ----------------------------------------------------------------
+  //
+  // Each .colorrow carries a paired swatch (input[type=color], the visual picker) and
+  // text field (the actual data-slug input Save reads, and the only one a hand-typed
+  // hex reaches). They mirror each other on every change so either can drive the other.
+
+  document.querySelectorAll(".colorswatch").forEach((swatch) => {
+    const field = document.querySelector(
+      `.colorfield[data-slug="${swatch.dataset.for}"]`,
+    );
+    if (!field) return;
+    swatch.addEventListener("input", () => {
+      field.value = swatch.value;
+    });
+    field.addEventListener("input", () => {
+      if (/^#[0-9a-fA-F]{6}$/.test(field.value)) swatch.value = field.value;
+    });
+  });
+
+  // --- channel pickers -----------------------------------------------------------------
+  //
+  // Widgets: Tom Select (vendored, window.TomSelect, no build step — same widget and
+  // dark-theme override as weekly_reset_form.js) turns each .channelfield <select> into
+  // a searchable single-item picker, for exactly one item (never a multi-select) — the
+  // channel a feed/setting posts to. One fetch of /autopost_settings/channels supplies
+  // every field; a field's own data-scope then filters to the guild(s) it may pick from
+  // (a followable's own channel is Kyber-only; the log/alerts channels may be in Kyber
+  // or the control server), and data-announce-only filters to announcement channels —
+  // a followable's post channel must be one for Discord's native "Follow Channel" to
+  // work at all, unlike log_channel_id/alerts_channel_id, which the bot only ever sends
+  // to directly and so may be a plain text channel. A stored id the live fetch didn't
+  // return (the bot cannot see that channel right now, or it was deleted) is kept as a
+  // synthetic "unknown" option rather than silently dropped — mirrors
+  // weekly_reset_form.js's tsWeapon/tsSingle.
+  async function initChannelPickers() {
+    const fields = document.querySelectorAll("select.channelfield");
+    if (!fields.length) return;
+
+    let data;
+    try {
+      const res = await fetch("/autopost_settings/channels");
+      data = await res.json();
+    } catch (_) {
+      data = null;
+    }
+    const channels = (data && data.channels) || [];
+    const kyberId = data && data.kyberGuildId;
+    const controlId = data && data.controlGuildId;
+
+    fields.forEach((select) => {
+      const scope = select.dataset.scope;
+      const announceOnly = select.dataset.announceOnly === "true";
+      const allowedGuilds =
+        scope === "kyber_control" ? [kyberId, controlId] : [kyberId];
+      const options = channels
+        .filter((c) => allowedGuilds.includes(c.guildId))
+        .filter((c) => !announceOnly || c.announce)
+        .map((c) => ({ value: c.id, text: c.name }));
+
+      const current = select.value || "";
+      if (current && !options.some((o) => o.value === current)) {
+        options.unshift({ value: current, text: `Unknown channel (${current})` });
+      }
+
+      const ts = new TomSelect(select, {
+        options,
+        maxOptions: 200,
+        placeholder: "Search channels…",
+        plugins: ["clear_button"],
+        allowEmptyOption: true,
+      });
+      if (current) ts.setValue(current, true);
+    });
+  }
+  initChannelPickers();
 
   // --- save ------------------------------------------------------------------------
 
@@ -30,7 +108,12 @@ document.addEventListener("DOMContentLoaded", () => {
         settings[el.dataset.slug] = el.checked;
       });
     document
-      .querySelectorAll("input.urlfield[data-slug]")
+      .querySelectorAll("input.urlfield[data-slug], input.colorfield[data-slug]")
+      .forEach((el) => {
+        settings[el.dataset.slug] = el.value;
+      });
+    document
+      .querySelectorAll("select.selectfield[data-slug], select.channelfield[data-slug]")
       .forEach((el) => {
         settings[el.dataset.slug] = el.value;
       });

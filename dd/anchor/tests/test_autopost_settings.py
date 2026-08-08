@@ -20,16 +20,18 @@
 
 import asyncio
 import html
+import json
 import re
 import typing as t
 
 import aiohttp.web
+import hikari as h
 import pytest
 from sqlalchemy import delete
 
 from dd.anchor import autopost, web
 from dd.anchor.extensions import autopost_settings as aps
-from dd.common import schemas
+from dd.common import cfg, schemas, settings
 from dd.hmessage import HMessage
 
 pytestmark = pytest.mark.asyncio
@@ -48,6 +50,10 @@ def _clean_settings() -> t.Iterator[None]:
             await session.execute(delete(schemas.AutoPostSettings))
 
     asyncio.run(_clear())
+    # dd.common.settings caches rows across the whole process; without this a test can
+    # read another test's (now-deleted) values until the TTL happens to lapse.
+    settings.invalidate()
+    settings._cache.clear()
     yield
 
 
@@ -97,6 +103,84 @@ async def test_render_reflects_db_state() -> None:
     # One .group box per top-level feed; sub-toggles share their parent's box.
     assert html_out.count('class="group"') == sum(1 for s in aps._SETTINGS if not s.sub)
     assert aps._TOGGLES_PLACEHOLDER not in html_out
+
+
+@pytest.mark.integration
+async def test_render_shows_a_header_for_each_general_settings_category() -> None:
+    # Branding and Logging & Alerts are separate categories/boxes now, each with its own
+    # header — not one undifferentiated "general settings" blob, and not reusing the
+    # first row's own label as a fake group title.
+    html_out = await aps._render_html()
+
+    assert '<div class="groupheader">Branding</div>' in html_out
+    assert '<div class="groupheader">Logging &amp; Alerts</div>' in html_out
+    # A feed group gets no header — its toggle row already names it.
+    assert html_out.count('class="groupheader"') == len(
+        {s.category for s in aps._SETTINGS if s.category}
+    )
+
+
+@pytest.mark.integration
+async def test_render_category_rows_are_flat_peers_not_indented() -> None:
+    # embed_default_color/alert_min_level are sub=False only because something has to
+    # start the group box — under an explicit category header every setting in it is a
+    # peer, so none should get the ".sub" indented/dimmer treatment that would visually
+    # single one out as if it were that category's "parent" row.
+    html_out = await aps._render_html()
+    by_slug = {s.slug: s for s in aps._SETTINGS}
+
+    def _row_start(slug: str) -> str:
+        # The opening <div class="..."> is a short, fixed distance before the escaped
+        # label text (only the label-block's own wrapper divs sit between them).
+        label = html.escape(by_slug[slug].label)
+        idx = html_out.index(label)
+        return html_out[max(0, idx - 120) : idx]
+
+    for slug in (
+        "embed_default_color",
+        "embed_error_color",
+        "default_url",
+        "alert_min_level",
+        "disable_bad_channels",
+        "log_channel_id",
+    ):
+        assert 'class="row sub' not in _row_start(slug), (
+            f"{slug} row is unexpectedly indented"
+        )
+
+    # A genuine feed sub-setting is untouched — lost_sector_details really IS a
+    # refinement of lost_sector, so it keeps the indented/dimmer styling.
+    assert 'class="row sub' in _row_start("lost_sector_details")
+
+
+@pytest.mark.integration
+async def test_render_category_rows_zebra_stripe_without_indenting() -> None:
+    # A categorised group's rows are flat peers (see the test above), but they still
+    # need the same two-tone rhythm a feed group's .sub rows give it — just via
+    # alternating background (.flat-alt) rather than indent/dim, since no row here is a
+    # "child" of another.
+    html_out = await aps._render_html()
+    by_slug = {s.slug: s for s in aps._SETTINGS}
+
+    def _row_start(slug: str) -> str:
+        label = html.escape(by_slug[slug].label)
+        idx = html_out.index(label)
+        return html_out[max(0, idx - 120) : idx]
+
+    # Branding: default_accent(0), error_accent(1, alt), default_url(2).
+    assert 'class="row flat-alt' not in _row_start("embed_default_color")
+    assert 'class="row flat-alt' in _row_start("embed_error_color")
+    assert 'class="row flat-alt' not in _row_start("default_url")
+
+    # Logging & Alerts: alert_level(0), disable_bad_channels(1, alt),
+    # log_channel(2), alerts_channel(3, alt).
+    assert 'class="row flat-alt' not in _row_start("alert_min_level")
+    assert 'class="row flat-alt' in _row_start("disable_bad_channels")
+    assert 'class="row flat-alt' not in _row_start("log_channel_id")
+    assert 'class="row flat-alt' in _row_start("alerts_channel_id")
+
+    # A feed group never gets .flat-alt — it uses .sub, not zebra-striping.
+    assert 'class="row flat-alt' not in _row_start("lost_sector_details")
 
 
 @pytest.mark.integration
@@ -152,9 +236,9 @@ async def test_feed_rows_carry_both_actions_with_hover_cards(
     html_out = await aps._render_html()
 
     for action in ("preview", "send"):
-        assert (
-            f'data-action="{action}" data-slug="lost_sector"' in html_out
-        ), f"the {action} action is missing from the lost_sector row"
+        assert f'data-action="{action}" data-slug="lost_sector"' in html_out, (
+            f"the {action} action is missing from the lost_sector row"
+        )
     # Explanations are hover cards, not paragraphs — two labelled buttons do not need
     # two blocks of copy on a page that is otherwise a dense list.
     assert html_out.count("title=") >= 2
@@ -306,6 +390,300 @@ async def test_handle_save_rejects_non_object_settings() -> None:
     resp = await aps._handle_save(_as_request(_FakeRequest({"settings": "nope"})))
 
     assert resp.status == 400
+
+
+# --- color setting (embed_default_color) -------------------------------------------
+
+
+@pytest.mark.integration
+async def test_render_shows_color_field_with_value() -> None:
+    await schemas.AutoPostSettings.set_value("embed_default_color", "#EC42A5")
+
+    html_out = await aps._render_html()
+
+    assert (
+        'class="colorfield no-focus-ring" data-slug="embed_default_color"' in html_out
+    )
+    assert 'value="#EC42A5"' in html_out
+    # The paired swatch carries the same value so it isn't drawn black on first load.
+    assert 'data-for="embed_default_color" value="#EC42A5"' in html_out
+
+
+@pytest.mark.integration
+async def test_render_blank_color_swatch_falls_back_to_black() -> None:
+    # No row saved yet: the text field stays blank, but the swatch (a native
+    # input[type=color], which cannot be blank) shows black rather than nothing.
+    html_out = await aps._render_html()
+
+    assert 'data-for="embed_default_color" value="#000000"' in html_out
+    assert re.search(
+        r'class="colorfield no-focus-ring" data-slug="embed_default_color" value=""',
+        html_out,
+    )
+
+
+@pytest.mark.integration
+async def test_handle_save_persists_color_value() -> None:
+    req = _FakeRequest({"settings": {"embed_error_color": "#FF0000"}})
+
+    resp = await aps._handle_save(_as_request(req))
+
+    assert resp.status == 200
+    assert await schemas.AutoPostSettings.get_value("embed_error_color") == "#FF0000"
+    # The save invalidates dd.common.settings' cache, so the new value is live at once.
+    assert await settings.get_embed_error_color() == h.Color(0xFF0000)
+
+
+@pytest.mark.integration
+async def test_handle_save_rejects_malformed_color() -> None:
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"embed_default_color": "pink"}}))
+    )
+
+    assert resp.status == 400
+    assert await schemas.AutoPostSettings.get_value("embed_default_color") is None
+
+
+@pytest.mark.integration
+async def test_handle_save_blank_color_clears_value() -> None:
+    await schemas.AutoPostSettings.set_value("embed_default_color", "#EC42A5")
+
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"embed_default_color": "  "}}))
+    )
+
+    assert resp.status == 200
+    assert await schemas.AutoPostSettings.get_value("embed_default_color") is None
+
+
+# --- select setting (alert_min_level) -----------------------------------------------
+
+
+@pytest.mark.integration
+async def test_render_shows_select_field_with_current_option_selected() -> None:
+    await schemas.AutoPostSettings.set_value("alert_min_level", "WARNING")
+
+    html_out = await aps._render_html()
+
+    assert 'class="selectfield" data-slug="alert_min_level"' in html_out
+    assert '<option value="WARNING" selected>WARNING</option>' in html_out
+    assert '<option value="ERROR">ERROR</option>' in html_out  # not selected
+
+
+@pytest.mark.integration
+async def test_render_select_defaults_to_settings_default_when_unset() -> None:
+    # A bare <select> always shows its first <option> as "selected" even when none is
+    # marked so — if no row is saved and nothing here corrects for that, the page would
+    # show "DEBUG" (alphabetically first) selected while the bot actually applies
+    # dd.common.settings' real default (ERROR). Caught by driving this page in a real
+    # browser: the DOM's default selection doesn't reduce to a string match in html_out.
+    html_out = await aps._render_html()
+
+    assert '<option value="ERROR" selected>ERROR</option>' in html_out
+    assert await settings.get_alert_min_level() == "ERROR"  # the two must agree
+
+
+@pytest.mark.integration
+async def test_handle_save_persists_select_value() -> None:
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"alert_min_level": "CRITICAL"}}))
+    )
+
+    assert resp.status == 200
+    assert await schemas.AutoPostSettings.get_value("alert_min_level") == "CRITICAL"
+
+
+@pytest.mark.integration
+async def test_handle_save_rejects_unknown_select_option() -> None:
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"alert_min_level": "VERBOSE"}}))
+    )
+
+    assert resp.status == 400
+    assert await schemas.AutoPostSettings.get_value("alert_min_level") is None
+
+
+# --- channel setting (followable + log/alerts channels) -----------------------------
+
+
+@pytest.mark.integration
+async def test_render_shows_channel_field_with_current_option() -> None:
+    await schemas.AutoPostSettings.set_value("lost_sector_channel", "123456789")
+
+    html_out = await aps._render_html()
+
+    assert 'class="channelfield" data-slug="lost_sector_channel"' in html_out
+    assert 'data-scope="kyber"' in html_out
+    assert '<option value="123456789" selected>123456789</option>' in html_out
+
+
+@pytest.mark.integration
+async def test_render_log_and_alerts_channel_scope_kyber_and_control() -> None:
+    html_out = await aps._render_html()
+
+    for slug in ("log_channel_id", "alerts_channel_id"):
+        assert f'data-slug="{slug}" data-scope="kyber_control"' in html_out
+
+
+@pytest.mark.integration
+async def test_render_followable_channels_are_announce_only_log_alerts_are_not() -> (
+    None
+):
+    # A followable channel is FOLLOWED by other servers (MirroredChannel), which Discord
+    # only allows from an announcement channel — a plain text channel can't be followed
+    # at all. log_channel_id/alerts_channel_id are never followed (the bot just sends
+    # there), so any postable channel is fine for those.
+    html_out = await aps._render_html()
+
+    assert 'data-slug="lost_sector_channel"' in html_out
+    assert (
+        'data-scope="kyber" data-announce-only="true"'
+        in html_out.split('data-slug="lost_sector_channel"')[1][:100]
+    )
+    for slug in ("log_channel_id", "alerts_channel_id"):
+        assert (
+            'data-scope="kyber_control" data-announce-only="false"'
+            in html_out.split(f'data-slug="{slug}"')[1][:100]
+        )
+
+
+@pytest.mark.integration
+async def test_handle_save_persists_channel_value() -> None:
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"xur_channel": "999"}}))
+    )
+
+    assert resp.status == 200
+    assert await schemas.AutoPostSettings.get_value("xur_channel") == "999"
+    assert await settings.get_followable_channel("xur") == 999
+
+
+@pytest.mark.integration
+async def test_handle_save_blank_channel_stores_zero_not_null(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Unlike a url/color row, a cleared channel must store "0", not NULL — NULL would
+    # fall through to the FOLLOWABLES env-var seed (see
+    # settings.get_followable_channel), so an operator explicitly clearing a channel
+    # would not see the feed go dormant.
+    monkeypatch.setattr(cfg, "followables", {"xur": 42})
+    await schemas.AutoPostSettings.set_value("xur_channel", "999")
+
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"xur_channel": ""}}))
+    )
+
+    assert resp.status == 200
+    assert await schemas.AutoPostSettings.get_value("xur_channel") == "0"
+    assert await settings.get_followable_channel("xur") == 0
+
+
+@pytest.mark.integration
+async def test_handle_save_rejects_non_numeric_channel() -> None:
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"xur_channel": "not-a-snowflake"}}))
+    )
+
+    assert resp.status == 400
+    assert await schemas.AutoPostSettings.get_value("xur_channel") is None
+
+
+# --- /autopost_settings/channels ----------------------------------------------------
+
+
+class _FakeChannel:
+    def __init__(self, channel_id: int, name: str, kind: h.ChannelType) -> None:
+        self.id = channel_id
+        self.name = name
+        self.type = kind
+
+
+class _FakeRest:
+    def __init__(self, by_guild: dict[int, list[_FakeChannel]]) -> None:
+        self._by_guild = by_guild
+
+    async def fetch_guild_channels(self, guild_id: int) -> list[_FakeChannel]:
+        return self._by_guild.get(guild_id, [])
+
+
+class _FakeBot:
+    def __init__(self, by_guild: dict[int, list[_FakeChannel]]) -> None:
+        self.rest = _FakeRest(by_guild)
+
+
+@pytest.fixture
+def _guild_ids(monkeypatch: pytest.MonkeyPatch) -> tuple[int, int]:
+    kyber, control = 111, 222
+    monkeypatch.setattr(cfg, "kyber_discord_server_id", kyber)
+    monkeypatch.setattr(cfg, "control_discord_server_id", control)
+    return kyber, control
+
+
+async def test_handle_channels_lists_postable_channels_from_both_guilds(
+    monkeypatch: pytest.MonkeyPatch, _guild_ids: tuple[int, int]
+) -> None:
+    kyber, control = _guild_ids
+    monkeypatch.setattr(
+        aps,
+        "_bot",
+        _FakeBot(
+            {
+                kyber: [
+                    _FakeChannel(1, "lost-sector", h.ChannelType.GUILD_TEXT),
+                    _FakeChannel(2, "announcements", h.ChannelType.GUILD_NEWS),
+                    _FakeChannel(3, "voice-chat", h.ChannelType.GUILD_VOICE),
+                ],
+                control: [_FakeChannel(4, "mod-log", h.ChannelType.GUILD_TEXT)],
+            }
+        ),
+    )
+
+    resp = await aps._handle_channels(_as_request(_FakeRequest(None)))
+    payload = t.cast(dict, json.loads(resp.text or ""))
+
+    ids = {c["id"] for c in payload["channels"]}
+    assert ids == {"1", "2", "4"}  # the voice channel is filtered out
+    assert payload["kyberGuildId"] == str(kyber)
+    assert payload["controlGuildId"] == str(control)
+    by_id = {c["id"]: c for c in payload["channels"]}
+    assert by_id["1"]["name"] == "#lost-sector"
+    assert by_id["1"]["guildId"] == str(kyber)
+    assert by_id["4"]["guildId"] == str(control)
+    # A plain text channel is tagged non-announce; a NEWS channel is announce=True — the
+    # client filters followable pickers to announce-only (Discord's "Follow Channel"
+    # requires it), so this flag must be correct, not just present.
+    assert by_id["1"]["announce"] is False
+    assert by_id["2"]["announce"] is True
+
+
+async def test_handle_channels_survives_an_unreachable_guild(
+    monkeypatch: pytest.MonkeyPatch, _guild_ids: tuple[int, int]
+) -> None:
+    kyber, _control = _guild_ids
+
+    class _RaisingRest:
+        async def fetch_guild_channels(self, _guild_id: int) -> list[_FakeChannel]:
+            raise RuntimeError("not in guild")
+
+    class _PartialBot:
+        rest = _RaisingRest()
+
+    monkeypatch.setattr(aps, "_bot", _PartialBot())
+
+    resp = await aps._handle_channels(_as_request(_FakeRequest(None)))
+    payload = t.cast(dict, json.loads(resp.text or ""))
+
+    assert payload["channels"] == []
+
+
+async def test_handle_channels_before_bot_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(aps, "_bot", None)
+
+    resp = await aps._handle_channels(_as_request(_FakeRequest(None)))
+
+    assert resp.status == 503
 
 
 # --- homepage card ----------------------------------------------------------------

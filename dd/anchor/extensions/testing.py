@@ -33,7 +33,7 @@ import typing as t
 import hikari as h
 import lightbulb as lb
 
-from ...common import cfg, components, utils
+from ...common import cfg, components, settings, utils
 from ...common.bot import CachedFetchBot
 
 loader = lb.Loader()
@@ -141,7 +141,7 @@ class OverflowAlert(
         )
 
         container = h.impl.ContainerComponentBuilder(
-            accent_color=h.Color(cfg.embed_default_color)
+            accent_color=await settings.get_embed_default_color()
         )
         container.add_text_display(description)
 

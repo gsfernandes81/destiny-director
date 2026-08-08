@@ -44,7 +44,7 @@ from pathlib import Path
 import aiohttp.web
 import lightbulb as lb
 
-from ...common import cfg, schemas
+from ...common import schemas, settings
 from .. import web
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ async def _collect_data() -> dict:
             session=session
         )
         current: list[dict] = []
-        for feed, src_id in cfg.followables.items():
+        for feed, src_id in (await settings.get_followables()).items():
             follows = await schemas.MirroredChannel.count_dests(
                 src_id, legacy_only=False, session=session
             )

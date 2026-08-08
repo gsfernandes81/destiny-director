@@ -24,7 +24,8 @@ pipeline, built on :mod:`dd.anchor.hybrid_post_core`:
 2. The team fills it — the featured maps and the bonus focus pool — through the
    owner-authenticated **web form** (``/trials``; ``/trials create`` links to it). Auth
    is enforced centrally by the Discord-OAuth middleware in ``web_auth.py``.
-3. On publish the assembled post is crossposted to :data:`cfg.followables["trials"]`;
+3. On publish the assembled post is crossposted to the ``trials`` followable channel
+   (see :mod:`dd.common.settings`);
    beacon mirrors it to followers as usual.
 
 The Trials post is effectively **fully manual**: the Bungie API does not expose the
@@ -47,7 +48,7 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import cfg, rotation_schema, schemas
+from ...common import rotation_schema, schemas, settings
 from ...common.bot import CachedFetchBot
 from ...common.components import (
     finalize_cv2_post,
@@ -431,8 +432,10 @@ def validate_post(ctx: TrialsContext) -> list[str]:
         )
     if ctx.image_url and not ctx.image_url.startswith(("http://", "https://")):
         problems.append("Image URL must start with http:// or https://.")
-    if "trials" not in cfg.followables:
-        problems.append("No 'trials' entry in FOLLOWABLES — nowhere to publish.")
+    if not settings.get_followable_channel_sync("trials"):
+        problems.append(
+            "No 'trials' channel configured (Autopost Settings) — nowhere to publish."
+        )
     return problems
 
 
@@ -576,7 +579,7 @@ async def _build_bootstrap(draft: TrialsContext, meta: DraftMeta) -> dict[str, t
         # emoji name -> guild emoji URL, for the weapon-type icons on the cards.
         "emoji_urls": await _card_emoji_urls(loot_sets, draft),
         "default_image_url": config.default_image_url or "",
-        "accent_color": str(cfg.embed_default_color),
+        "accent_color": str(await settings.get_embed_default_color()),
         # Whether a post already exists *for the current period* (Trials may skip a
         # week; False is a normal "no Trials post yet" state). Drives which action
         # buttons show: Create-* when there's none, Edit/Delete when there is.
@@ -714,7 +717,7 @@ web.register_card(
 async def _on_started(
     event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED
 ) -> None:
-    if not cfg.followables.get("trials"):
+    if not await settings.get_followable_channel("trials"):
         return
 
     # Stash the live bot so the web form's routes can reach the REST client.
