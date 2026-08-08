@@ -13,7 +13,6 @@
 # You should have received a copy of the GNU Affero General Public License along with
 # destiny-director. If not, see <https://www.gnu.org/licenses/>.
 
-import json
 import logging
 import ssl
 import typing as t
@@ -167,14 +166,6 @@ discord_token_beacon = _getenv("DISCORD_TOKEN_BEACON", default="")
 control_discord_server_id = int(_getenv("CONTROL_DISCORD_SERVER_ID", "-1"))
 kyber_discord_server_id = _getenv("KYBER_DISCORD_SERVER_ID", default=-1)
 
-# Followable (anchor-posted) channel ids, keyed by feed slug. This is now a DB-editable
-# seed rather than the live source of truth: dd.common.settings reads it only as the
-# fallback for a feed with no AutoPostSettings row yet (fresh install, or a feed nobody
-# has touched on the settings page). Once a feed's channel is set from the Autopost
-# Settings web page, the DB row wins from then on, on every future read, in every
-# process. Still required at import time by a handful of extensions (see settings.py's
-# docstring), which is why this stays a plain synchronous constant.
-followables: dict[str, int] = json.loads(_getenv("FOLLOWABLES", "{}"), parse_int=int)
 # Seconds a paginator waits for interaction before timing out. Baked in — prod ran
 # NAVIGATOR_TIMEOUT=900, never per-deploy overridden.
 navigator_timeout = 900

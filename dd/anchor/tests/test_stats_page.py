@@ -89,7 +89,7 @@ async def test_data_endpoint_returns_seeded_rows() -> None:
     assert [today.isoformat(), "xur", "follow", 9] in payload["autoposts"]
     # Snowflake id survives as a string (JS-safe), paired with its population.
     assert ["123456789012345678", 5000] in payload["populations"]
-    # current is always a list (empty here — cfg.followables is empty in tests).
+    # current is always a list (empty here — no followable has a DB row in tests).
     assert isinstance(payload["current"], list)
 
 

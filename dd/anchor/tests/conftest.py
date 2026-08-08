@@ -15,13 +15,14 @@
 
 import asyncio
 import os
+import time
 from pathlib import Path
 
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
-from dd.common import schemas
+from dd.common import schemas, settings
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -56,3 +57,25 @@ def _test_db(tmp_path_factory: pytest.TempPathFactory):
     if engine is not None:
         asyncio.run(engine.dispose())
         schemas.reset_db()
+
+
+@pytest.fixture
+def configured_followables(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    """Give every followable a channel id, as a configured deploy has.
+
+    Followable channels come from ``auto_post_settings`` rows and nowhere else — there
+    is no env-var fallback behind them (see ``dd.common.settings``' docstring) — so a
+    test whose subject is "what a producer does once its channel IS set" has to say so.
+    Writes straight into the settings cache and marks it fresh, so both the sync and
+    async getters resolve without a DB round trip.
+    """
+    ids = {
+        feed: 900_000 + index
+        for index, feed in enumerate(settings.FOLLOWABLE_SLUGS, start=1)
+    }
+    for feed, channel_id in ids.items():
+        monkeypatch.setitem(
+            settings._cache, settings.FOLLOWABLE_SLUGS[feed], (None, str(channel_id))
+        )
+    monkeypatch.setattr(settings, "_loaded_at", time.monotonic())
+    return ids

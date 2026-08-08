@@ -852,11 +852,17 @@ def _bot(fake: _FakeBot) -> wr.CachedFetchBot:
 
 
 @pytest.fixture
-def fake_publish_env(monkeypatch: pytest.MonkeyPatch):
+def fake_publish_env(
+    monkeypatch: pytest.MonkeyPatch, configured_followables: dict[str, int]
+):
     """Stub the render + send/crosspost primitives so lifecycle branches are testable.
 
     ``format_weekly_reset`` returns a dummy component bundle; ``send_message`` /
     ``crosspost_message_with_retries`` record their calls instead of hitting Discord.
+
+    Depends on ``configured_followables`` because publishing needs somewhere to
+    publish: a followable's channel comes from its DB row alone now, so an unconfigured
+    feed fails ``spec.validate`` before any of these stubs is reached.
     """
     sent: list[dict[str, t.Any]] = []
     crossposted: list[tuple[t.Any, int]] = []

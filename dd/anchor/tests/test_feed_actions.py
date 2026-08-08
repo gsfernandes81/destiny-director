@@ -180,11 +180,11 @@ async def test_send_honours_publish_false() -> None:
 
 @pytest.mark.parametrize("dormant_channel", [None, 0])
 async def test_send_refuses_a_dormant_feed(dormant_channel: int | None) -> None:
-    # 0 is the shape production actually produces: an unset followable ships as
-    # `"portal_ops": 0` in FOLLOWABLES, so `cfg.followables.get(...)` returns 0, not
-    # None. A guard written as `is None` let Send answer "started" and announce into
-    # channel 0 — failing where only the log could see it. register_feed normalises the
-    # two, and this covers both spellings arriving at the handler.
+    # 0 is the shape production actually produces: a followable with no DB row reads
+    # back as 0 from settings.get_followable_channel, not None. A guard written as
+    # `is None` let Send answer "started" and announce into channel 0 — failing where
+    # only the log could see it. register_feed normalises the two, and this covers both
+    # spellings arriving at the handler.
     called = False
 
     async def _announcer(**_kwargs: t.Any) -> None:

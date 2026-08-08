@@ -135,7 +135,7 @@ async def test_bot_info_reports_configured_channels() -> None:
 
 
 async def test_bot_info_resolves_channel_names(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, configured_followables: dict[str, int]
 ) -> None:
     # A raw snowflake tells the reader nothing; the point of the panel is the name.
     class _Channel:
@@ -154,7 +154,7 @@ async def test_bot_info_resolves_channel_names(
 
 
 async def test_bot_info_survives_an_unresolvable_channel(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, configured_followables: dict[str, int]
 ) -> None:
     # Not in the guild, channel deleted, bot still starting — none of which should cost
     # the panel its whole config dump.

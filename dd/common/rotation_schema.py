@@ -740,7 +740,7 @@ def legacy_default_doc(post_type: str) -> dict[str, t.Any]:
     }
 
 
-# Registry keyed by post-type slug (matches AutoPostSettings.name / cfg.followables).
+# Registry keyed by post-type slug (matches AutoPostSettings.name / feed slug).
 ROTATION_SCHEMAS: dict[str, dict[str, t.Any]] = {
     "lost_sector": LOST_SECTOR_SCHEMA,
     "xur_location": XUR_LOCATION_SCHEMA,

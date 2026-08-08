@@ -250,7 +250,9 @@ def test_validate_flags_empty_post() -> None:
     assert any("empty" in p for p in problems)
 
 
-def test_validate_ok_with_a_single_map() -> None:
+def test_validate_ok_with_a_single_map(configured_followables: dict[str, int]) -> None:
+    # configured_followables: "nowhere to publish" is itself a validation problem now
+    # that a followable's channel comes from its DB row alone.
     assert (
         tr.validate_post(tr.TrialsContext(reset_ts=1, featured_maps=["Burnout"])) == []
     )
@@ -340,12 +342,18 @@ def _bot(fake: _FakeBot) -> hpc.CachedFetchBot:
 
 
 @pytest.fixture
-def fake_publish_env(monkeypatch: pytest.MonkeyPatch):
+def fake_publish_env(
+    monkeypatch: pytest.MonkeyPatch, configured_followables: dict[str, int]
+):
     """Stub render + send/crosspost so the shared publish branches are testable.
 
     ``format_trials`` (late-bound by the spec) returns a dummy bundle; the ``utils``
     send/crosspost primitives — shared with the core via one module object — record
     calls instead of hitting Discord.
+
+    Depends on ``configured_followables`` because publishing needs somewhere to
+    publish: a followable's channel comes from its DB row alone now, so an unconfigured
+    feed fails ``spec.validate`` before any of these stubs is reached.
     """
     sent: list[dict[str, t.Any]] = []
     crossposted: list[tuple[t.Any, int]] = []

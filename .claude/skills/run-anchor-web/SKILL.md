@@ -38,12 +38,6 @@ SHEETS_CLIENT_EMAIL=ci@example.com
 SHEETS_CLIENT_ID=ci
 SHEETS_CLIENT_X509_CERT_URL=https://example.com/cert
 SHEETS_LS_URL=https://example.com/ls
-LOST_SECTOR_GIF_URL=https://example.com/ls.gif
-XUR_IMAGE_URL=https://example.com/xur.png
-# The JSON value MUST be single-quoted: this is a dotenv file, not a shell
-# env block, and unquoted `{"ada":1,…}` reaches cfg with the quotes stripped
-# and dies in json.loads. CI's YAML does not need this; a .env does.
-FOLLOWABLES='{"ada":1,"emblems_and_cosmetics":2,"eververse":3,"free_games":4,"iron_banner":6,"lost_sector":7,"trials":8,"twab":9,"weekly_nightfall":10,"weekly_reset":11,"xur":12}'
 EOF
 ```
 
@@ -170,7 +164,6 @@ they skip. The rest of the suite does not need a browser.
 | Symptom | Fix |
 |---|---|
 | `ValueError: Environment variable '…' not found.` | No `.env`, or you ran without `--env-file .env`. See Prerequisites. |
-| `json.decoder.JSONDecodeError: Expecting property name…` | `FOLLOWABLES` in `.env` isn't single-quoted. |
 | `RuntimeError: Anchor web app has no middleware registered` | You didn't import `web_auth`. |
 | Every page 302s to `discord.com/oauth2` | A dev-bypass gate isn't met — most often `PUBLIC_BASE_URL` or `RAILWAY_PUBLIC_DOMAIN` is set in your environment. |
 | `TimeoutError: waiting for locator(...)` on the builder | You're on `file://`, or the selector is a class — use `[data-a="publish"]`. |

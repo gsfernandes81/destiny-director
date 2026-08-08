@@ -33,8 +33,8 @@ class Feed(t.NamedTuple):
     and stats (see ``plans/anchor_web_ia.md`` §1), so a feed page URL lines up with
     every other surface.
 
-    ``channel_id`` is ``None`` for a *dormant* feed: one whose followable is absent from
-    this environment's ``FOLLOWABLES`` (portal_ops, iron_banner). Such a feed still
+    ``channel_id`` is ``None`` for a *dormant* feed: one whose followable channel has
+    not been set on the Autopost Settings page yet. Such a feed still
     registers and still previews — construction needs no channel — but cannot be sent.
     """
 

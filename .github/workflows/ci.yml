@@ -24,12 +24,6 @@ jobs:
       SHEETS_CLIENT_ID: "ci"
       SHEETS_CLIENT_X509_CERT_URL: "https://example.com/cert"
       SHEETS_LS_URL: "https://example.com/ls"
-      LOST_SECTOR_GIF_URL: "https://example.com/ls.gif"
-      XUR_IMAGE_URL: "https://example.com/xur.png"
-      # Extensions read channel IDs from cfg.followables at *import* time, so the
-      # extension smoke tests (test_extension_loading.py) need every followable key
-      # present. Dummy IDs — the bot is never started, so no channel is ever fetched.
-      FOLLOWABLES: '{"ada":1,"emblems_and_cosmetics":2,"eververse":3,"free_games":4,"iron_banner":6,"lost_sector":7,"trials":8,"twab":9,"weekly_nightfall":10,"weekly_reset":11,"xur":12}'
     steps:
       - uses: actions/checkout@v7
 
@@ -123,9 +117,6 @@ jobs:
       SHEETS_CLIENT_ID: "ci"
       SHEETS_CLIENT_X509_CERT_URL: "https://example.com/cert"
       SHEETS_LS_URL: "https://example.com/ls"
-      LOST_SECTOR_GIF_URL: "https://example.com/ls.gif"
-      XUR_IMAGE_URL: "https://example.com/xur.png"
-      FOLLOWABLES: '{"ada":1,"emblems_and_cosmetics":2,"eververse":3,"free_games":4,"iron_banner":6,"lost_sector":7,"trials":8,"twab":9,"weekly_nightfall":10,"weekly_reset":11,"xur":12}'
     steps:
       - uses: actions/checkout@v7
 

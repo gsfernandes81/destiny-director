@@ -26,9 +26,12 @@ separate:
 - Every setting :mod:`dd.common.settings` resolves — colors, the default link URL, the
   alert level, the log/alerts channels, ``disable_bad_channels``, and every followable's
   post channel. These used to be env vars (``EMBED_DEFAULT_COLOR``, ``FOLLOWABLES``,
-  ...) that needed a redeploy to change; they are the same ``auto_post_settings`` table
-  rows, just not tied to a feed toggle. A followable with an existing feed toggle above
-  gets its channel field folded into that feed's group; the rest (beacon-only feeds with
+  ...) that needed a redeploy to change; they are now the same ``auto_post_settings``
+  table rows, just not tied to a feed toggle — and this page is their ONLY writer: no
+  env fallback and no seeding path exists behind it, so every value in the DB got there
+  through the validation in :func:`_channel_problem` / :data:`_VALIDATORS`. A followable
+  with an existing feed toggle above gets its channel field folded into that feed's
+  group; the rest (beacon-only feeds with
   no toggle — twab, trials, weekly_reset, weekly_nightfall, free_games,
   emblems_and_cosmetics) get their own single-row group.
 
@@ -106,10 +109,9 @@ class _Setting(t.NamedTuple):
     - ``"color"`` — a colour swatch + hex text pair, ``value`` as ``"#RRGGBB"``.
     - ``"select"`` — a native dropdown over ``options``, ``value`` as the chosen string.
     - ``"channel"`` — a searchable channel picker (see autopost_settings.js), ``value``
-      as ``str(channel_id)`` (``"0"`` for "none configured" — never NULL, unlike a
-      cleared url/color row, so an explicit clear reads as *dormant* rather than falling
-      through to the ``FOLLOWABLES`` env-var seed — see
-      ``dd.common.settings.get_followable_channel``). ``channel_scope`` picks which
+      as ``str(channel_id)`` (``"0"`` for "none configured" — an explicit clear stores
+      "0" rather than NULL, so a cleared channel reads back as *dormant* rather than as
+      "never set"). ``channel_scope`` picks which
       guild(s) the picker offers: ``"kyber"`` (where every followable posts) or
       ``"kyber_control"`` (log/alerts channels, which could be in either).
     """
@@ -374,6 +376,12 @@ _URL_SLUGS = frozenset(s.slug for s in _SETTINGS if s.kind == "url")
 _COLOR_SLUGS = frozenset(s.slug for s in _SETTINGS if s.kind == "color")
 _SELECT_OPTIONS = {s.slug: s.options for s in _SETTINGS if s.kind == "select"}
 _CHANNEL_SLUGS = frozenset(s.slug for s in _SETTINGS if s.kind == "channel")
+# Every channel setting by slug, so the save gate can enforce that setting's OWN
+# eligibility rules (announce_only, channel_scope) rather than trusting the browser to
+# have offered only eligible channels — see _channel_problem.
+_CHANNEL_SETTINGS: dict[str, _Setting] = {
+    s.slug: s for s in _SETTINGS if s.kind == "channel"
+}
 
 
 # One validator per non-toggle kind (a toggle just needs bool(), handled inline in
@@ -562,38 +570,20 @@ def _render_row(
     )
 
 
-# Reverse of dd.common.settings.FOLLOWABLE_SLUGS (DB column name -> feed), so a
-# followable's channel row can be resolved through the SAME fallback its producer
-# actually uses (see _current_state below).
-_FOLLOWABLE_SLUG_TO_FEED: dict[str, str] = {
-    slug: feed for feed, slug in dd_settings.FOLLOWABLE_SLUGS.items()
-}
-
-
-async def _current_state(
+def _current_state(
     setting: _Setting, rows: dict[str, tuple[bool | None, str | None]]
 ) -> bool | str | None:
     """``setting``'s current value, from a bulk ``AutoPostSettings.get_all_rows()``
-    fetch rather than one query per setting (``rows``, one dict for the whole page)."""
+    fetch rather than one query per setting (``rows``, one dict for the whole page).
+
+    The row IS the value for every kind, followable channels included: there is no
+    env-var fallback behind them any more (see dd.common.settings' docstring), so this
+    page and the producers reading through dd.common.settings resolve every setting
+    from exactly the same place.
+    """
     enabled, value = rows.get(setting.slug, (None, None))
     if setting.kind == "toggle":
         return bool(enabled)
-    feed = (
-        _FOLLOWABLE_SLUG_TO_FEED.get(setting.slug)
-        if setting.kind == "channel"
-        else None
-    )
-    if feed is not None:
-        # A followable's channel is NOT just its DB row — get_followable_channel also
-        # falls back to cfg.followables (the old env var) when nothing has been saved
-        # yet. Reading the DB row directly here would show an actively-posting,
-        # not-yet-seeded feed as "— none configured —"; Save then resubmits every
-        # field on the page (see autopost_settings.js), so that blank would get
-        # written back as an explicit "0" — permanently overriding the env fallback
-        # for a feed nobody actually meant to touch. (Goes through dd_settings' own
-        # cache rather than ``rows``, since that's the one place the env fallback
-        # lives.)
-        return str(await dd_settings.get_followable_channel(feed))
     return value
 
 
@@ -629,7 +619,7 @@ async def _render_html() -> str:
     current_category = ""
     rows = await schemas.AutoPostSettings.get_all_rows()
     for setting in _SETTINGS:
-        state = await _current_state(setting, rows)
+        state = _current_state(setting, rows)
         if setting.sub:
             current.append((setting, state))
         else:
@@ -665,19 +655,39 @@ _REQUIRED_CHANNEL_PERMS: tuple[tuple[h.Permissions, str], ...] = (
 )
 
 
-async def _channel_permission_problem(channel_id: int) -> str | None:
-    """``None`` if the bot can fully post (view/send/embed/external-emoji) in
-    ``channel_id``; otherwise a human-readable reason to reject the save for.
+def _allowed_guild_ids(setting: _Setting) -> set[int]:
+    """The guild(s) ``setting``'s picker offers — and therefore the only guilds a saved
+    channel for it may live in. Mirrors autopost_settings.js's ``data-scope`` filter
+    and _handle_channels' own guild list; see _channel_problem on why the server
+    re-derives this rather than trusting the client's."""
+    guild_ids = {cfg.kyber_discord_server_id}
+    if setting.channel_scope == "kyber_control":
+        guild_ids.add(cfg.control_discord_server_id)
+    return {int(g) for g in guild_ids if g and g != -1}
 
-    Fails CLOSED — rejects the save — on anything short of a confirmed "yes, the bot
-    can post here": the bot not started yet, an unresolvable permission-cache lookup,
-    or an unexpected REST hiccup all reject, same as a confirmed missing permission
-    does. A channel setting is worth being unable to save for a moment (retry once the
-    bot's finished starting, or once its permission cache is warm) rather than risk
-    accepting one silently unusable — this is the primary safety net, not just a
-    courtesy check (a channel that goes bad *after* being saved still alerts rather
-    than failing silently — see resolve_followable_channel/nav.py — but this is what
-    stops a bad one going in to begin with).
+
+async def _channel_problem(setting: _Setting, channel_id: int) -> str | None:
+    """``None`` if ``channel_id`` is a channel ``setting`` may actually use — right
+    guild, right type, and the bot can fully post there (view/send/embed/external-emoji)
+    — otherwise a human-readable reason to reject the save for.
+
+    Every rule the channel picker applies in the browser (autopost_settings.js's
+    ``data-scope`` / ``data-announce-only`` filters, and _handle_channels' postable-type
+    filter) is re-applied here, because this is the only place the value is actually
+    written: the browser filter is a convenience for whoever is picking, not the
+    enforcement point. A followable's channel must be an announcement channel or
+    Discord's native "Follow Channel" cannot target it at all — the bot would post
+    happily and every follower would silently receive nothing.
+
+    Fails CLOSED — rejects the save — on anything short of a confirmed "yes, this
+    channel is usable": the bot not started yet, an unresolvable permission-cache
+    lookup, or an unexpected REST hiccup all reject, same as a confirmed missing
+    permission does. A channel setting is worth being unable to save for a moment
+    (retry once the bot's finished starting, or once its permission cache is warm)
+    rather than risk accepting one silently unusable — this is the primary safety net,
+    not just a courtesy check (a channel that goes bad *after* being saved still alerts
+    rather than failing silently — see resolve_followable_channel/nav.py — but this is
+    what stops a bad one going in to begin with).
     """
     if _bot is None:
         return "the bot hasn't finished starting yet — try again in a moment."
@@ -694,6 +704,16 @@ async def _channel_permission_problem(channel_id: int) -> str | None:
         )
     if not isinstance(channel, h.PermissibleGuildChannel):
         return "that channel doesn't support posting (not a text/announcement channel)."
+    if channel.type not in _POSTABLE_CHANNEL_TYPES:
+        return "that channel doesn't support posting (not a text/announcement channel)."
+    if setting.announce_only and channel.type != h.ChannelType.GUILD_NEWS:
+        return (
+            "that's a text channel — this one has to be an announcement channel, or "
+            "other servers can't follow it."
+        )
+    allowed_guilds = _allowed_guild_ids(setting)
+    if allowed_guilds and int(channel.guild_id) not in allowed_guilds:
+        return "that channel is in a server this setting can't post to."
     me = _bot.get_me()
     if me is None:
         return "the bot's own identity isn't available yet — try again in a moment."
@@ -721,7 +741,9 @@ async def _handle_channels(request: aiohttp.web.Request) -> aiohttp.web.Response
     plain text channel is even eligible: a followable's post channel must be an
     announcement channel for Discord's native "Follow Channel" to work at all, unlike
     log_channel_id/alerts_channel_id, which the bot only ever sends to directly) —
-    rather than one REST round trip per field. Best-effort per guild: a guild the bot
+    rather than one REST round trip per field. Those two filters keep the picker honest
+    for whoever is using it; _channel_problem re-applies both server-side at save time,
+    which is where they're actually enforced. Best-effort per guild: a guild the bot
     cannot currently see (not joined, or a permissions/REST blip) is simply omitted
     rather than failing the whole list — the affected pickers fall back to their
     current raw id (see autopost_settings.js).
@@ -796,15 +818,16 @@ async def _handle_save(request: aiohttp.web.Request) -> aiohttp.web.Response:
             return aiohttp.web.json_response({"error": error}, status=400)
         value_updates[slug] = value
 
-    # Confirm the bot can actually post there before persisting — a channel id being
-    # syntactically valid says nothing about whether the bot can see it, has been
-    # kicked from that server, or lacks Send/Embed/External-Emoji there. Skipped for
-    # "0" (clearing a channel back to dormant needs no permission to do).
-    for slug in _CHANNEL_SLUGS:
+    # Confirm the channel is one this setting may actually use before persisting — a
+    # channel id being syntactically valid says nothing about whether it's in the right
+    # server, is the right type, or whether the bot can see it, has been kicked from
+    # that server, or lacks Send/Embed/External-Emoji there. Skipped for "0" (clearing
+    # a channel back to dormant needs no permission to do).
+    for slug, setting in _CHANNEL_SETTINGS.items():
         channel_id = value_updates.get(slug)
         if not channel_id or channel_id == "0":
             continue
-        problem = await _channel_permission_problem(int(channel_id))
+        problem = await _channel_problem(setting, int(channel_id))
         if problem:
             return aiohttp.web.json_response(
                 {"error": f"Can't use that channel for '{slug}': {problem}"},

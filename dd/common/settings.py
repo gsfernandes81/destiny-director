@@ -42,15 +42,19 @@ extensions import — warms the cache synchronously-readable via
 trip at that point (``schemas.wait_for_db`` / ``_refresh_relevant_channel_ids``), so
 this is one more, not a new pattern.
 
-A followable slug absent from the DB falls back to :data:`cfg.followables` (the old env
-var, still read at import time by ``cfg.py``) rather than straight to 0 — that keeps
-every existing deploy and test fixture working unchanged until someone actually edits
-the settings page, at which point the DB row wins from then on.
+**The settings page is the only writer.** There is no env-var fallback and no seeding
+path: a slug with no DB row reads as its :data:`_DEFAULTS` entry, and a followable with
+no row reads as 0 (dormant, alerted at boot — see
+``dd.beacon.extensions.autoposts.resolve_followable_channel``). ``FOLLOWABLES`` and the
+other former env vars are gone from ``cfg.py`` entirely, so there is no second place a
+value can come from and no way to write one that skipped the page's validation (right
+guild, right channel type, bot can actually post there — see
+``dd.anchor.extensions.autopost_settings._channel_problem``). A fresh install therefore
+starts fully dormant and is configured on the page, once.
 """
 
 import asyncio
 import logging
-import os
 import time
 import typing as t
 
@@ -58,7 +62,7 @@ import hikari as h
 
 from dd.hmessage.constants import DEFAULT_COLOR
 
-from . import cfg, schemas
+from . import schemas
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +94,7 @@ _DEFAULTS: dict[str, tuple[bool | None, str | None]] = {
     "xur_image_url": (None, ""),
 }
 
-# feed slug (as used in the old FOLLOWABLES dict / AutoPostSettings toggle rows) -> the
+# feed slug (as used by the AutoPostSettings toggle rows) -> the
 # AutoPostSettings.name this module stores its channel id under. "_channel" is appended
 # rather than reusing the feed's own toggle slug so a toggle's `enabled` column (on/off)
 # and its channel id (where) stay independently readable/writable.
@@ -161,7 +165,7 @@ def invalidate() -> None:
     until *some* async getter happens to run elsewhere in the process and trigger a
     real refresh. An async caller that wants the cache genuinely fresh on return
     (including for its own ``*_sync`` reads) should ``await`` :func:`preload` directly
-    instead — see :func:`seed_followables_from_env` for the pattern.
+    instead — that's what the settings page's save handler does.
     """
     global _loaded_at
     _loaded_at = 0.0
@@ -296,15 +300,11 @@ async def get_followable_channel(feed: str) -> int:
     slug = FOLLOWABLE_SLUGS.get(feed)
     if slug is None:
         return 0
-    raw = await _get_value(slug)
-    if raw is not None and raw != "":
-        return int(raw)
-    return int(cfg.followables.get(feed, 0))
+    return int(await _get_value(slug) or 0)
 
 
 async def get_followables() -> dict[str, int]:
-    """Every followable's channel id, keyed by feed slug — the old
-    ``cfg.followables``."""
+    """Every followable's channel id, keyed by feed slug."""
     return {feed: await get_followable_channel(feed) for feed in FOLLOWABLE_SLUGS}
 
 
@@ -313,21 +313,17 @@ def get_followable_channel_sync(feed: str) -> int:
 
     Only reflects the DB once :func:`preload` has run (both ``__main__`` entry points
     do this before their extensions package imports). Until then — e.g. under pytest,
-    which imports extensions directly — falls back straight to :data:`cfg.followables`,
-    exactly matching the pre-migration behaviour those import-time reads always had.
+    which imports extensions directly — every feed reads as 0/dormant; there is no
+    env-var fallback left to read (see the module docstring).
 
     An unknown ``feed`` (not in :data:`FOLLOWABLE_SLUGS`) is 0, same as the async
-    version — there's no DB column to check, and no reason to trust a stale
-    ``cfg.followables`` entry for a feed this module doesn't otherwise recognise.
+    version — there's no DB column to check.
     """
     slug = FOLLOWABLE_SLUGS.get(feed)
     if slug is None:
         return 0
-    default = cfg.followables.get(feed, 0)
     _enabled, value = _raw(slug)
-    if value is not None and value != "":
-        return int(value)
-    return default
+    return int(value or 0)
 
 
 def get_followables_sync() -> dict[str, int]:
@@ -349,9 +345,9 @@ def followable_slugs() -> t.Iterable[str]:
 def followable_name(*, id: int, followables: dict[str, int] | None = None) -> str | int:
     """The configured feed slug for a followable channel id, or the id itself.
 
-    Formerly ``dd.common.utils.followable_name`` reading ``cfg.followables`` directly;
-    moved here so it reflects DB overrides too. Sync (log-line / status-display call
-    sites), via :func:`get_followables_sync`.
+    Formerly ``dd.common.utils.followable_name``, reading the ``FOLLOWABLES`` env var
+    directly; moved here so it reads the same DB rows every producer does. Sync
+    (log-line / status-display call sites), via :func:`get_followables_sync`.
 
     ``followables`` lets a caller resolving names in a loop (e.g. the mirror log's run
     list) pass one pre-built dict from a single :func:`get_followables_sync` call,
@@ -364,146 +360,3 @@ def followable_name(*, id: int, followables: dict[str, int] | None = None) -> st
         (feed for feed, channel_id in followables.items() if channel_id == id),
         id,
     )
-
-
-async def seed_followables_from_env() -> dict[str, int]:
-    """One-time migration: backfill any followable-channel DB row that doesn't exist yet
-    from :data:`cfg.followables` (the ``FOLLOWABLES`` env var).
-
-    Idempotent — never touches a slug that already has a row, whether from a previous
-    run of this or an edit on the Autopost Settings page since, so it is safe to run
-    more than once (e.g. once per environment) and safe to run after the settings page
-    has already been used.
-
-    This is the bridge for retiring ``FOLLOWABLES``/``cfg.followables`` for good: run it
-    once against each environment's DB (``uv run python -m dd.common.schemas
-    --seed-followables``, or ``make seed-followables``), confirm every followable's
-    channel on the Autopost Settings page matches what ``FOLLOWABLES`` has today, *then*
-    remove the env var, delete ``cfg.followables``, and delete the ``cfg.followables``
-    fallback in :func:`get_followable_channel` / :func:`get_followable_channel_sync`
-    (search this module for ``cfg.followables`` — every remaining reference is that
-    fallback, and becomes dead code once every environment has been seeded and the var
-    is gone). Returns the slugs actually written, keyed by feed (empty if every
-    followable already had a row — the common case after the first run anywhere).
-    """
-    written: dict[str, int] = {}
-    for feed, channel_id in cfg.followables.items():
-        slug = FOLLOWABLE_SLUGS.get(feed)
-        if slug is None or not channel_id:
-            continue
-        existing = await schemas.AutoPostSettings.get_value(slug)
-        if existing is not None:
-            continue
-        await schemas.AutoPostSettings.set_value(slug, str(int(channel_id)))
-        written[feed] = int(channel_id)
-    if written:
-        # preload(), not invalidate(): this runs in an async context, so there's no
-        # reason to leave the cache merely *marked* stale (which only the next async
-        # getter would notice — a *_sync getter reads _cache directly and wouldn't see
-        # this until something else happens to trigger a refresh). Refresh now.
-        await preload()
-    return written
-
-
-# The env vars every non-followable setting here used to read, before cfg.py dropped
-# them in the same migration that added this module (see the module docstring). Unlike
-# followables, there's no cfg.<attr> fallback left to read for these — cfg.py no longer
-# parses them at all — so seed_settings_from_env below reads os.environ directly.
-_VALUE_ENV_VARS: dict[str, str] = {
-    "default_url": "DEFAULT_URL",
-    "alert_min_level": "ALERT_MIN_LEVEL",
-    "lost_sector_image_url": "LOST_SECTOR_GIF_URL",
-    "xur_image_url": "XUR_IMAGE_URL",
-}
-_COLOR_ENV_VARS: dict[str, str] = {
-    "embed_default_color": "EMBED_DEFAULT_COLOR",
-    "embed_error_color": "EMBED_ERROR_COLOR",
-}
-_CHANNEL_ID_ENV_VARS: dict[str, str] = {
-    "log_channel_id": "LOG_CHANNEL_ID",
-    "alerts_channel_id": "ALERTS_CHANNEL_ID",
-}
-
-
-async def seed_settings_from_env() -> dict[str, str]:
-    """One-time migration: backfill every general (non-followable) setting that has no
-    DB row yet, straight from the same env vars ``cfg.py`` used to read before this
-    module existed — ``EMBED_DEFAULT_COLOR``/``ERROR_COLOR``, ``DEFAULT_URL``,
-    ``ALERT_MIN_LEVEL``, ``DISABLE_BAD_CHANNELS``, ``LOG_CHANNEL_ID``,
-    ``ALERTS_CHANNEL_ID``, ``LOST_SECTOR_GIF_URL``, ``XUR_IMAGE_URL``.
-
-    Unlike :func:`seed_followables_from_env`, ``cfg.py`` no longer parses or exposes
-    any of these, so this reads ``os.environ`` directly and replicates ``cfg.py``'s old
-    parsing exactly: a hex color (``0x``-prefix optional), a case-insensitive bool
-    (``true``/``1``/``yes``/``on``), a plain int/string otherwise. A var that was never
-    set in this environment is simply skipped — the hardcoded :data:`_DEFAULTS` already
-    matches its old env-var default, so an unconfigured row behaves the same either
-    way. A var present but unparseable (a non-hex color, a non-integer channel id) is
-    logged and skipped rather than raised, so one bad value can't abort the whole
-    backfill.
-
-    Idempotent — never overwrites an existing row, whether from a previous run of this
-    or an edit on the Autopost Settings page since. Run once per environment (``make
-    seed-settings``, alongside ``make seed-followables``) before removing these env
-    vars for good — see :func:`seed_followables_from_env`'s docstring for the full
-    cutover shape, which applies here too. Returns the slugs actually written, keyed by
-    slug (empty if every setting already had a row — the common case after the first
-    run anywhere).
-    """
-    written: dict[str, str] = {}
-
-    async def _seed_value(slug: str, raw: str | None) -> None:
-        if raw is None:
-            return
-        existing = await schemas.AutoPostSettings.get_value(slug)
-        if existing is not None:
-            return
-        await schemas.AutoPostSettings.set_value(slug, raw)
-        written[slug] = raw
-
-    for slug, env_key in _VALUE_ENV_VARS.items():
-        await _seed_value(slug, os.environ.get(env_key))
-
-    for slug, env_key in _COLOR_ENV_VARS.items():
-        raw = os.environ.get(env_key)
-        if raw is None:
-            continue
-        try:
-            color_int = int(raw, 16)
-        except ValueError:
-            logger.warning("%s=%r is not a hex colour, skipping seed", env_key, raw)
-            continue
-        await _seed_value(slug, f"#{color_int:06X}")
-
-    for slug, env_key in _CHANNEL_ID_ENV_VARS.items():
-        raw = os.environ.get(env_key)
-        if raw is None:
-            continue
-        try:
-            channel_id = int(raw)
-        except ValueError:
-            logger.warning("%s=%r is not an integer, skipping seed", env_key, raw)
-            continue
-        await _seed_value(slug, str(channel_id))
-
-    disable_bad_channels_raw = os.environ.get("DISABLE_BAD_CHANNELS")
-    if disable_bad_channels_raw is not None:
-        existing_enabled = await schemas.AutoPostSettings.get_enabled(
-            "disable_bad_channels"
-        )
-        if existing_enabled is None:
-            value = disable_bad_channels_raw.strip().lower() in {
-                "true",
-                "1",
-                "yes",
-                "on",
-            }
-            await schemas.AutoPostSettings.set_enabled("disable_bad_channels", value)
-            written["disable_bad_channels"] = str(value)
-
-    if written:
-        # See seed_followables_from_env's identical comment: preload() over
-        # invalidate() so this (async) process's cache — including its *_sync readers
-        # — is actually fresh on return, not just marked stale for later.
-        await preload()
-    return written

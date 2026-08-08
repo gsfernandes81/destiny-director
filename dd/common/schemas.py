@@ -2381,7 +2381,7 @@ class AutopostDailyStat(Base):
     __mapper_args__ = {"eager_defaults": True}
 
     date = Column("date", Date, primary_key=True)  # daily bucket, UTC
-    feed = Column("feed", String(length=32), primary_key=True)  # cfg.followables key
+    feed = Column("feed", String(length=32), primary_key=True)  # followable feed slug
     kind = Column("kind", String(length=8), primary_key=True)  # "follow" | "mirror"
     count = Column("count", BigInteger, nullable=False, default=0)
 
@@ -3000,7 +3000,7 @@ class RotationData(Base):
 
     The PK ``name`` is the post-type slug (``lost_sector``, future
     ``dares_of_eternity``…) — the same slug used by :class:`AutoPostSettings` and
-    ``cfg.followables`` — so a post type is addressed identically across its
+    ``settings.FOLLOWABLE_SLUGS`` — so a post type is addressed identically across its
     enabled-flag, channel and data. ``data`` is the full JSON document validated by
     :mod:`dd.common.rotation_schema`; integrity lives at the app layer (schema +
     attrs construction + the tolerant loader), not in a relational shape, so new post
@@ -3456,37 +3456,3 @@ if __name__ == "__main__":
 
     if "--create-all" in sys.argv:
         aio.run(create_all())
-
-    if "--seed-followables" in sys.argv:
-        # Deferred import: dd.common.settings imports this module, so importing it at
-        # schemas.py's top level would be circular. Safe here — this branch only runs
-        # when schemas.py is executed directly, never on a normal package import.
-        from . import settings as _settings
-
-        _written = aio.run(_settings.seed_followables_from_env())
-        if _written:
-            print(f"Seeded {len(_written)} followable channel(s) from FOLLOWABLES:")
-            for feed, channel_id in _written.items():
-                print(f"  {feed}: {channel_id}")
-        else:
-            print(
-                "Nothing to seed — every followable channel already has a DB row "
-                "(or FOLLOWABLES is empty)."
-            )
-
-    if "--seed-settings" in sys.argv:
-        # Same deferred-import reasoning as --seed-followables above.
-        from . import settings as _settings
-
-        _written_settings = aio.run(_settings.seed_settings_from_env())
-        if _written_settings:
-            print(
-                f"Seeded {len(_written_settings)} setting(s) from their old env vars:"
-            )
-            for slug, value in _written_settings.items():
-                print(f"  {slug}: {value}")
-        else:
-            print(
-                "Nothing to seed — every general setting already has a DB row (or "
-                "none of their old env vars are set)."
-            )

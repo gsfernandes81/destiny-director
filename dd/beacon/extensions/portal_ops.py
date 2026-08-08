@@ -19,8 +19,8 @@ Mirrors the anchor's Portal Ops autopost (see ``dd/anchor/extensions/portal_ops.
 into per-guild channels and exposes a ``/portal ops`` navigator over the mirrored
 channel history. The post is daily (period = 1 day, daily reset anchor).
 
-Guarded on the ``portal_ops`` followable channel id: if it is not configured in this
-environment's FOLLOWABLES the module loads cleanly and registers nothing (the bot is
+Guarded on the ``portal_ops`` followable channel id: if it has not been set on the
+Autopost Settings page the module loads cleanly and registers nothing (the bot is
 unaffected) until the channel is set — ``resolve_followable_channel`` alerts either way.
 """
 
