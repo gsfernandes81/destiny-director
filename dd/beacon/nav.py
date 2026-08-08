@@ -17,6 +17,7 @@
 import contextlib
 import datetime as dt
 import logging
+import re
 import typing as t
 import uuid
 from asyncio import Task, create_task, sleep
@@ -25,7 +26,6 @@ from typing import override
 
 import hikari as h
 import lightbulb as lb
-import regex as re
 from lightbulb import components as lbc
 
 from dd.hmessage import HMessage

@@ -17,7 +17,7 @@
 
 ``MirrorDelivery.recent_runs`` / ``run_rows`` back the anchor ``/mirror-logs`` page.
 Exercises the per-source aggregation (state + crosspost tallies, run timing), the
-created_at window + limit, the failures-first detail ordering, and — the MySQL/SQLite
+created_at window + limit, the failures-first detail ordering, and — the cross-dialect
 gotcha the design flagged — that the MIN/MAX datetime aggregates come back as
 ``datetime`` objects (via the explicit ``type_=DateTime``), not ISO strings.
 """

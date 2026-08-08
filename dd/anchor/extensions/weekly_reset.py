@@ -74,6 +74,7 @@ from .. import (
     web,
 )
 from ..hybrid_post_core import (
+    _ROW_BATCH,
     DraftMeta,
     HybridPostSpec,
     WeaponRef,
@@ -1074,28 +1075,33 @@ async def _scan_activities() -> tuple[set[str], dict[str, set[str]], bool]:
             cur = await con.cursor()
 
             # Activity type names are the authoritative raid/dungeon/nightfall signal.
+            # Both scans read in ``fetchmany`` batches rather than one ``fetchall()``
+            # (same reason as iter_weapon_items: only the derived names outlive the
+            # loop, so batching is output-identical and never holds the whole table).
             await cur.execute("SELECT json FROM DestinyActivityTypeDefinition")
             activity_types: dict[int, str] = {}
-            for (row,) in await cur.fetchall():
-                defn = json.loads(row)
-                activity_types[int(defn["hash"])] = (
-                    defn.get("displayProperties") or {}
-                ).get("name", "")
+            while batch := await cur.fetchmany(_ROW_BATCH):
+                for (row,) in batch:
+                    defn = json.loads(row)
+                    activity_types[int(defn["hash"])] = (
+                        defn.get("displayProperties") or {}
+                    ).get("name", "")
 
             await cur.execute("SELECT json FROM DestinyActivityDefinition")
-            for (row,) in await cur.fetchall():
-                defn = json.loads(row)
-                raw_name = (defn.get("displayProperties") or {}).get("name", "")
-                # Conquests: keep only the "<Tier> Conquest: <Base>: Customize" entries,
-                # bucketed by tier — independent of the strike cleaning below.
-                parsed = _parse_conquest_name(raw_name)
-                if parsed:
-                    conquest_by_tier[parsed[0]].add(parsed[1])
-                type_name = activity_types.get(defn.get("activityTypeHash"), "")
-                if _classify_activity(defn, type_name) == "strike":
-                    cleaned = _clean_activity_name(raw_name, "strike")
-                    if cleaned:
-                        strikes.add(cleaned)
+            while batch := await cur.fetchmany(_ROW_BATCH):
+                for (row,) in batch:
+                    defn = json.loads(row)
+                    raw_name = (defn.get("displayProperties") or {}).get("name", "")
+                    # Conquests: keep only the "<Tier> Conquest: <Base>: Customize"
+                    # entries, bucketed by tier — independent of the strike cleaning.
+                    parsed = _parse_conquest_name(raw_name)
+                    if parsed:
+                        conquest_by_tier[parsed[0]].add(parsed[1])
+                    type_name = activity_types.get(defn.get("activityTypeHash"), "")
+                    if _classify_activity(defn, type_name) == "strike":
+                        cleaned = _clean_activity_name(raw_name, "strike")
+                        if cleaned:
+                            strikes.add(cleaned)
     except Exception:
         logger.warning("weekly_reset: manifest index build failed", exc_info=True)
         return strikes, conquest_by_tier, False

@@ -20,15 +20,15 @@ import datetime as dt
 import enum
 import logging
 import os
+import re
 import sys
 import typing as t
 from dataclasses import dataclass
 from typing import Self
 
-import regex as re
-from atlas_provider_sqlalchemy.ddl import print_ddl
 from sqlalchemy import Index, bindparam, case, exists, literal, or_, tuple_
-from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -97,7 +97,7 @@ db_session = _SessionmakerProxy(async_sessionmaker(db_engine, **cfg.db_session_k
 def configure_test_db(engine: AsyncEngine) -> None:
     """Repoint the module-global engine and the ``db_session`` proxy at ``engine``.
 
-    Used by the test harness to swap the production MySQL engine for a throwaway
+    Used by the test harness to swap the production Postgres engine for a throwaway
     SQLite engine. Affects every ``@ensure_session`` method, every direct
     ``db_session()`` call site, and every module-level ``db_engine`` reader at once."""
     global db_engine
@@ -635,28 +635,48 @@ class MirroredChannel(Base):
 
 
 def _utcnow() -> dt.datetime:
-    # Truncated to whole seconds on purpose: the ledger's datetime columns are MySQL
-    # DATETIME(0), which *rounds* a fractional value (…23.6 -> …24) rather than
-    # truncating. Rounding a just-now ``due_at`` UP past the current second makes an
-    # immediately-due row fail the ``due_at <= now`` pick gate until the next poll — on
-    # SQLite the full precision is kept so this never shows. Whole seconds
-    # store exactly on both backends; second granularity is ample for the scheduler
-    # (retries 180-300s, poll 45s, grace in hours).
+    # Truncated to whole seconds on purpose. Postgres TIMESTAMP and SQLite both keep
+    # sub-second precision, so nothing rounds a just-now ``due_at`` UP past the current
+    # second any more (MySQL DATETIME(0) used to, making an immediately-due row fail the
+    # ``due_at <= now`` pick gate until the next poll). Whole seconds still store
+    # exactly on every backend and second granularity is ample for the scheduler
+    # (retries 180-300s, poll 45s, grace in hours), so the ledger's timestamps stay
+    # comparable across a backend swap.
     return dt.datetime.now(tz=dt.UTC).replace(microsecond=0)
 
 
-def _insert_ignore(cls: type[Base]):
+def _dialect_insert(cls: type[Base], session: AsyncSession):
+    """Dialect-specific INSERT construct (the one that grows ``on_conflict_*``).
+
+    Postgres and SQLite spell upserts the same way — ``ON CONFLICT … DO UPDATE/DO
+    NOTHING`` with an ``excluded`` pseudo-table — but the construct is per-dialect, so
+    it has to be picked from the bound engine rather than compiled per-dialect the way
+    the old MySQL/SQLite ``prefix_with`` trick did.
+    """
+    if session.get_bind().dialect.name == "sqlite":
+        return sqlite_insert(cls)
+    return pg_insert(cls)
+
+
+def _insert_ignore(cls: type[Base], session: AsyncSession):
     """Duplicate-PK-ignoring INSERT, portable across dialects.
 
-    MySQL ``INSERT IGNORE`` / SQLite ``INSERT OR IGNORE`` via a dialect-scoped
-    ``prefix_with`` (each prefix is emitted only for its dialect), so a duplicate
-    gateway event or a manual re-mirror of an already-enqueued message is a no-op
-    rather than a primary-key violation.
+    ``INSERT … ON CONFLICT DO NOTHING`` on both Postgres and SQLite (replacing the old
+    MySQL ``INSERT IGNORE`` / SQLite ``INSERT OR IGNORE`` prefixes). No conflict target
+    is given, so — like the prefixes it replaces — *any* unique violation is swallowed:
+    a duplicate gateway event or a manual re-mirror of an already-enqueued message is a
+    no-op rather than a primary-key violation.
+
+    ``preserve_rowcount`` matters: callers read ``result.rowcount`` to learn how many
+    rows survived the conflict filter, and SQLAlchemy does not capture it for a plain
+    INSERT before closing the cursor — psycopg then reports ``-1`` on the closed
+    cursor (SQLite happens to keep the value, which is why the SQLite lane never saw
+    this). The option makes SQLAlchemy read it while the cursor is still open.
     """
     return (
-        insert(cls)
-        .prefix_with("IGNORE", dialect="mysql")
-        .prefix_with("OR IGNORE", dialect="sqlite")
+        _dialect_insert(cls, session)
+        .on_conflict_do_nothing()
+        .execution_options(preserve_rowcount=True)
     )
 
 
@@ -858,7 +878,7 @@ class MirrorDelivery(Base):
         """
         now = _utcnow()
         result = await session.execute(
-            _insert_ignore(cls).from_select(
+            _insert_ignore(cls, session).from_select(
                 list(cls._ENQUEUE_COLS),
                 cls._enqueue_select(src_ch_id, src_msg_id, now),
             )
@@ -941,7 +961,7 @@ class MirrorDelivery(Base):
         inserted_rows = 0
         if had_delivered_baseline:
             inserted = await session.execute(
-                _insert_ignore(cls).from_select(
+                _insert_ignore(cls, session).from_select(
                     list(cls._ENQUEUE_COLS),
                     cls._enqueue_select(src_ch_id, src_msg_id, now),
                 )
@@ -1385,9 +1405,9 @@ class MirrorDelivery(Base):
                     }
                     for o in group
                 ]
-            # One driver executemany per kind. asyncmy (PyMySQL lineage) only rewrites
-            # INSERT…VALUES into a single multi-row statement, so this UPDATE issues one
-            # round trip per row. Acceptable: it is a single transaction bounded by the
+            # One driver executemany per kind. psycopg pipelines an executemany into a
+            # single round trip on Postgres, but the statement is still applied per row.
+            # Acceptable either way: it is a single transaction bounded by the
             # pick batch size, and the version-guarded CASE columns make a hand-built
             # bulk UPDATE (per-row CASE keyed on PK) materially more error-prone than
             # the per-row cost is worth. Revisit with a temp-table/VALUES join if flush
@@ -1793,9 +1813,10 @@ class MirrorDelivery(Base):
         )
         # Old DELIVERED rows: prune those superseded by a newer DELIVERED in the
         # SAME destination channel — the single latest per channel stays as the anchor.
-        # SELECT-the-pks then DELETE-by-pk (not one self-referencing DELETE): MySQL
-        # forbids referencing the delete target inside a subquery (error 1093), even
-        # though SQLite allows it, so the correlated EXISTS must live in a read.
+        # SELECT-the-pks then DELETE-by-pk (not one self-referencing DELETE). This shape
+        # was forced by MySQL (error 1093: the delete target may not be referenced from
+        # a subquery); Postgres and SQLite both allow the single statement, but the
+        # two-step form is kept — it is portable, and it bounds the delete by pk.
         newer = aliased(cls)
         superseded = (
             await session.execute(
@@ -1883,7 +1904,7 @@ class MirrorMessageVersion(Base):
         than a clobber — the first capture wins.
         """
         result = await session.execute(
-            _insert_ignore(cls).values(
+            _insert_ignore(cls, session).values(
                 src_msg_id=int(src_msg_id),
                 version=int(version),
                 captured_at=_utcnow(),
@@ -2015,8 +2036,8 @@ class MirrorMessageVersion(Base):
         so it lives through the retention window and stays for the indefinitely-kept
         latest-delivered-per-channel anchor, then goes when the last delivery row for
         that source is pruned. Run *after* ``MirrorDelivery.prune``. The subquery
-        targets a different table, so this is not the MySQL error-1093 self-reference
-        the ledger prune has to work around.
+        targets a different table, so this is not the self-reference the ledger prune
+        splits into a read plus a delete-by-pk.
         """
         orphaned = (
             (
@@ -2273,8 +2294,16 @@ class ServerStatistics(Base):
     async def fetch_server_populations(
         cls, session: AsyncSession = _UNSET
     ) -> list[tuple[int, int]]:
-        """Returns tuples of server id to population"""
-        populations = (await session.execute(select(cls.id, cls.population))).fetchall()
+        """Returns tuples of server id to population, ordered by id.
+
+        The ORDER BY is explicit because Postgres returns rows in physical order, and
+        an UPDATE moves the updated tuple to the end of the heap — so an unordered
+        SELECT would silently reshuffle the dashboard's population list after every
+        population refresh.
+        """
+        populations = (
+            await session.execute(select(cls.id, cls.population).order_by(cls.id))
+        ).fetchall()
         populations = populations if populations else []
         return populations
 
@@ -2314,7 +2343,7 @@ class CommandUsage(Base):
     """Per-command, per-day invocation counts for user-facing slash commands.
 
     Daily buckets keep growth bounded (commands × days) while supporting both
-    all-time totals and time-windowed queries. Writes use a MySQL upsert with an
+    all-time totals and time-windowed queries. Writes use an ON CONFLICT upsert with an
     atomic ``count = count + 1`` so concurrent increments are race-free with no
     in-memory buffering.
     """
@@ -2332,8 +2361,18 @@ class CommandUsage(Base):
         cls, command_name: str, *, session: AsyncSession = _UNSET
     ) -> None:
         today = dt.datetime.now(tz=dt.UTC).date()
-        stmt = mysql_insert(cls).values(command_name=command_name, date=today, count=1)
-        await session.execute(stmt.on_duplicate_key_update(count=cls.count + 1))
+        stmt = _dialect_insert(cls, session).values(
+            command_name=command_name, date=today, count=1
+        )
+        # Conflict target is the composite PK. The SET expression reads the *existing*
+        # row's count (not stmt.excluded.count, which is the literal 1 being inserted),
+        # keeping the increment atomic in one statement.
+        await session.execute(
+            stmt.on_conflict_do_update(
+                index_elements=[cls.command_name, cls.date],
+                set_={"count": cls.count + 1},
+            )
+        )
 
     @classmethod
     @ensure_session(db_session)
@@ -2372,7 +2411,7 @@ class AutopostDailyStat(Base):
     channel-follows) or ``"mirror"`` (legacy mirrored channels). A daily task snapshots
     the current ``MirroredChannel`` reach into this table, so the series is robust to
     later removals (a deleted ``MirroredChannel`` row leaves the historical snapshot
-    intact). Writes are a MySQL upsert that **overwrites** ``count`` — unlike
+    intact). Writes are an ON CONFLICT upsert that **overwrites** ``count`` — unlike
     ``CommandUsage.increment``'s ``count = count + 1`` — so re-running the snapshot on
     the same day corrects the value rather than doubling it.
     """
@@ -2396,8 +2435,17 @@ class AutopostDailyStat(Base):
         *,
         session: AsyncSession = _UNSET,
     ) -> None:
-        stmt = mysql_insert(cls).values(date=date, feed=feed, kind=kind, count=count)
-        await session.execute(stmt.on_duplicate_key_update(count=stmt.inserted.count))
+        stmt = _dialect_insert(cls, session).values(
+            date=date, feed=feed, kind=kind, count=count
+        )
+        # Conflict target is the composite PK. ``excluded`` is the row the INSERT tried
+        # to add (MySQL spelled it ``inserted``), so this overwrites with the new count.
+        await session.execute(
+            stmt.on_conflict_do_update(
+                index_elements=[cls.date, cls.feed, cls.kind],
+                set_={"count": stmt.excluded.count},
+            )
+        )
 
     @classmethod
     @ensure_session(db_session)
@@ -3110,7 +3158,7 @@ class AppEmojiCache(Base):
         """Insert or refresh a cache row, stamping ``last_used`` = now.
 
         Uses a portable select-then-write (like :meth:`RotationData.set_data`) so the
-        SQLite test engine and prod MySQL behave identically.
+        SQLite test engine and prod Postgres behave identically.
         """
         now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
         exists_ = (
@@ -3401,9 +3449,9 @@ _LOCAL_DB_HOSTS = frozenset({None, "", "localhost", "127.0.0.1", "::1"})
 
 
 def _db_is_local() -> bool:
-    """Whether the *active* engine targets SQLite or a local MySQL host.
+    """Whether the *active* engine targets SQLite or a local Postgres host.
 
-    Gates destructive schema ops (and the ``TEST_USE_MYSQL`` test path) so they can
+    Gates destructive schema ops (and the ``TEST_USE_POSTGRES`` test path) so they can
     never wipe a shared dev/prod database. ``configure_test_db`` swaps ``db_engine``,
     so this reflects whatever backend is currently in use."""
     url = db_engine.url
@@ -3430,13 +3478,18 @@ async def destroy_all() -> None:
         logging.info(f"Dropping tables: {list(Base.metadata.tables.keys())}")
         await conn.run_sync(Base.metadata.drop_all)
 
-    await destroy_atlas_metadata()
+    await destroy_migration_metadata()
 
 
-async def destroy_atlas_metadata() -> None:
+async def destroy_migration_metadata() -> None:
+    """Drop the migration tool's own bookkeeping table.
+
+    Alembic stores the applied revision in ``alembic_version``; leaving it behind
+    after a ``destroy-all`` would make the next ``alembic upgrade head`` believe the
+    (now absent) schema is already at head."""
     async with db_engine.begin() as conn:
-        logging.info("Dropping table: atlas_schema_revisions")
-        await conn.execute(text("DROP TABLE IF EXISTS atlas_schema_revisions"))
+        logging.info("Dropping table: alembic_version")
+        await conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
 
 
 async def create_all() -> None:
@@ -3448,9 +3501,6 @@ async def create_all() -> None:
 
 
 if __name__ == "__main__":
-    if "--print-ddl" in sys.argv:
-        print_ddl("mysql", [Base])
-
     if "--destroy-all" in sys.argv:
         aio.run(destroy_all())
 

@@ -15,8 +15,8 @@ jobs:
     # test suite). The DB layer itself runs on temp-file SQLite, so these are
     # dummy placeholders only — no real services are contacted.
     env:
-      MYSQL_SSL: "false"
-      MYSQL_URL: "mysql://user:pass@localhost/dd"
+      DATABASE_SSL: "false"
+      DATABASE_URL: "postgresql://user:pass@localhost/dd"
       SHEETS_PROJECT_ID: "ci"
       SHEETS_PRIVATE_KEY_ID: "ci"
       SHEETS_PRIVATE_KEY: "ci"
@@ -87,32 +87,42 @@ jobs:
       - name: Test (node --test)
         run: make test-js
 
-  mysql:
-    # Real-MySQL dialect lane. The `check` job runs the DB tests on SQLite, which hides
-    # MySQL-only bugs (DATETIME(0) rounding, self-referencing DELETE / error 1093, the
-    # asyncmy executemany round-trip). This re-runs the DB-`integration` tests against a
-    # MySQL 8 service; the live-Discord tests are still skipped (no bot token/guild in CI).
+  postgres:
+    # Real-Postgres dialect lane. The `check` job runs the DB tests on SQLite, which is
+    # a different dialect from what production runs, so this pins the paths that differ:
+    # the ON CONFLICT upsert branches (`_dialect_insert` picks the postgresql construct
+    # here and the sqlite one there), TIMESTAMP/DATE round-tripping, and psycopg's
+    # executemany. It re-runs the DB-`integration` tests against a Postgres 17 service;
+    # the live-Discord tests are still skipped (no bot token/guild in CI).
     runs-on: ubuntu-latest
     services:
-      mysql:
-        image: mysql:8
+      postgres:
+        image: postgres:17-alpine
         env:
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: dd
+          POSTGRES_USER: dd
+          POSTGRES_PASSWORD: dd
+          POSTGRES_DB: dd
+          # initdb takes the server's `timezone` from the container's TZ, so this pins
+          # the lane to a deliberately NON-UTC server. The app stores naive-UTC
+          # timestamps but binds some of them as tz-aware, which Postgres converts using
+          # the session TimeZone — a UTC-only lane could never catch cfg dropping its
+          # `-c timezone=UTC` (test_enqueue_stores_timestamps_as_utc_wall_clock).
+          TZ: America/New_York
         ports:
-          - 3306:3306
+          - 5432:5432
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-cmd="pg_isready -U dd -d dd"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=20
     env:
-      MYSQL_SSL: "false"
-      # 127.0.0.1 is in schemas._db_is_local()'s allowlist, so TEST_USE_MYSQL exercises
-      # the real engine (the fixtures create/drop the schema) WITHOUT needing the
-      # ALLOW_REMOTE_SCHEMA_DESTROY override — this is a throwaway CI database.
-      MYSQL_URL: "mysql://root:root@127.0.0.1:3306/dd"
-      TEST_USE_MYSQL: "1"
+      # The service has no TLS, so don't let cfg append sslmode=require.
+      DATABASE_SSL: "false"
+      # 127.0.0.1 is in schemas._db_is_local()'s allowlist, so TEST_USE_POSTGRES
+      # exercises the real engine (the fixtures create/drop the schema) WITHOUT needing
+      # the ALLOW_REMOTE_SCHEMA_DESTROY override — this is a throwaway CI database.
+      DATABASE_URL: "postgresql://dd:dd@127.0.0.1:5432/dd"
+      TEST_USE_POSTGRES: "1"
       SHEETS_PROJECT_ID: "ci"
       SHEETS_PRIVATE_KEY_ID: "ci"
       SHEETS_PRIVATE_KEY: "ci"
@@ -137,7 +147,7 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Test (pytest, MySQL — DB integration only)
+      - name: Test (pytest, Postgres — DB integration only)
         # `wait_for_db()` in the test fixture handles any residual connect delay after
         # the service health check. Discord-marked tests are excluded (no live token).
         run: uv run python -m pytest -m "integration and not discord"

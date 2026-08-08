@@ -18,7 +18,7 @@
 Exercises the transactional gateway handlers (enqueue/bump/delete/cancel), the pick scan
 (ordering, due gate, crosspost pickup), the write-back flusher (every outcome kind incl.
 the version/deleted guard and durable crosspost), the count helpers and prune —
-on the default SQLite backend."""
+on the default SQLite backend (or real Postgres under ``TEST_USE_POSTGRES``)."""
 
 import datetime as dt
 
@@ -72,6 +72,7 @@ async def _row(src_msg_id: int, dest_ch_id: int) -> dict:
             "attempts": r.attempts,
             "finished_at": r.finished_at,
             "due_at": r.due_at,
+            "created_at": r.created_at,
             "last_error_ref": r.last_error_ref,
         }
 
@@ -1029,3 +1030,30 @@ async def test_undo_auto_disable_does_not_poison_empty_cache():
     )
     # The cache was left empty (not poisoned), so a subsequent fetch sees BOTH sources.
     assert await MirroredChannel.get_or_fetch_all_srcs() == {src, 870}
+
+
+async def test_enqueue_stores_timestamps_as_utc_wall_clock():
+    """Ledger timestamps land as naive **UTC**, whatever the server's own timezone.
+
+    The ledger's columns are TIMESTAMP WITHOUT TIME ZONE but the enqueue INSERT…SELECT
+    binds a tz-aware ``_utcnow()``. Postgres converts an aware value using the session
+    TimeZone, so a server initdb'd in a local zone (a Pi usually is) would quietly store
+    every enqueued row offset from the rows written as naive UTC elsewhere. ``cfg`` pins
+    the session to UTC to stop that; this is the regression guard, and it is
+    dialect-agnostic — nothing about it is Postgres-specific.
+    """
+    src = 190
+    await MirroredChannel.add_mirror(src, 290, 1, legacy=True)
+    assert await MirrorDelivery.enqueue_send(src, 990) == 1
+
+    row = await _row(990, 290)
+    expected = dt.datetime.now(tz=dt.UTC).replace(tzinfo=None)
+    for column in ("created_at", "due_at"):
+        stored = row[column]
+        # Some drivers hand back an aware value; normalise before comparing.
+        if stored.tzinfo is not None:
+            stored = stored.astimezone(dt.UTC).replace(tzinfo=None)
+        assert abs(stored - expected) < dt.timedelta(minutes=2), (
+            f"{column} is {stored}, expected ~{expected} — the session timezone is "
+            "shifting stored timestamps"
+        )

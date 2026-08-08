@@ -1,8 +1,5 @@
 # syntax=docker/dockerfile:1
 
-# Atlas migration engine — multi-arch static Go binary.
-FROM arigaio/atlas:latest-community AS atlas
-
 # Debian-slim dev environment. Toolchain is baked; the app source is
 # bind-mounted at /workspace at runtime (see docker-compose.dev.yml), so it is
 # NOT copied into the image. The container runs no network service — access is
@@ -18,9 +15,13 @@ ARG USER_GID=1000
 # client under --no-install-recommends). openssh-server runs the in-container
 # sshd (port 2222, non-root) so Zed can remote directly in (see sshd_config.dev).
 # libjemalloc2 lets the devbot runner (docker-run-devbot.sh) LD_PRELOAD jemalloc so
-# a locally-run dev bot mirrors prod's allocator (docker-entrypoint.sh) for RAM work.
+# a locally-run dev bot mirrors the deployed image's allocator (the LD_PRELOAD/MALLOC_CONF
+# ENV in the repo-root Dockerfile) for RAM work.
+# postgresql-client gives psql for poking at the `postgres` sibling service (pulls in
+# libpq5, which psycopg's pure-Python distribution also dlopens at import time — see
+# the runtime Dockerfile's libpq5 comment).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential git make fish openssh-client openssh-server curl gnupg ca-certificates tzdata libjemalloc2 \
+        build-essential git make fish openssh-client openssh-server curl gnupg ca-certificates tzdata libjemalloc2 postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Node 22 LTS + Claude Code.
@@ -60,7 +61,6 @@ RUN set -eux; \
     gh --version
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-COPY --from=atlas /atlas /usr/local/bin/atlas
 
 # Create the dev user at the host owner's uid/gid (passed as build args — see
 # Makefile `dev-up`). Guard against an already-present gid/uid so the build won't

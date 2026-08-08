@@ -19,7 +19,7 @@
 capture INSERT-IGNORE (first-write-wins), the versions-for-source metadata listing
 (oldest first, no payload), the single-version payload fetch, and the orphan prune that
 piggybacks on the ledger prune (a snapshot survives exactly as long as its source keeps
-a delivery row — JSON round-trips through both the SQLite and MySQL lanes).
+a delivery row — JSON round-trips through both the SQLite and Postgres lanes).
 """
 
 import datetime as dt

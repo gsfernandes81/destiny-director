@@ -14,12 +14,12 @@
 # destiny-director. If not, see <https://www.gnu.org/licenses/>.
 
 import logging
-import ssl
+import re
+import sys
 import typing as t
 from os import getenv as __getenv
 
 import hikari as h
-import regex as re
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.pool import NullPool, Pool
@@ -66,13 +66,50 @@ def _getbool(key: str, default: bool) -> bool:
     """Parse a boolean env var case-insensitively (``true``/``1``/``yes``/``on``).
 
     Replaces the ad-hoc ``_getenv(...) == "true"`` checks, which were inconsistent:
-    case-sensitive for ``MYSQL_SSL`` (so ``MYSQL_SSL=True`` silently disabled SSL)
-    and case-insensitive for ``DISABLE_BAD_CHANNELS``.
+    case-sensitive for the old ``MYSQL_SSL`` (so ``MYSQL_SSL=True`` silently disabled
+    SSL) and case-insensitive for ``DISABLE_BAD_CHANNELS``.
     """
     value = __getenv(key)
     if value is None:
         return default
     return value.strip().lower() in {"true", "1", "yes", "on"}
+
+
+# The kernel's legal range for /proc/<pid>/oom_score_adj (see proc(5)). Kept here
+# rather than in dd.common.lifecycle so the env parsing below and the helper that
+# writes procfs share one definition.
+OOM_SCORE_ADJ_MIN = -1000
+OOM_SCORE_ADJ_MAX = 1000
+
+
+def _getenv_oom_score_adj(key: str) -> int | None:
+    """Parse an optional ``oom_score_adj``; ``None`` when unset or blank.
+
+    Optional because it is a memory-pressure optimisation, not a dependency — but a
+    *malformed* value is still a hard error here rather than garbage written to
+    procfs later, which is the same fail-fast-at-import contract as the required
+    vars above.
+    """
+    value = __getenv(key)
+    if value is None or not value.strip():
+        return None
+
+    try:
+        score_adj = int(value.strip())
+    except ValueError:
+        raise ValueError(
+            f"Environment variable '{key}' must be an integer between "
+            f"{OOM_SCORE_ADJ_MIN} and {OOM_SCORE_ADJ_MAX}."
+        ) from None
+
+    if not OOM_SCORE_ADJ_MIN <= score_adj <= OOM_SCORE_ADJ_MAX:
+        raise ValueError(
+            f"Environment variable '{key}' is {score_adj}, outside the kernel's "
+            f"legal oom_score_adj range "
+            f"({OOM_SCORE_ADJ_MIN}..{OOM_SCORE_ADJ_MAX})."
+        )
+
+    return score_adj
 
 
 def _test_env(var_name: str) -> tuple[int, ...] | tuple[()]:
@@ -86,7 +123,40 @@ def _test_env(var_name: str) -> tuple[int, ...] | tuple[()]:
     return test_env
 
 
+# Backend scheme (the part before "://", driver suffix stripped) -> the SQLAlchemy
+# sync/async URL prefixes it maps to. Postgres runs on psycopg v3, whose SQLAlchemy
+# dialect is dual sync/async, so both prefixes are the same one. The empty scheme is
+# Library Mode's placeholder URL (see _db_urls). MySQL is deliberately absent — see
+# the explicit error below.
+_DB_SCHEMES: t.Mapping[str, tuple[str, str]] = {
+    "": ("postgresql+psycopg", "postgresql+psycopg"),
+    "postgres": ("postgresql+psycopg", "postgresql+psycopg"),
+    "postgresql": ("postgresql+psycopg", "postgresql+psycopg"),
+    "sqlite": ("sqlite", "sqlite+aiosqlite"),
+}
+
+
+def _with_sslmode(db_url: str) -> str:
+    """Ensure a Postgres URL carries an explicit ``sslmode`` when TLS is wanted.
+
+    Postgres expresses TLS as libpq's ``sslmode`` query parameter rather than a
+    driver-side ``ssl.SSLContext`` (how the old asyncmy setup did it), so the knob
+    lives in the URL. ``DATABASE_SSL`` defaults to true; an ``sslmode`` already in the
+    URL always wins, and setting it false simply leaves libpq's own default (``prefer``)
+    in place rather than forcing TLS off.
+    """
+    if not _getbool("DATABASE_SSL", True) or "sslmode=" in db_url:
+        return db_url
+    return db_url + ("&" if "?" in db_url else "?") + "sslmode=require"
+
+
 def _db_urls(var_name: str, var_name_alternative: str) -> tuple[str, str]:
+    """Sync and async SQLAlchemy URLs for the configured database.
+
+    Accepts ``postgres://`` / ``postgresql://`` (mapped onto psycopg v3) and
+    ``sqlite://`` (async side gets aiosqlite) — the latter covers the test suite and
+    the small Raspberry Pi deployment.
+    """
     try:
         db_url = _getenv(var_name)
     except ValueError:
@@ -99,17 +169,40 @@ def _db_urls(var_name: str, var_name_alternative: str) -> tuple[str, str]:
         # would otherwise raise ValueError
         db_url = "://"
 
-    __repl_till = db_url.find("://")
-    db_url = db_url[__repl_till:]
-    db_url_async = "mysql+asyncmy" + db_url
-    db_url = "mysql" + db_url
-    return db_url, db_url_async
+    scheme, _, remainder = db_url.partition("://")
+    # Tolerate an already-qualified scheme ("postgresql+psycopg://…") by keeping only
+    # the backend name; the driver is ours to pick.
+    backend = scheme.split("+", 1)[0].strip().lower()
+
+    if backend in {"mysql", "mariadb"}:
+        raise ValueError(
+            f"Environment variable '{var_name}'/'{var_name_alternative}' points at "
+            f"MySQL ({db_url.split('://')[0]}://…), which is no longer supported. "
+            "Use a postgresql:// or sqlite:// URL."
+        )
+    if backend not in _DB_SCHEMES:
+        raise ValueError(
+            f"Unsupported database scheme {backend!r} in "
+            f"'{var_name}'/'{var_name_alternative}'; expected postgresql:// or "
+            "sqlite://."
+        )
+
+    sync_prefix, async_prefix = _DB_SCHEMES[backend]
+    if backend in {"", "sqlite"}:
+        # SQLite has no sslmode, and the empty scheme is Library Mode's placeholder —
+        # an engine is built from it but never connects, so leave it bare.
+        return f"{sync_prefix}://{remainder}", f"{async_prefix}://{remainder}"
+
+    return (
+        _with_sslmode(f"{sync_prefix}://{remainder}"),
+        _with_sslmode(f"{async_prefix}://{remainder}"),
+    )
 
 
-def _db_config() -> tuple[
+def _db_config(db_url_async: str) -> tuple[
     t.Mapping[str, bool | type[AsyncSession]],
     t.Mapping[str, bool],
-    t.Mapping[str, ssl.SSLContext],
+    t.Mapping[str, t.Any],
     t.Mapping[str, int | str | bool | type[Pool]],
 ]:
     db_session_kwargs_sync: dict[str, t.Any] = {
@@ -119,23 +212,33 @@ def _db_config() -> tuple[
         "class_": AsyncSession,
     }
 
-    db_connect_args: t.Mapping[str, ssl.SSLContext] = {}
-    if _getbool("MYSQL_SSL", True):
-        ssl_ctx = ssl.create_default_context(
-            cafile="/etc/ssl/certs/ca-certificates.crt"
-        )
-        ssl_ctx.verify_mode = ssl.CERT_REQUIRED
-        db_connect_args.update({"ssl": ssl_ctx})
+    # TLS now rides in the URL (sslmode=…) rather than a driver-side ssl.SSLContext,
+    # so what is left here is the session timezone.
+    db_connect_args: dict[str, t.Any] = {}
+    if not db_url_async.startswith("sqlite"):
+        # Pin every psycopg session to UTC. The schema stores naive
+        # TIMESTAMP WITHOUT TIME ZONE columns but the code writes a mix of naive-UTC
+        # and tz-aware UTC datetimes into them, and Postgres converts an *aware* value
+        # using the session's TimeZone — so on a server whose zone is not UTC (initdb
+        # takes it from the OS, which on a Pi usually is a local zone) some rows would
+        # silently land offset from the rest. MySQL's driver simply dropped the tzinfo,
+        # which is why this never surfaced before.
+        db_connect_args["options"] = "-c timezone=UTC"
 
     db_engine_args: dict[str, int | str | bool | type[Pool]] = {
-        "max_overflow": -1,
-        "isolation_level": "READ COMMITTED",
         "pool_pre_ping": True,
         "pool_recycle": 3600,
-        "pool_use_lifo": True,
     }
+    if not db_url_async.startswith("sqlite"):
+        # Server/QueuePool knobs SQLite neither needs nor accepts. max_overflow is
+        # finite (it was -1, i.e. unbounded, under MySQL) because the Pi's Postgres
+        # runs with max_connections=25 — an unbounded overflow could eat every slot.
+        db_engine_args["max_overflow"] = 10
+        db_engine_args["isolation_level"] = "READ COMMITTED"
+        db_engine_args["pool_use_lifo"] = True
+
     # Under pytest the engine is driven from many short-lived event loops
-    # (every asyncio.run() in test setup/teardown opens a new loop). asyncmy
+    # (every asyncio.run() in test setup/teardown opens a new loop). psycopg
     # connections are bound to their creating loop, so pooled connections that
     # outlive that loop blow up with "Event loop is closed" when the pool later
     # terminates them. NullPool closes each connection on return, within the
@@ -144,16 +247,22 @@ def _db_config() -> tuple[
         db_engine_args["poolclass"] = NullPool
         # max_overflow and pool_use_lifo are QueuePool-specific and rejected
         # by create_engine when combined with NullPool.
-        del db_engine_args["max_overflow"]
-        del db_engine_args["pool_use_lifo"]
+        db_engine_args.pop("max_overflow", None)
+        db_engine_args.pop("pool_use_lifo", None)
     return db_session_kwargs, db_session_kwargs_sync, db_connect_args, db_engine_args
 
 
 ######### loglevel config #########
 
+# Log to stdout rather than logging's stderr default: these are application logs,
+# not diagnostics about this process failing, and Railway's collector treats a
+# stderr line as a hint that something went wrong. Severity already travels in the
+# record itself (the ``%(levelname).1s`` field), so the stream does not need to
+# carry it.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname).1s %(name)s | %(message)s",
+    stream=sys.stdout,
 )
 ###### Environment variables ######
 
@@ -217,8 +326,24 @@ announcer_offline_alert_after = 900
 embed_warning_color = h.Color(0xF1C40F)
 embed_critical_color = h.Color(0x992D22)
 
-# Database URLs
-db_url, db_url_async = _db_urls("MYSQL_PRIVATE_URL", "MYSQL_URL")
+# Database URLs. DATABASE_PRIVATE_URL wins over DATABASE_URL — Railway injects both
+# and the private one stays on the internal network.
+db_url, db_url_async = _db_urls("DATABASE_PRIVATE_URL", "DATABASE_URL")
+
+# Whether each bot runs `alembic upgrade head` itself on StartingEvent (see
+# dd/common/db_migrations.py). Defaults ON: the process model has no dependency
+# ordering to lean on (supervisord spawns its programs simultaneously), so the
+# migration is sequenced by straight-line Python inside the bot instead of by a shell
+# entrypoint. Set false to run a bot against a database somebody else migrates —
+# local dev against a shared DB, or a container where a one-shot job does it.
+run_migrations_on_startup = _getbool("RUN_MIGRATIONS_ON_STARTUP", True)
+
+# Optional Linux OOM-kill preference this process raises itself to at startup (see
+# dd.common.lifecycle.apply_oom_score_adj). Unset -> left at whatever the container
+# baseline is. Named without the DEVBOT_ prefix of the dev-runner knob it mirrors
+# (DEVBOT_OOM_SCORE_ADJ, applied externally by choom in docker-run-devbot.sh) because
+# this one is read by the app itself, in every environment.
+oom_score_adj = _getenv_oom_score_adj("OOM_SCORE_ADJ")
 
 # Bungie credentials
 bungie_api_key = _getenv("BUNGIE_API_KEY", "")
@@ -271,7 +396,7 @@ public_base_url = _public_base_url()
     db_session_kwargs_sync,
     db_connect_args,
     db_engine_args,
-) = _db_config()
+) = _db_config(db_url_async)
 
 url_regex = re.compile(
     r"http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+"

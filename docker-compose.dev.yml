@@ -21,18 +21,13 @@ services:
                                         # make dev-up sets it to <host-hostname>-dd-dev
     init: true
     # Memory cap (cgroup v2 memory.max). Confines any OOM kill to THIS container's own
-    # cgroup, so a runaway `make devbot-up` bot can never OOM-kill a neighbour (dd-mysql):
+    # cgroup, so a runaway `make devbot-up` bot can never OOM-kill a neighbour (dd-postgres):
     # the kernel only reaps a process inside the offending cgroup. Applied on `make dev-up`;
     # override the sizes via .env (DEV_MEM_LIMIT / DEV_MEMSWAP_LIMIT). Default leaves ~1.4GB
-    # of a 4GB Pi for dd-mysql + host while fitting dd-dev (~1.4GB idle) + both dev bots.
+    # of a 4GB Pi for dd-postgres + host while fitting dd-dev (~1.4GB idle) + both dev bots.
     mem_limit: ${DEV_MEM_LIMIT:-2560m}
     memswap_limit: ${DEV_MEMSWAP_LIMIT:-2816m}
-    env_file: [.env]                          # MYSQL_URL + RAILWAY_API_TOKEN + app vars
-    environment:
-      # Atlas dev/scratch database for `make atlas-migration-plan`. No usable Docker
-      # in here, so point Atlas at a dedicated throwaway schema on the sibling MySQL
-      # instead of a docker:// dev DB. The schema is created by docker-entrypoint.dev.sh.
-      ATLAS_DEV_URL: mysql://root:devroot@mysql:3306/atlas_dev
+    env_file: [.env]                          # DATABASE_URL + RAILWAY_API_TOKEN + app vars
     volumes:
       - .:/workspace                          # bind-mount the host clone; dev user uid built to match (USER_UID)
       - dd-uv-cache:/home/dev/.cache/uv        # persist uv cache (fast re-syncs)
@@ -45,19 +40,25 @@ services:
       - dd-local-share:/home/dev/.local/share  # persist fish history + bash history (HISTFILE points here)
     ports:
       - "${DEV_SSH_PORT:-2222}:2222"   # host ${DEV_SSH_PORT} (default 2222) -> container sshd; Cloudflare tunnel points here
-    depends_on: [mysql]
+    depends_on:
+      postgres:
+        condition: service_healthy
     # Do NOT mount over /home/dev/venv or all of /home/dev — it would erase the
     # pre-built venv.
-  mysql:
-    image: mysql:8                            # arm64 image exists
-    container_name: dd-mysql
+  postgres:
+    image: postgres:17-alpine                 # arm64 image exists
+    container_name: dd-postgres
     environment:
-      MYSQL_ROOT_PASSWORD: devroot
-      MYSQL_DATABASE: kyber
-      MYSQL_USER: kyber
-      MYSQL_PASSWORD: kyber
+      POSTGRES_USER: kyber
+      POSTGRES_PASSWORD: kyber
+      POSTGRES_DB: kyber
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kyber -d kyber"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     volumes:
-      - dd-mysql-data:/var/lib/mysql
+      - dd-postgres-data:/var/lib/postgresql/data
 volumes:
   dd-uv-cache:
   dd-claude:
@@ -66,4 +67,4 @@ volumes:
   dd-ssh-host:
   dd-zed-server:
   dd-local-share:
-  dd-mysql-data:
+  dd-postgres-data:

@@ -32,6 +32,7 @@ from dd.beacon.extensions.statistics import track_command_usage
 from ..common import cfg, schemas, settings
 from ..common.auth import owner_check_error_handler
 from ..common.bot import CachedFetchBot, ServerEmojiEnabledBot
+from ..common.db_migrations import run_migrations
 from ..common.discord_logging import (
     aclose_discord_logging,
     install_command_error_reporting,
@@ -39,8 +40,13 @@ from ..common.discord_logging import (
 )
 from ..common.emoji_store import AppEmojiStore
 from ..common.extension_loader import load_extensions_strict
-from ..common.lifecycle import consume_exit_code
+from ..common.lifecycle import apply_oom_score_adj, consume_exit_code
 from .mirror_worker import mirror_worker
+
+# Before anything allocates in earnest, so the preference is in place for the whole
+# process lifetime: raise this process's OOM-kill preference if one is configured. The
+# container baseline stays at 0 so the kernel reaps a bot rather than supervisord.
+apply_oom_score_adj(cfg.oom_score_adj)
 
 # Live set of channel ids the gateway cache is allowed to keep (mirror sources +
 # destinations). Populated from the DB before the gateway connects and refreshed
@@ -122,6 +128,11 @@ install_command_error_reporting(client)
 @bot.listen(h.StartingEvent)
 async def on_starting_event(_event: h.StartingEvent):
     await schemas.wait_for_db()
+    # Bring the schema to head before anything reads a table. Ordered here, in
+    # straight-line Python, rather than by a shell entrypoint — supervisord (PID 1 in
+    # the container) has no dependency mechanism to sequence a migration step ahead of
+    # the bot. Fatal on failure; see dd/common/db_migrations.py.
+    await run_migrations()
     # Warm the scoped-cache channel set from the DB *before* the gateway connects, so
     # the initial GUILD_CREATE burst is filtered against a populated set (an empty set
     # would refuse every channel until the first refresh).

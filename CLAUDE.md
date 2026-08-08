@@ -7,8 +7,8 @@ Two Discord bots (`hikari-lightbulb` v3) sharing one codebase under `dd/`:
 - `dd.common` — shared config, DB schemas, bot classes, helpers
 - `dd.hmessage`, `dd.sector_accounting` — shared domain code
 
-Python 3.13, fully async (hikari / aiohttp / aiosqlite / asyncmy), SQLAlchemy 2.0,
-Atlas for migrations, deployed on Railway.
+Python 3.13, fully async (hikari / aiohttp / aiosqlite / psycopg), SQLAlchemy 2.0,
+Alembic for migrations, deployed on Railway.
 
 > **Two environments.** This repo is worked on both from the developer's **local box**
 > (pyenv + Zed/VSCode) and by **Claude on the remote server** against this checkout.
@@ -44,8 +44,8 @@ DB layer, or building a message/embed, read it.** Quick orientation:
   `uv run ty` work out of the box.
 - Do not create virtualenvs by hand or install packages globally.
 - The `Makefile`'s Python targets (`run-*-local`, `*-schemas`, `test`, `lint`, `format`,
-  `typecheck`) all use `uv run`. The `railway`/`atlas` targets shell out to non-Python
-  CLIs as-is.
+  `typecheck`, `migration-*`) all use `uv run`. The `railway`/`dev-*` targets shell out
+  to non-Python CLIs (Railway CLI, `docker compose`) as-is.
 
 ## Running & deploying
 
@@ -57,6 +57,14 @@ DB layer, or building a message/embed, read it.** Quick orientation:
   import time**, so a missing var fails fast with `ValueError`.
 - Deploy via `make deploy-beacon-dev` / `deploy-anchor-prod` etc. (Railway) or via
   Railway's plugin.
+- **One image for every deployment.** The repo-root `Dockerfile` builds both the Railway
+  (amd64) and Raspberry Pi B+ (`linux/arm/v6`) images — Alpine for both, prod-correct
+  defaults, three build args (`BASE_IMAGE`, `UV_SYNC_GROUPS`, `PURE_PYTHON`) for the Pi.
+  There are **no entrypoint shell scripts**: PID 1 is **supervisord** (`supervisord.conf`),
+  which picks the bot from `RAILWAY_SERVICE_NAME`, bounds its restarts, and runs a
+  disarmed-by-default sshd (`sshd_config`) so a container whose bot has died is still
+  reachable. Migrations run inside each bot's startup hook, not ahead of it — supervisord
+  has no ordering mechanism, so don't add config that assumes one.
 - **Never call the Railway connector's agent** (`mcp__Railway__railway-agent`). Use the
   direct tools only — `get-status`, `list-deployments`, `get-logs`, `get-service-config`,
   `list-variables`, `redeploy`, `update-service`. The agent takes its own actions to
@@ -83,8 +91,8 @@ DB layer, or building a message/embed, read it.** Quick orientation:
 - **Run via `make test`** (= `uv run --env-file .env python -m pytest -m "not discord"`),
   not bare `uv run python -m pytest` — the latter skips `.env`, so `cfg.py`'s import-time
   validation raises a cryptic `ValueError: Environment variable '…' not found.`
-- Three markers: `integration` (DB layer; SQLite by default, `TEST_USE_MYSQL=1` for
-  MySQL), `discord` (hits live Discord, needs a real token), and `browser` (drives a real
+- Three markers: `integration` (DB layer; SQLite by default, `TEST_USE_POSTGRES=1` for
+  Postgres), `discord` (hits live Discord, needs a real token), and `browser` (drives a real
   Chromium via Playwright). The safe default suite is `-m "not discord"`. Also:
   `make test-unit`, `make test-integration`, `make test-browser`, `make coverage`.
 - **Browser tests** cover the CV2 builder's drag layer against the no-server fixture
@@ -139,19 +147,19 @@ DB layer, or building a message/embed, read it.** Quick orientation:
 
 ## Database & migrations
 
-- SQLAlchemy schemas in `dd/common/schemas.py` (it doubles as the Atlas DDL source and a
-  management CLI). Migrations via **Atlas** (`atlas.hcl`, `migrations/` at repo root):
-  `make atlas-migration-plan` to diff (renders the models to `.atlas/desired.sql`, then
-  `atlas migrate diff` writes a new migration you then hand-edit), `make
-  atlas-migration-apply` to apply. `make create-schemas` / `destroy-schemas` manage
-  tables directly.
-- **`atlas-migration-plan` works both on the local box and inside the dev container.**
-  Atlas needs a throwaway "dev" database to compute the diff: locally it defaults to an
-  ephemeral `docker://` MySQL; the dev container has no usable Docker, so it sets
-  `ATLAS_DEV_URL` (docker-compose.dev.yml) to a dedicated `atlas_dev` scratch schema on
-  the sibling MySQL — created idempotently by `docker-entrypoint.dev.sh`. We do **not**
-  use Atlas's `external_schema` provider (non-community-only); the community Atlas binary
-  baked into the container handles the file-based diff fine.
+- SQLAlchemy schemas in `dd/common/schemas.py` (it doubles as the DDL source and a
+  management CLI). Migrations via **Alembic** (`alembic.ini`, `migrations/` at repo
+  root): `make migration-plan MSG="..."` autogenerates a revision from the live
+  models-vs-database diff (hand-check it — autogenerate is a starting point, not an
+  oracle, e.g. it sees a rename as drop+create), `make migration-apply` to apply,
+  `make migration-dry-run` to print the SQL without running it, `make migration-check`
+  to fail if the models have drifted from the migrations. `make create-schemas` /
+  `destroy-schemas` manage tables directly.
+- **`migration-plan`/`migration-apply` need no separate dev/scratch database** — unlike
+  Atlas, Alembic autogenerates by diffing the models against the target database
+  directly (`DATABASE_PRIVATE_URL`/`DATABASE_URL`, read via `dd.common.cfg` in
+  `migrations/env.py`), so the same `.env`-driven connection works identically on the
+  local box and inside the dev container.
 - **`make destroy-schemas` / `--destroy-all` refuse a non-local DB** unless
   `ALLOW_REMOTE_SCHEMA_DESTROY=1` (`schemas.py`). Never bypass it — there was a real
   dev-DB-wipe incident (`plans/dev_db_auto_wipe_investigation.md`).

@@ -23,10 +23,12 @@ Components V2 builder.
 
 import datetime as dt
 import json
+import sqlite3
 import types
 import typing as t
 
 import aiohttp.web
+import aiosqlite
 import hikari as h
 import pytest
 
@@ -1275,3 +1277,131 @@ async def test_handle_delete_503_when_bot_unset(monkeypatch) -> None:
     monkeypatch.setattr(web, "_bot", None)
     resp = await wr._handle_delete(_req())
     assert resp.status == 503
+
+
+# --- _build_indexes: batched manifest scans -------------------------------------------
+#
+# The two activity scans read in fetchmany batches rather than one fetchall() each, for
+# the same reason as hybrid_post_core.iter_weapon_items. Only the derived names outlive
+# the loop, so the transform must be output-identical — asserted here against the
+# manifest-shaped fixture rather than assumed.
+
+
+def _activity_manifest(path: str, n_filler: int = 450) -> None:
+    """A manifest sqlite with more activity rows than one fetchmany batch (200)."""
+    strike_type, raid_type = 1, 2
+    activity_types = [
+        {"hash": strike_type, "displayProperties": {"name": "Strike"}},
+        {"hash": raid_type, "displayProperties": {"name": "Raid"}},
+    ]
+    # Filler activity-type rows push the real ones across batch boundaries.
+    activity_types += [
+        {"hash": 100 + i, "displayProperties": {"name": f"Type {i:03d}"}}
+        for i in range(n_filler)
+    ]
+    activities = [
+        {"hash": 1000 + i, "activityTypeHash": raid_type, "displayProperties": {}}
+        for i in range(n_filler)
+    ]
+    # The rows that must survive, seeded past the first batch as well as inside it.
+    activities.insert(
+        3,
+        {
+            "hash": 9001,
+            "activityTypeHash": strike_type,
+            "displayProperties": {"name": "The Corrupted"},
+        },
+    )
+    activities.insert(
+        280,
+        {
+            "hash": 9002,
+            "activityTypeHash": strike_type,
+            "displayProperties": {"name": "Warden of Nothing"},
+        },
+    )
+    activities.insert(
+        300,
+        {
+            "hash": 9003,
+            "activityTypeHash": raid_type,
+            "displayProperties": {"name": "Master Conquest: The Vault: Customize"},
+        },
+    )
+    con = sqlite3.connect(path)
+    try:
+        for table, rows in (
+            ("DestinyActivityTypeDefinition", activity_types),
+            ("DestinyActivityDefinition", activities),
+        ):
+            con.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, json)")
+            con.executemany(
+                f"INSERT INTO {table} (id, json) VALUES (?, ?)",
+                [(i, json.dumps(row)) for i, row in enumerate(rows)],
+            )
+        con.commit()
+    finally:
+        con.close()
+
+
+@pytest.fixture
+def activity_manifest(tmp_path, monkeypatch):
+    path = str(tmp_path / "world.content")
+    _activity_manifest(path)
+
+    async def _fake_manifest(_api_key: object) -> str:
+        return path
+
+    async def _no_weapons() -> list:
+        return []
+
+    monkeypatch.setattr(wr.api, "_get_latest_manifest", _fake_manifest)
+    monkeypatch.setattr(wr, "get_weapon_pool", _no_weapons)
+    return path
+
+
+@pytest.mark.asyncio
+async def test_build_indexes_scans_every_batch(activity_manifest) -> None:
+    indexes = await wr._build_indexes()
+
+    # Both an early row and rows past the 200-row batch boundary are present, so the
+    # batching loop did not stop after its first fetchmany.
+    assert indexes.activities["strike"] == ["The Corrupted", "Warden of Nothing"]
+    assert indexes.conquests["Master"] == ["The Vault"]
+    # Activity-type names come from the *other* batched scan; without it neither strike
+    # would classify at all.
+    assert indexes.activities["strike"]
+
+
+@pytest.mark.asyncio
+async def test_build_indexes_matches_a_fetchall_reference(activity_manifest) -> None:
+    """The pre-fix scans, replayed with fetchall(), must produce the same sets."""
+    strikes: set[str] = set()
+    conquest_by_tier: dict[str, set[str]] = {t_: set() for t_ in wr.CONQUEST_TIERS}
+    async with aiosqlite.connect(activity_manifest) as con:
+        cur = await con.cursor()
+        await cur.execute("SELECT json FROM DestinyActivityTypeDefinition")
+        activity_types: dict[int, str] = {}
+        for (row,) in await cur.fetchall():
+            defn = json.loads(row)
+            activity_types[int(defn["hash"])] = (
+                defn.get("displayProperties") or {}
+            ).get("name", "")
+        await cur.execute("SELECT json FROM DestinyActivityDefinition")
+        for (row,) in await cur.fetchall():
+            defn = json.loads(row)
+            raw_name = (defn.get("displayProperties") or {}).get("name", "")
+            parsed = wr._parse_conquest_name(raw_name)
+            if parsed:
+                conquest_by_tier[parsed[0]].add(parsed[1])
+            type_name = activity_types.get(defn.get("activityTypeHash"), "")
+            if wr._classify_activity(defn, type_name) == "strike":
+                cleaned = wr._clean_activity_name(raw_name, "strike")
+                if cleaned:
+                    strikes.add(cleaned)
+
+    indexes = await wr._build_indexes()
+    assert indexes.activities["strike"] == sorted(strikes)
+    assert indexes.conquests == {
+        tier: sorted(names) for tier, names in conquest_by_tier.items()
+    }

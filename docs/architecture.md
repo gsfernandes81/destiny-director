@@ -29,7 +29,8 @@ Everything lives under `dd/`:
 `sector_accounting`, and the `extensions/` subpackages carry `__init__.py`. Don't add the
 missing ones to "fix" imports.
 
-`migrations/` (Atlas SQL + `atlas.sum`) sits at the **repo root**, not under `dd/`.
+`migrations/` (Alembic `env.py` + revision scripts) sits at the **repo root**, not under
+`dd/`.
 Design context lives in `docs/` (e.g. `v2_v3_behavior_audit.md`, `decisions/`) and
 `plans/`.
 
@@ -92,9 +93,10 @@ paired with `owner_check_error_handler`.
   `configure_test_db()` to point at a throwaway SQLite DB. Hand-rolled engines bypass that
   and can hit the real database.
 
-Schemas are defined in `dd/common/schemas.py`, which also serves as the Atlas DDL source
-(`--print-ddl`) and a management CLI (`--create-all` / `--destroy-all`). `--destroy-all`
-refuses a non-local DB unless `ALLOW_REMOTE_SCHEMA_DESTROY=1` — never bypass this guard.
+Schemas are defined in `dd/common/schemas.py`, which also serves as Alembic's target
+metadata (autogenerate diffs the live database against it — see `migrations/env.py`) and
+a management CLI (`--create-all` / `--destroy-all`). `--destroy-all` refuses a non-local
+DB unless `ALLOW_REMOTE_SCHEMA_DESTROY=1` — never bypass this guard.
 
 ## Building messages — `HMessage`
 
@@ -218,7 +220,7 @@ Tests live inside each package as `tests/` subdirs (including nested ones, e.g.
 `dd/anchor/extensions/tests/`, `dd/anchor/extensions/bungie_api/tests/`). Every package
 has tests. The **repo-root `conftest.py`** holds the one shared fixture: a session-scoped,
 autouse `_test_db` that repoints the DB layer at a temp-file SQLite database via
-`schemas.configure_test_db()`. Set `TEST_USE_MYSQL=1` to run DB tests against MySQL
+`schemas.configure_test_db()`. Set `TEST_USE_POSTGRES=1` to run DB tests against Postgres
 instead (guarded by `_db_is_local()` / `ALLOW_REMOTE_SCHEMA_DESTROY` so it can't wipe a
 remote DB) — that guard is why the fixture lives in exactly one file rather than being
 copied per package. Per-package `conftest.py`s hold only what is specific to them

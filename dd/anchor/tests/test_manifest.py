@@ -35,16 +35,24 @@ pytestmark = pytest.mark.asyncio
 _FRAGMENT = "/common/destiny2_content/sqlite/en/"
 
 
+class _FakeContent:
+    """``response.content`` — the download streams off this rather than ``read()``."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    async def iter_chunked(self, size: int) -> t.AsyncIterator[bytes]:
+        for start in range(0, len(self._body), size):
+            yield self._body[start : start + size]
+
+
 class _FakeResponse:
     def __init__(self, payload: t.Any, body: bytes) -> None:
         self._payload = payload
-        self._body = body
+        self.content = _FakeContent(body)
 
     async def json(self) -> t.Any:
         return self._payload
-
-    async def read(self) -> bytes:
-        return self._body
 
     async def __aenter__(self) -> "_FakeResponse":
         return self

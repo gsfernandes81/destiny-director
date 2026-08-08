@@ -39,25 +39,25 @@ def _test_db(tmp_path_factory: pytest.TempPathFactory):
     """Point the DB layer at a throwaway backend for the whole test session.
 
     By default this is a temp-file SQLite database, so the suite needs no external
-    service. Set ``TEST_USE_MYSQL`` to instead exercise the real MySQL engine
+    service. Set ``TEST_USE_POSTGRES`` to instead exercise the real Postgres engine
     configured from the environment (full-dialect fidelity before deploys).
 
     A *temp file* is used rather than ``:memory:`` because each aiosqlite
     connection to ``:memory:`` gets its own private database, so schema created on
     one connection/event loop would be invisible to the next. ``NullPool`` opens a
     fresh connection per checkout inside the live loop, matching the production
-    NullPool-under-pytest reasoning for asyncmy in ``cfg.py``.
+    NullPool-under-pytest reasoning for psycopg in ``cfg.py``.
 
     Autouse across the whole repo, not just the DB-touching packages: dd.common.settings
     — which backs what used to be plain cfg.py env vars like embed colors and
     default_url — reads through the DB layer, so even nominally "pure-logic" tests can
     reach it."""
-    if os.getenv("TEST_USE_MYSQL"):
+    if os.getenv("TEST_USE_POSTGRES"):
         if not schemas._db_is_local() and not os.getenv("ALLOW_REMOTE_SCHEMA_DESTROY"):
             pytest.fail(
-                "TEST_USE_MYSQL is set but the configured DB is not local "
+                "TEST_USE_POSTGRES is set but the configured DB is not local "
                 f"(host={schemas.db_engine.url.host!r}); refusing to run against it — "
-                "it would be wiped. Point it at a local/throwaway MySQL (or set "
+                "it would be wiped. Point it at a local/throwaway Postgres (or set "
                 "ALLOW_REMOTE_SCHEMA_DESTROY=1 to override).",
                 pytrace=False,
             )
@@ -72,8 +72,9 @@ def _test_db(tmp_path_factory: pytest.TempPathFactory):
 
     asyncio.run(schemas.create_all())
     yield
-    # No teardown drop: the temp SQLite file is discarded, and we must NEVER auto-drop a
-    # real MySQL — that ordering (reset_db then destroy_all) is what wiped the dev DB.
+    # No teardown drop: the temp SQLite file is discarded, and we must NEVER
+    # auto-drop a real Postgres — that ordering (reset_db then destroy_all) is
+    # what wiped the dev DB.
     if engine is not None:
         asyncio.run(engine.dispose())
         schemas.reset_db()

@@ -28,7 +28,7 @@ from sqlalchemy import make_url
 
 from dd.common import schemas
 
-_REMOTE = "mysql+asyncmy://u:p@viaduct.proxy.rlwy.net:12345/railway"
+_REMOTE = "postgresql+psycopg://u:p@viaduct.proxy.rlwy.net:12345/railway"
 
 # dd/common/tests/this_file.py -> dd/common/tests -> dd/common -> dd -> repo root
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -43,19 +43,19 @@ def test_sqlite_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     schemas._assert_schema_destroy_allowed()  # no raise
 
 
-def test_local_mysql_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    _point_at(monkeypatch, "mysql+asyncmy://u:p@127.0.0.1:3306/db")
+def test_local_postgres_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _point_at(monkeypatch, "postgresql+psycopg://u:p@127.0.0.1:5432/db")
     schemas._assert_schema_destroy_allowed()  # no raise
 
 
-def test_remote_mysql_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_remote_postgres_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ALLOW_REMOTE_SCHEMA_DESTROY", raising=False)
     _point_at(monkeypatch, _REMOTE)
     with pytest.raises(RuntimeError, match="non-local database"):
         schemas._assert_schema_destroy_allowed()
 
 
-def test_remote_mysql_allowed_with_override(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_remote_postgres_allowed_with_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALLOW_REMOTE_SCHEMA_DESTROY", "1")
     _point_at(monkeypatch, _REMOTE)
     schemas._assert_schema_destroy_allowed()  # override → no raise
@@ -66,8 +66,8 @@ def test_test_db_fixture_has_exactly_one_home() -> None:
 
     It used to be duplicated verbatim into three package conftests, which is three
     places for the refusal to drift or be dropped. Any conftest that decides what
-    ``TEST_USE_MYSQL`` points the DB layer at is that fixture, so finding a second one
-    means a copy has come back."""
+    ``TEST_USE_POSTGRES`` points the DB layer at is that fixture, so finding a second
+    one means a copy has come back."""
     conftests = [
         path
         for path in _REPO_ROOT.rglob("conftest.py")
@@ -77,7 +77,7 @@ def test_test_db_fixture_has_exactly_one_home() -> None:
     homes = [
         path.relative_to(_REPO_ROOT).as_posix()
         for path in conftests
-        if "TEST_USE_MYSQL" in path.read_text(encoding="utf-8")
+        if "TEST_USE_POSTGRES" in path.read_text(encoding="utf-8")
     ]
     assert homes == ["conftest.py"]
 

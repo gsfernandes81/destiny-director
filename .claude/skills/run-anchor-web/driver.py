@@ -14,9 +14,11 @@ each page in a real browser and reports what actually rendered.
 Two substitutions, both forced by the container and both the same ones the test suite
 already makes:
 
-- **SQLite instead of MySQL.** ``cfg`` hardcodes a ``mysql+asyncmy`` URL
-  (``_db_urls``), and there is no MySQL here. ``schemas.configure_test_db`` is the
-  supported swap; ``dd/anchor/tests/conftest.py`` does the same thing.
+- **SQLite instead of Postgres.** The dummy ``DATABASE_URL``/``DATABASE_SSL`` in the
+  ``.env`` recipe below only satisfies ``cfg``'s import-time validation — there is no
+  Postgres server in a container. ``schemas.configure_test_db`` is what actually repoints
+  the live engine at a throwaway SQLite file; ``dd/anchor/tests/conftest.py`` does the
+  same thing.
 - **The repo's own dev auth bypass instead of Discord OAuth.** Triple-gated in
   ``web_auth._dev_bypass_active`` — ``TEST_ENV`` set, ``DEV_AUTH_USER_ID`` set, and
   ``public_base_url`` empty. All three are arranged below, before ``cfg`` is imported.
