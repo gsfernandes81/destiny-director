@@ -16,6 +16,7 @@
 import json
 import logging
 import re
+import sys
 import typing as t
 from os import getenv as __getenv
 
@@ -254,9 +255,15 @@ def _db_config(db_url_async: str) -> tuple[
 
 ######### loglevel config #########
 
+# Log to stdout rather than logging's stderr default: these are application logs,
+# not diagnostics about this process failing, and Railway's collector treats a
+# stderr line as a hint that something went wrong. Severity already travels in the
+# record itself (the ``%(levelname).1s`` field), so the stream does not need to
+# carry it.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname).1s %(name)s | %(message)s",
+    stream=sys.stdout,
 )
 ###### Environment variables ######
 
