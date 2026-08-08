@@ -21,7 +21,6 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import settings
 from ...common.bot import ServerEmojiEnabledBot
 from ...common.lost_sector import format_post, load_rotation
 from ..nav import (
@@ -29,13 +28,13 @@ from ..nav import (
     make_navigator_command,
     setup_nav_pages,
 )
-from .autoposts import follow_control_command_maker
+from .autoposts import follow_control_command_maker, resolve_followable_channel
 
 loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 20, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = settings.get_followable_channel_sync("lost_sector")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("lost_sector", "Lost Sector")
 
 
 class SectorMessages(NavPages):

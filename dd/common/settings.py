@@ -49,6 +49,7 @@ the settings page, at which point the DB row wins from then on.
 """
 
 import logging
+import os
 import time
 import typing as t
 
@@ -353,6 +354,107 @@ async def seed_followables_from_env() -> dict[str, int]:
             continue
         await schemas.AutoPostSettings.set_value(slug, str(int(channel_id)))
         written[feed] = int(channel_id)
+    if written:
+        invalidate()
+    return written
+
+
+# The env vars every non-followable setting here used to read, before cfg.py dropped
+# them in the same migration that added this module (see the module docstring). Unlike
+# followables, there's no cfg.<attr> fallback left to read for these — cfg.py no longer
+# parses them at all — so seed_settings_from_env below reads os.environ directly.
+_VALUE_ENV_VARS: dict[str, str] = {
+    "default_url": "DEFAULT_URL",
+    "alert_min_level": "ALERT_MIN_LEVEL",
+    "lost_sector_image_url": "LOST_SECTOR_GIF_URL",
+    "xur_image_url": "XUR_IMAGE_URL",
+}
+_COLOR_ENV_VARS: dict[str, str] = {
+    "embed_default_color": "EMBED_DEFAULT_COLOR",
+    "embed_error_color": "EMBED_ERROR_COLOR",
+}
+_CHANNEL_ID_ENV_VARS: dict[str, str] = {
+    "log_channel_id": "LOG_CHANNEL_ID",
+    "alerts_channel_id": "ALERTS_CHANNEL_ID",
+}
+
+
+async def seed_settings_from_env() -> dict[str, str]:
+    """One-time migration: backfill every general (non-followable) setting that has no
+    DB row yet, straight from the same env vars ``cfg.py`` used to read before this
+    module existed — ``EMBED_DEFAULT_COLOR``/``ERROR_COLOR``, ``DEFAULT_URL``,
+    ``ALERT_MIN_LEVEL``, ``DISABLE_BAD_CHANNELS``, ``LOG_CHANNEL_ID``,
+    ``ALERTS_CHANNEL_ID``, ``LOST_SECTOR_GIF_URL``, ``XUR_IMAGE_URL``.
+
+    Unlike :func:`seed_followables_from_env`, ``cfg.py`` no longer parses or exposes
+    any of these, so this reads ``os.environ`` directly and replicates ``cfg.py``'s old
+    parsing exactly: a hex color (``0x``-prefix optional), a case-insensitive bool
+    (``true``/``1``/``yes``/``on``), a plain int/string otherwise. A var that was never
+    set in this environment is simply skipped — the hardcoded :data:`_DEFAULTS` already
+    matches its old env-var default, so an unconfigured row behaves the same either
+    way. A var present but unparseable (a non-hex color, a non-integer channel id) is
+    logged and skipped rather than raised, so one bad value can't abort the whole
+    backfill.
+
+    Idempotent — never overwrites an existing row, whether from a previous run of this
+    or an edit on the Autopost Settings page since. Run once per environment (``make
+    seed-settings``, alongside ``make seed-followables``) before removing these env
+    vars for good — see :func:`seed_followables_from_env`'s docstring for the full
+    cutover shape, which applies here too. Returns the slugs actually written, keyed by
+    slug (empty if every setting already had a row — the common case after the first
+    run anywhere).
+    """
+    written: dict[str, str] = {}
+
+    async def _seed_value(slug: str, raw: str | None) -> None:
+        if raw is None:
+            return
+        existing = await schemas.AutoPostSettings.get_value(slug)
+        if existing is not None:
+            return
+        await schemas.AutoPostSettings.set_value(slug, raw)
+        written[slug] = raw
+
+    for slug, env_key in _VALUE_ENV_VARS.items():
+        await _seed_value(slug, os.environ.get(env_key))
+
+    for slug, env_key in _COLOR_ENV_VARS.items():
+        raw = os.environ.get(env_key)
+        if raw is None:
+            continue
+        try:
+            color_int = int(raw, 16)
+        except ValueError:
+            logger.warning("%s=%r is not a hex colour, skipping seed", env_key, raw)
+            continue
+        await _seed_value(slug, f"#{color_int:06X}")
+
+    for slug, env_key in _CHANNEL_ID_ENV_VARS.items():
+        raw = os.environ.get(env_key)
+        if raw is None:
+            continue
+        try:
+            channel_id = int(raw)
+        except ValueError:
+            logger.warning("%s=%r is not an integer, skipping seed", env_key, raw)
+            continue
+        await _seed_value(slug, str(channel_id))
+
+    disable_bad_channels_raw = os.environ.get("DISABLE_BAD_CHANNELS")
+    if disable_bad_channels_raw is not None:
+        existing_enabled = await schemas.AutoPostSettings.get_enabled(
+            "disable_bad_channels"
+        )
+        if existing_enabled is None:
+            value = disable_bad_channels_raw.strip().lower() in {
+                "true",
+                "1",
+                "yes",
+                "on",
+            }
+            await schemas.AutoPostSettings.set_enabled("disable_bad_channels", value)
+            written["disable_bad_channels"] = str(value)
+
     if written:
         invalidate()
     return written

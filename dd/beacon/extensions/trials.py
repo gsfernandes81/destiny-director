@@ -19,15 +19,14 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import settings
 from ..nav import make_navigator_command, setup_nav_pages
-from .autoposts import follow_control_command_maker
+from .autoposts import follow_control_command_maker, resolve_followable_channel
 
 loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2024, 1, 9, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = settings.get_followable_channel_sync("trials")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("trials", "Trials")
 
 _pages = setup_nav_pages(
     loader,

@@ -21,35 +21,28 @@ channel history. The post is daily (period = 1 day, daily reset anchor).
 
 Guarded on the ``portal_ops`` followable channel id: if it is not configured in this
 environment's FOLLOWABLES the module loads cleanly and registers nothing (the bot is
-unaffected) until the channel is set.
+unaffected) until the channel is set — ``resolve_followable_channel`` alerts either way.
 """
 
 import datetime as dt
-import logging
 
 import lightbulb as lb
 
-from ...common import settings
 from ..nav import ResetPages, make_navigator_command, setup_nav_pages
-from .autoposts import follow_control_command_maker
-
-logger = logging.getLogger(__name__)
+from .autoposts import follow_control_command_maker, resolve_followable_channel
 
 loader = lb.Loader()
 
 # Daily reset anchor (Tue/any day 17:00 UTC); the period is one day.
 REFERENCE_DATE = dt.datetime(2025, 7, 15, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = settings.get_followable_channel_sync("portal_ops")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("portal_ops", "Portal Ops")
 
 if not FOLLOWABLE_CHANNEL:
-    # No followable channel configured (absent, or the 0 placeholder) → load cleanly
-    # and register nothing. The navigator + follow command come online once
-    # 'portal_ops' is set to a real channel id in FOLLOWABLES.
-    logger.info(
-        "Portal Ops command is dormant: no 'portal_ops' entry in FOLLOWABLES. "
-        "Add the followable channel id to enable it."
-    )
+    # No followable channel configured — load cleanly and register nothing. The
+    # navigator + follow command come online once a channel is set on the settings
+    # page (resolve_followable_channel already logged the alert above).
+    pass
 else:
     # Narrowed non-None channel id for the helpers below.
     _followable_channel: int = FOLLOWABLE_CHANNEL

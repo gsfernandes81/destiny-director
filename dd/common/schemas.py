@@ -3473,3 +3473,20 @@ if __name__ == "__main__":
                 "Nothing to seed — every followable channel already has a DB row "
                 "(or FOLLOWABLES is empty)."
             )
+
+    if "--seed-settings" in sys.argv:
+        # Same deferred-import reasoning as --seed-followables above.
+        from . import settings as _settings
+
+        _written_settings = aio.run(_settings.seed_settings_from_env())
+        if _written_settings:
+            print(
+                f"Seeded {len(_written_settings)} setting(s) from their old env vars:"
+            )
+            for slug, value in _written_settings.items():
+                print(f"  {slug}: {value}")
+        else:
+            print(
+                "Nothing to seed — every general setting already has a DB row (or "
+                "none of their old env vars are set)."
+            )

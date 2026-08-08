@@ -23,6 +23,7 @@ import html
 import json
 import re
 import typing as t
+from unittest.mock import MagicMock
 
 import aiohttp.web
 import hikari as h
@@ -519,6 +520,38 @@ async def test_render_shows_channel_field_with_current_option() -> None:
 
 
 @pytest.mark.integration
+async def test_render_shows_the_env_fallback_channel_when_not_yet_seeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The bug this guards: a followable with no DB row yet is NOT unconfigured — it's
+    # still posting via cfg.followables (the old FOLLOWABLES env var), same as
+    # dd.common.settings.get_followable_channel resolves it. If this rendered blank,
+    # the client's Save (which resubmits every channel field — see
+    # autopost_settings.js) would persist that blank as an explicit "0", permanently
+    # overriding the env fallback for a feed nobody meant to touch.
+    monkeypatch.setattr(cfg, "followables", {"lost_sector": 42})
+    settings.invalidate()
+
+    html_out = await aps._render_html()
+
+    assert '<option value="42" selected>42</option>' in html_out
+
+
+@pytest.mark.integration
+async def test_render_prefers_the_db_row_over_the_env_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cfg, "followables", {"lost_sector": 42})
+    await schemas.AutoPostSettings.set_value("lost_sector_channel", "99")
+    settings.invalidate()
+
+    html_out = await aps._render_html()
+
+    assert '<option value="99" selected>99</option>' in html_out
+    assert '<option value="42" selected>42</option>' not in html_out
+
+
+@pytest.mark.integration
 async def test_render_log_and_alerts_channel_scope_kyber_and_control() -> None:
     html_out = await aps._render_html()
 
@@ -587,6 +620,191 @@ async def test_handle_save_rejects_non_numeric_channel() -> None:
 
     assert resp.status == 400
     assert await schemas.AutoPostSettings.get_value("xur_channel") is None
+
+
+# --- _handle_save's channel permission gate -----------------------------------------
+
+
+@pytest.mark.integration
+async def test_handle_save_rejects_a_channel_the_bot_lacks_permissions_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _always_missing_perms(_channel_id: int) -> str | None:
+        return "the bot is missing permissions there: Send Messages."
+
+    monkeypatch.setattr(aps, "_channel_permission_problem", _always_missing_perms)
+
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"xur_channel": "555"}}))
+    )
+    payload = t.cast(dict, json.loads(resp.text or ""))
+
+    assert resp.status == 400
+    assert "xur_channel" in payload["error"]
+    assert await schemas.AutoPostSettings.get_value("xur_channel") is None
+
+
+@pytest.mark.integration
+async def test_handle_save_one_bad_channel_blocks_the_whole_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A batch save is all-or-nothing (see _handle_save's own comment) — a permission
+    # failure on one channel slug must not let a different, valid slug through.
+    async def _reject_only_xur(channel_id: int) -> str | None:
+        return "nope" if channel_id == 555 else None
+
+    monkeypatch.setattr(aps, "_channel_permission_problem", _reject_only_xur)
+
+    resp = await aps._handle_save(
+        _as_request(
+            _FakeRequest(
+                {"settings": {"xur_channel": "555", "eververse_channel": "777"}}
+            )
+        )
+    )
+
+    assert resp.status == 400
+    assert await schemas.AutoPostSettings.get_value("eververse_channel") is None
+
+
+@pytest.mark.integration
+async def test_handle_save_allows_a_channel_the_bot_can_post_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _no_problem(_channel_id: int) -> str | None:
+        return None
+
+    monkeypatch.setattr(aps, "_channel_permission_problem", _no_problem)
+
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"xur_channel": "555"}}))
+    )
+
+    assert resp.status == 200
+    assert await schemas.AutoPostSettings.get_value("xur_channel") == "555"
+
+
+@pytest.mark.integration
+async def test_handle_save_clearing_a_channel_skips_the_permission_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+
+    async def _record(channel_id: int) -> str | None:
+        calls.append(channel_id)
+        return None
+
+    monkeypatch.setattr(aps, "_channel_permission_problem", _record)
+
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"xur_channel": ""}}))
+    )
+
+    assert resp.status == 200
+    assert calls == []  # clearing to dormant never needs a permission check
+    assert await schemas.AutoPostSettings.get_value("xur_channel") == "0"
+
+
+async def test_channel_permission_problem_before_bot_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(aps, "_bot", None)
+
+    assert await aps._channel_permission_problem(555) is None
+
+
+async def test_channel_permission_problem_when_bot_cannot_see_the_channel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _RaisingRest:
+        async def fetch_channel(self, _channel_id: int) -> t.NoReturn:
+            raise h.NotFoundError(
+                url="", headers={}, raw_body=b"", code=10003, message="Unknown Channel"
+            )
+
+    class _FakeBotNoChannel:
+        rest = _RaisingRest()
+
+    monkeypatch.setattr(aps, "_bot", _FakeBotNoChannel())
+
+    problem = await aps._channel_permission_problem(555)
+
+    assert problem is not None
+    assert "can't see" in problem
+
+
+def _fake_channel_bot(fetch_member: t.Any = None) -> t.Any:
+    """A minimal fake bot whose ``fetch_channel`` returns a real (mocked)
+    ``h.GuildTextChannel`` — a concrete ``PermissibleGuildChannel`` subclass, so
+    ``_channel_permission_problem``'s ``isinstance`` check passes without touching the
+    real ``hikari`` module."""
+    channel = MagicMock(spec=h.GuildTextChannel)
+    channel.guild_id = 111
+
+    class _Rest:
+        async def fetch_channel(self, _channel_id: int) -> h.GuildTextChannel:
+            return channel
+
+        async def fetch_member(self, _guild_id: int, _user_id: int) -> t.Any:
+            return fetch_member if fetch_member is not None else object()
+
+    class _FakeBotWithChannel:
+        rest = _Rest()
+
+        def get_me(self) -> h.OwnUser:
+            return t.cast(h.OwnUser, MagicMock(spec=h.OwnUser, id=999))
+
+    return _FakeBotWithChannel()
+
+
+async def test_channel_permission_problem_when_perms_are_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(aps, "_bot", _fake_channel_bot())
+    monkeypatch.setattr(
+        aps,
+        "calculate_permissions",
+        lambda _member, _channel: h.Permissions.VIEW_CHANNEL,
+    )
+
+    problem = await aps._channel_permission_problem(555)
+
+    assert problem is not None
+    assert "Send Messages" in problem
+    assert "Embed Links" in problem
+    assert "Use External Emoji" in problem
+    assert "View Channel" not in problem  # the one permission it DOES have
+
+
+async def test_channel_permission_problem_when_fully_permitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(aps, "_bot", _fake_channel_bot())
+    full_perms = (
+        h.Permissions.VIEW_CHANNEL
+        | h.Permissions.SEND_MESSAGES
+        | h.Permissions.EMBED_LINKS
+        | h.Permissions.USE_EXTERNAL_EMOJIS
+    )
+    monkeypatch.setattr(
+        aps, "calculate_permissions", lambda _member, _channel: full_perms
+    )
+
+    assert await aps._channel_permission_problem(555) is None
+
+
+async def test_channel_permission_problem_fails_open_on_cache_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise_cache_failure(_member: t.Any, _channel: t.Any) -> h.Permissions:
+        raise aps.CacheFailureError("no cache")
+
+    monkeypatch.setattr(aps, "_bot", _fake_channel_bot())
+    monkeypatch.setattr(aps, "calculate_permissions", _raise_cache_failure)
+
+    # A permission calc that can't resolve (no gateway cache yet) must not block the
+    # save — see _channel_permission_problem's fail-open rationale.
+    assert await aps._channel_permission_problem(555) is None
 
 
 # --- /autopost_settings/channels ----------------------------------------------------

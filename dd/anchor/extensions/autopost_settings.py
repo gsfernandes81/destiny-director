@@ -50,6 +50,8 @@ from pathlib import Path
 import aiohttp.web
 import hikari as h
 import lightbulb as lb
+from toolbox.errors import CacheFailureError
+from toolbox.members import calculate_permissions
 
 from ...common import (
     cfg,
@@ -508,11 +510,33 @@ def _render_row(
     )
 
 
+# Reverse of dd.common.settings.FOLLOWABLE_SLUGS (DB column name -> feed), so a
+# followable's channel row can be resolved through the SAME fallback its producer
+# actually uses (see _current_state below).
+_FOLLOWABLE_SLUG_TO_FEED: dict[str, str] = {
+    slug: feed for feed, slug in dd_settings.FOLLOWABLE_SLUGS.items()
+}
+
+
 async def _current_state(setting: _Setting, session: t.Any) -> bool | str | None:
     if setting.kind == "toggle":
         return bool(
             await schemas.AutoPostSettings.get_enabled(setting.slug, session=session)
         )
+    feed = (
+        _FOLLOWABLE_SLUG_TO_FEED.get(setting.slug)
+        if setting.kind == "channel"
+        else None
+    )
+    if feed is not None:
+        # A followable's channel is NOT just its DB row — get_followable_channel also
+        # falls back to cfg.followables (the old env var) when nothing has been saved
+        # yet. Reading the DB row directly here would show an actively-posting,
+        # not-yet-seeded feed as "— none configured —"; Save then resubmits every
+        # field on the page (see autopost_settings.js), so that blank would get
+        # written back as an explicit "0" — permanently overriding the env fallback
+        # for a feed nobody actually meant to touch.
+        return str(await dd_settings.get_followable_channel(feed))
     return await schemas.AutoPostSettings.get_value(setting.slug, session=session)
 
 
@@ -571,6 +595,57 @@ async def _handle_get(request: aiohttp.web.Request) -> aiohttp.web.Response:
 # Channel types a post can actually go to (text + announcement); voice/category/forum/
 # etc. are not valid autopost/log/alert destinations.
 _POSTABLE_CHANNEL_TYPES = (h.ChannelType.GUILD_TEXT, h.ChannelType.GUILD_NEWS)
+
+# Everything a post might need in its destination channel: View to even open it, Send
+# to post at all, Embed Links for CV2's link-preview/media-gallery components, and
+# External Emoji since every post here resolves :shortcode: emoji that live on Kyber's
+# server, not necessarily the destination's own.
+_REQUIRED_CHANNEL_PERMS: tuple[tuple[h.Permissions, str], ...] = (
+    (h.Permissions.VIEW_CHANNEL, "View Channel"),
+    (h.Permissions.SEND_MESSAGES, "Send Messages"),
+    (h.Permissions.EMBED_LINKS, "Embed Links"),
+    (h.Permissions.USE_EXTERNAL_EMOJIS, "Use External Emoji"),
+)
+
+
+async def _channel_permission_problem(channel_id: int) -> str | None:
+    """``None`` if the bot can fully post (view/send/embed/external-emoji) in
+    ``channel_id``; otherwise a human-readable reason to reject the save for.
+
+    Fails OPEN — returns ``None`` (allow the save) — on anything short of a definite
+    "this won't work": the bot not started yet, an unresolvable permission-cache
+    lookup, or an unexpected REST hiccup. This is a courtesy check at set time, not the
+    only safety net (a channel that goes bad later still alerts rather than silently
+    failing — see resolve_followable_channel/nav.py); the cost of wrongly blocking a
+    good save outweighs occasionally letting a bad one through undetected here.
+    """
+    if _bot is None:
+        return None
+    try:
+        channel = await _bot.rest.fetch_channel(channel_id)
+    except (h.NotFoundError, h.ForbiddenError):
+        return "the bot can't see that channel (deleted, or its access was revoked)."
+    except Exception:
+        logger.warning(
+            "Channel permission check failed for %s", channel_id, exc_info=True
+        )
+        return None
+    if not isinstance(channel, h.PermissibleGuildChannel):
+        return "that channel doesn't support posting (not a text/announcement channel)."
+    me = _bot.get_me()
+    if me is None:
+        return None
+    try:
+        member = await _bot.rest.fetch_member(channel.guild_id, me.id)
+        perms = calculate_permissions(member, channel)
+    except CacheFailureError:
+        return None
+    except (h.NotFoundError, h.ForbiddenError):
+        return "the bot isn't a member of that server."
+    missing = [name for perm, name in _REQUIRED_CHANNEL_PERMS if not (perms & perm)]
+    if not missing:
+        return None
+    return f"the bot is missing permissions there: {', '.join(missing)}."
 
 
 async def _handle_channels(request: aiohttp.web.Request) -> aiohttp.web.Response:
@@ -704,6 +779,20 @@ async def _handle_save(request: aiohttp.web.Request) -> aiohttp.web.Response:
                 {"error": f"'{slug}' must be a Discord channel id."}, status=400
             )
         channel_values[slug] = str(channel_id)
+
+    # Confirm the bot can actually post there before persisting — a channel id being
+    # syntactically valid says nothing about whether the bot can see it, has been
+    # kicked from that server, or lacks Send/Embed/External-Emoji there. Skipped for
+    # "0" (clearing a channel back to dormant needs no permission to do).
+    for slug, channel_id in channel_values.items():
+        if channel_id == "0":
+            continue
+        problem = await _channel_permission_problem(int(channel_id))
+        if problem:
+            return aiohttp.web.json_response(
+                {"error": f"Can't use that channel for '{slug}': {problem}"},
+                status=400,
+            )
 
     # Only known slugs are honoured; unknown keys are ignored (never trust the client's
     # key set to spawn rows). One transaction so a batch save is all-or-nothing.

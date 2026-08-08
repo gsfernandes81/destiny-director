@@ -14,19 +14,20 @@
 # destiny-director. If not, see <https://www.gnu.org/licenses/>.
 
 
+import logging
+
 import hikari as h
 import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import settings
 from ...common.bot import CachedFetchBot
-from .autoposts import follow_control_command_maker
+from .autoposts import follow_control_command_maker, resolve_followable_channel
 
 loader = lb.Loader()
 
 # Followable channel from which to pull messages for the command and autoposts
-FOLLOWABLE_CHANNEL = settings.get_followable_channel_sync("free_games")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("free_games", "Free Games")
 
 HELP_STRING = "See the current free games on The Epic Store, etc"
 
@@ -38,7 +39,22 @@ async def refresh_message_for_command(bot: CachedFetchBot):
     global last_message_in_channel_id
     global last_message_in_channel
 
-    channel = await bot.fetch_channel(FOLLOWABLE_CHANNEL)
+    if not FOLLOWABLE_CHANNEL:
+        # Unconfigured — resolve_followable_channel already alerted at import time.
+        return
+    try:
+        channel = await bot.fetch_channel(FOLLOWABLE_CHANNEL)
+    except (h.NotFoundError, h.ForbiddenError):
+        # The configured channel was deleted, or the bot lost access to it, since it
+        # was set — alert instead of letting this raise out of a StartedEvent/message
+        # listener where nothing else would report it.
+        logging.error(
+            "Free Games followable channel %s is configured but no longer "
+            "reachable (deleted, or the bot lost access) — feed is dormant until "
+            "it's fixed on the Autopost Settings page.",
+            FOLLOWABLE_CHANNEL,
+        )
+        return
     if not isinstance(channel, h.TextableChannel):
         raise TypeError("Free games followable channel is not textable")
     async for message in channel.fetch_history():

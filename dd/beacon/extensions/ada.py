@@ -17,15 +17,14 @@ import datetime as dt
 
 import lightbulb as lb
 
-from ...common import settings
 from ..nav import NO_DATA_HERE_EMBED, NavigatorView, setup_nav_pages
-from .autoposts import follow_control_command_maker
+from .autoposts import follow_control_command_maker, resolve_followable_channel
 
 loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 14, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = settings.get_followable_channel_sync("ada")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("ada", "Ada")
 
 SINGLE_PAGE_MODE = True
 

@@ -502,7 +502,12 @@ async def format_xur_vendor(
     container.add_text_display(header + body + XUR_FOOTER)
 
     if await schemas.AutoPostSettings.get_xur_default_image_enabled():
-        container.add_component(url_media_gallery(await settings.get_xur_image_url()))
+        # A blank/unconfigured URL must not reach url_media_gallery — Discord rejects a
+        # media item with an empty url, which would fail the ENTIRE post, not just drop
+        # the image (unlike Lost Sector's image, which is skipped when unset).
+        default_image_url = await settings.get_xur_image_url()
+        if default_image_url:
+            container.add_component(url_media_gallery(default_image_url))
     container.add_component(footer_buttons_row(guides=XUR_GUIDES))
 
     # Resolve :emoji: then cap CV2 text (naive front-to-back truncate + CRITICAL alert

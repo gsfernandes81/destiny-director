@@ -139,6 +139,14 @@ create-schemas: .env
 seed-followables: .env
 	uv run python -m dd.common.schemas --seed-followables
 
+# Same bridge as seed-followables, for every OTHER setting dd.common.settings replaced
+# (colors, default url, alert level, disable_bad_channels, log/alerts channel, the two
+# image urls) — their env vars are no longer even read by cfg.py, so this is the only
+# way an already-configured deploy's values survive the migration. Idempotent — see
+# dd.common.settings.seed_settings_from_env's docstring.
+seed-settings: .env
+	uv run python -m dd.common.schemas --seed-settings
+
 # Render the SQLAlchemy models to DDL (.atlas/desired.sql, gitignored), then let
 # Atlas diff it against migrations/ and write a new migration if they differ. The
 # DDL is generated here rather than via Atlas's `external_schema` provider so the

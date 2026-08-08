@@ -211,3 +211,124 @@ async def test_seed_result_is_live_immediately(monkeypatch: pytest.MonkeyPatch):
     await settings.seed_followables_from_env()
 
     assert await settings.get_followable_channel("lost_sector") == 42
+
+
+# --- seed_settings_from_env (the retirement bridge for every OTHER env-controlled
+# setting — colors, urls, alert level, disable_bad_channels, log/alerts channel) -------
+
+
+async def test_seed_settings_writes_every_configured_var(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("EMBED_DEFAULT_COLOR", "0xEC42A5")
+    monkeypatch.setenv("EMBED_ERROR_COLOR", "ED4245")
+    monkeypatch.setenv("DEFAULT_URL", "https://example.com")
+    monkeypatch.setenv("ALERT_MIN_LEVEL", "WARNING")
+    monkeypatch.setenv("DISABLE_BAD_CHANNELS", "True")
+    monkeypatch.setenv("LOG_CHANNEL_ID", "111")
+    monkeypatch.setenv("ALERTS_CHANNEL_ID", "222")
+    monkeypatch.setenv("LOST_SECTOR_GIF_URL", "https://example.com/ls.gif")
+    monkeypatch.setenv("XUR_IMAGE_URL", "https://example.com/xur.png")
+
+    written = await settings.seed_settings_from_env()
+
+    assert written == {
+        "default_url": "https://example.com",
+        "alert_min_level": "WARNING",
+        "lost_sector_image_url": "https://example.com/ls.gif",
+        "xur_image_url": "https://example.com/xur.png",
+        "embed_default_color": "#EC42A5",
+        "embed_error_color": "#ED4245",
+        "log_channel_id": "111",
+        "alerts_channel_id": "222",
+        "disable_bad_channels": "True",
+    }
+    assert await settings.get_embed_default_color() == h.Color(0xEC42A5)
+    assert await settings.get_embed_error_color() == h.Color(0xED4245)
+    assert await settings.get_default_url() == "https://example.com"
+    assert await settings.get_alert_min_level() == "WARNING"
+    assert await settings.get_disable_bad_channels() is True
+    assert await settings.get_log_channel_id() == 111
+    assert await settings.get_alerts_channel_id() == 222
+    assert await settings.get_lost_sector_image_url() == "https://example.com/ls.gif"
+    assert await settings.get_xur_image_url() == "https://example.com/xur.png"
+
+
+async def test_seed_settings_never_overwrites_an_existing_row(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("DEFAULT_URL", "https://from-env.example.com")
+    await schemas.AutoPostSettings.set_value("default_url", "https://from-db.example.com")
+    settings.invalidate()
+
+    written = await settings.seed_settings_from_env()
+
+    assert "default_url" not in written
+    assert await settings.get_default_url() == "https://from-db.example.com"
+
+
+async def test_seed_settings_never_overwrites_an_existing_enabled_row(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("DISABLE_BAD_CHANNELS", "true")
+    await schemas.AutoPostSettings.set_enabled("disable_bad_channels", False)
+    settings.invalidate()
+
+    written = await settings.seed_settings_from_env()
+
+    assert "disable_bad_channels" not in written
+    assert await settings.get_disable_bad_channels() is False
+
+
+async def test_seed_settings_skips_unset_vars(monkeypatch: pytest.MonkeyPatch):
+    for var in (
+        "EMBED_DEFAULT_COLOR",
+        "EMBED_ERROR_COLOR",
+        "DEFAULT_URL",
+        "ALERT_MIN_LEVEL",
+        "DISABLE_BAD_CHANNELS",
+        "LOG_CHANNEL_ID",
+        "ALERTS_CHANNEL_ID",
+        "LOST_SECTOR_GIF_URL",
+        "XUR_IMAGE_URL",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    assert await settings.seed_settings_from_env() == {}
+
+
+async def test_seed_settings_skips_unparseable_values(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("EMBED_DEFAULT_COLOR", "not-a-hex-color")
+    monkeypatch.setenv("LOG_CHANNEL_ID", "not-an-integer")
+
+    written = await settings.seed_settings_from_env()
+
+    assert "embed_default_color" not in written
+    assert "log_channel_id" not in written
+    assert await schemas.AutoPostSettings.get_value("embed_default_color") is None
+    assert await schemas.AutoPostSettings.get_value("log_channel_id") is None
+
+
+async def test_seed_settings_is_idempotent_across_repeated_runs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Only ALERT_MIN_LEVEL is under test; clear the rest so ambient .env vars (this
+    # suite runs with a real .env for cfg.py's import-time validation) can't leak in.
+    for var in (
+        "EMBED_DEFAULT_COLOR",
+        "EMBED_ERROR_COLOR",
+        "DEFAULT_URL",
+        "DISABLE_BAD_CHANNELS",
+        "LOG_CHANNEL_ID",
+        "ALERTS_CHANNEL_ID",
+        "LOST_SECTOR_GIF_URL",
+        "XUR_IMAGE_URL",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("ALERT_MIN_LEVEL", "CRITICAL")
+
+    first = await settings.seed_settings_from_env()
+    second = await settings.seed_settings_from_env()
+
+    assert first == {"alert_min_level": "CRITICAL"}
+    assert second == {}

@@ -917,9 +917,25 @@ def setup_nav_pages(
 
     @loader.listener(h.StartedEvent)
     async def _on_start(event: h.StartedEvent) -> None:
-        holder.pages = await pages_cls.from_channel(
-            event.app, followable_channel, **from_channel_kwargs
-        )
+        if not followable_channel:
+            # Unconfigured — resolve_followable_channel already alerted about this at
+            # import time; nothing to fetch.
+            return
+        try:
+            holder.pages = await pages_cls.from_channel(
+                event.app, followable_channel, **from_channel_kwargs
+            )
+        except (h.NotFoundError, h.ForbiddenError):
+            # The configured channel was deleted, or the bot lost access to it, since
+            # it was set — this used to surface as an unhandled exception in the
+            # StartedEvent listener (easy to miss; nothing else reports it). Alert
+            # instead and leave the feed dormant, same as an unconfigured channel.
+            logging.error(
+                "Followable channel %s is configured but no longer reachable "
+                "(deleted, or the bot lost access) — feed is dormant until it's "
+                "fixed on the Autopost Settings page.",
+                followable_channel,
+            )
 
     return holder
 
