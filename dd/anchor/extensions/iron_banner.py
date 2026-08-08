@@ -136,8 +136,12 @@ async def _save_last_posted_reset(period: int) -> None:
 async def _schedule_iron_banner(
     event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED
 ) -> None:
-    if not _CHANNEL_ID:
-        return
+    # Registers the cron unconditionally now — NOT gated on _CHANNEL_ID, unlike before.
+    # That import-time snapshot only ever reflected whatever the channel was at boot;
+    # returning here early meant setting a channel on the Autopost Settings page while
+    # the bot was already running had no effect on the schedule until a manual restart.
+    # autopost_iron_banner already re-reads the channel live below and simply skips
+    # itself while unconfigured.
 
     # Prewarm the manifest weapon pool so the first post's weapon resolution is fast
     # (best-effort; a failure just means the first resolve pays the manifest cost).
@@ -151,6 +155,9 @@ async def _schedule_iron_banner(
     async def autopost_iron_banner() -> None:
         if not await schemas.AutoPostSettings.get_iron_banner_enabled():
             return
+        channel_id = await settings.get_followable_channel("iron_banner")
+        if not channel_id:
+            return  # still unconfigured — nothing to post to
         try:
             rotation = await ib.load_rotation()
         except Exception:
@@ -166,7 +173,7 @@ async def _schedule_iron_banner(
             return  # already posted this event's reset period
         await discord_announcer(
             bot,
-            channel_id=await settings.get_followable_channel("iron_banner"),
+            channel_id=channel_id,
             construct_message_coro=format_post,
             publish_message=True,
             cv2=True,
@@ -175,9 +182,11 @@ async def _schedule_iron_banner(
 
 
 # Contribute this feed's producer wiring to the web feed page (Preview / Send now).
-# Registered unconditionally, unlike the command group above: with no configured
-# followable the feed is *dormant*, and its page says so rather than 404-ing behind a
-# link /autopost_settings shows either way. Preview still works — it needs no channel.
+# channel_id is still the import-time snapshot (Feed is a plain NamedTuple, not a live
+# lookup) — a settings-page channel change is picked up here on the next restart, same
+# as before. Lower-stakes than the cron above: an operator using this page notices a
+# stale/missing "Send now" button immediately, rather than a scheduled post silently
+# not happening. Preview still works either way — it needs no channel.
 register_feed(
     Feed(
         name="iron_banner",

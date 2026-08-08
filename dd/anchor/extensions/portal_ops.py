@@ -35,7 +35,6 @@ tables, which suits this low-cardinality feature.
 """
 
 import datetime as dt
-import logging
 import re
 import typing as t
 
@@ -55,8 +54,6 @@ from . import (
     xur,
 )
 from .bungie_api.constants import API_ROOT, DESTINY_ITEM_TYPE_ARMOR
-
-logger = logging.getLogger(__name__)
 
 loader = lb.Loader()
 
@@ -481,40 +478,42 @@ def _next_daily_reset_unix() -> int:
 _PORTAL_OPS_CHANNEL = settings.get_followable_channel_sync("portal_ops")
 
 
-if not _PORTAL_OPS_CHANNEL:
-    # The followable channel id is not configured in this environment's FOLLOWABLES
-    # (absent, or the 0 placeholder). Load cleanly and stay dormant rather than
-    # KeyError-ing at import — the autopost cron is simply not scheduled until a real
-    # channel id is set. The feed page still lists it, marked dormant.
-    logger.info(
-        "Portal Ops autopost is dormant: no 'portal_ops' entry in FOLLOWABLES. "
-        "Add the followable channel id to enable it."
-    )
-else:
-
-    @loader.listener(h.StartedEvent)
-    async def on_start_schedule_autoposts(
-        event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED
-    ):
-        # One daily post at daily reset (17:00 UTC) showing the current featured
-        # state; weekly-rotating tabs just show whatever is currently featured.
-        @aiocron.crontab("0 17 * * *", start=True)
-        # Use below crontab for testing to post every minute
-        # @aiocron.crontab("* * * * *", start=True)
-        async def autopost_portal_ops():
-            await xur.api_to_discord_announcer(
-                bot,
-                channel_id=await settings.get_followable_channel("portal_ops"),
-                check_enabled=True,
-                enabled_check_coro=schemas.AutoPostSettings.get_portal_ops_enabled,
-                construct_message_coro=portal_ops_message_constructor,
-                cv2=True,
-            )
+# The cron registers unconditionally now — NOT gated on _PORTAL_OPS_CHANNEL, unlike
+# before. That import-time snapshot only ever reflected whatever the channel was at
+# boot; gating registration on it meant setting a channel on the Autopost Settings
+# page while the bot was already running had no effect until a manual restart. Each
+# firing now re-reads the channel live and simply skips itself while unconfigured —
+# the same "checked at call time, not at import time" contract every other setting
+# here has.
+@loader.listener(h.StartedEvent)
+async def on_start_schedule_autoposts(
+    event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED
+):
+    # One daily post at daily reset (17:00 UTC) showing the current featured
+    # state; weekly-rotating tabs just show whatever is currently featured.
+    @aiocron.crontab("0 17 * * *", start=True)
+    # Use below crontab for testing to post every minute
+    # @aiocron.crontab("* * * * *", start=True)
+    async def autopost_portal_ops():
+        channel_id = await settings.get_followable_channel("portal_ops")
+        if not channel_id:
+            return  # still unconfigured — nothing to post to
+        await xur.api_to_discord_announcer(
+            bot,
+            channel_id=channel_id,
+            check_enabled=True,
+            enabled_check_coro=schemas.AutoPostSettings.get_portal_ops_enabled,
+            construct_message_coro=portal_ops_message_constructor,
+            cv2=True,
+        )
 
 
 # Contribute this feed's producer wiring to the web feed page (Preview / Send now).
-# Registered unconditionally, outside the dormancy gate above — see the same note in
-# iron_banner.py: a dormant feed still gets a page that explains itself, and previews.
+# channel_id is still the import-time snapshot (Feed is a plain NamedTuple, not a live
+# lookup) — a settings-page channel change is picked up here on the next restart, same
+# as before. Lower-stakes than the cron above: an operator using this page notices a
+# stale/missing "Send now" button immediately, rather than a scheduled post silently
+# not happening.
 register_feed(
     Feed(
         name="portal_ops",

@@ -17,6 +17,8 @@
 (embed colors, default_url, followable channel ids, log/alerts channel, alert level,
 disable_bad_channels). Uses the ambient SQLite test DB (dd/common/tests/conftest.py)."""
 
+import asyncio
+
 import hikari as h
 import pytest
 import pytest_asyncio
@@ -39,6 +41,62 @@ async def _reset_settings_cache():
     yield
     settings.invalidate()
     settings._cache.clear()
+
+
+# --- cache refresh single-flight --------------------------------------------------
+
+
+async def test_an_empty_but_freshly_loaded_cache_still_counts_as_fresh(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # A fresh install with zero configured settings rows legitimately produces an
+    # EMPTY _cache after a real preload() — that must still count as "fresh" (nothing
+    # to refetch until the TTL lapses), not as "never loaded" every single call, which
+    # would defeat the TTL cache's entire purpose on exactly that install.
+    assert settings._cache == {}
+    calls = 0
+    real_get_all_rows = schemas.AutoPostSettings.get_all_rows
+
+    async def _counting_get_all_rows(*args: object, **kwargs: object):
+        nonlocal calls
+        calls += 1
+        return await real_get_all_rows(*args, **kwargs)
+
+    monkeypatch.setattr(
+        schemas.AutoPostSettings, "get_all_rows", _counting_get_all_rows
+    )
+
+    await settings.get_default_url()
+    await settings.get_default_url()
+    await settings.get_default_url()
+
+    assert settings._cache == {}
+    assert calls == 1
+
+
+async def test_concurrent_stale_reads_share_one_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Force the cache stale, then let several callers observe that at once — without
+    # the single-flight lock, each would independently call preload() before any of
+    # them finished updating _loaded_at.
+    settings._loaded_at = 0.0
+    calls = 0
+    real_get_all_rows = schemas.AutoPostSettings.get_all_rows
+
+    async def _counting_get_all_rows(*args: object, **kwargs: object):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0)  # yield, so concurrent callers actually overlap
+        return await real_get_all_rows(*args, **kwargs)
+
+    monkeypatch.setattr(
+        schemas.AutoPostSettings, "get_all_rows", _counting_get_all_rows
+    )
+
+    await asyncio.gather(*(settings._ensure_fresh() for _ in range(5)))
+
+    assert calls == 1
 
 
 # --- colors ----------------------------------------------------------------------

@@ -48,6 +48,7 @@ every existing deploy and test fixture working unchanged until someone actually 
 the settings page, at which point the DB row wins from then on.
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -105,14 +106,30 @@ FOLLOWABLE_SLUGS: dict[str, str] = {
 
 _cache: dict[str, tuple[bool | None, str | None]] = {}
 _loaded_at: float = 0.0
+# Single-flights a stale-cache refresh: without this, every coroutine that observes a
+# stale cache in the same tick (several feeds' scheduled posts, several web requests,
+# ...) independently calls preload() before any of them finishes updating _loaded_at,
+# firing one redundant DB round trip per caller instead of sharing one.
+_refresh_lock = asyncio.Lock()
+
+
+def _is_fresh() -> bool:
+    # _loaded_at (not _cache) is the "has this ever been loaded" signal: a fresh
+    # install with zero configured settings rows legitimately has an empty _cache
+    # after a real preload() — `if _cache` alone would read that as "never loaded"
+    # and refetch on every single call, defeating the TTL cache entirely.
+    return bool(_loaded_at) and time.monotonic() - _loaded_at < _TTL
 
 
 async def _ensure_fresh() -> None:
-    global _loaded_at
-    now = time.monotonic()
-    if _cache and now - _loaded_at < _TTL:
+    if _is_fresh():
         return
-    await preload()
+    async with _refresh_lock:
+        # Re-check: another caller may have refreshed while this one waited for the
+        # lock, in which case there's nothing left to do.
+        if _is_fresh():
+            return
+        await preload()
 
 
 async def preload() -> None:
@@ -130,7 +147,17 @@ async def preload() -> None:
 
 
 def invalidate() -> None:
-    """Drop the cache so the next read refetches. Call after any settings-page save."""
+    """Mark the cache stale so the next *async* read refetches.
+
+    Sync — usable from a context that can't ``await``. That's also its limit: it
+    doesn't touch ``_cache`` itself, so a ``*_sync`` getter (which reads ``_cache``
+    directly, with no freshness check of its own — see e.g.
+    :func:`get_followable_channel_sync`'s docstring) keeps serving whatever was cached
+    until *some* async getter happens to run elsewhere in the process and trigger a
+    real refresh. An async caller that wants the cache genuinely fresh on return
+    (including for its own ``*_sync`` reads) should ``await`` :func:`preload` directly
+    instead — see :func:`seed_followables_from_env` for the pattern.
+    """
     global _loaded_at
     _loaded_at = 0.0
 
@@ -280,11 +307,15 @@ def get_followable_channel_sync(feed: str) -> int:
     do this before their extensions package imports). Until then — e.g. under pytest,
     which imports extensions directly — falls back straight to :data:`cfg.followables`,
     exactly matching the pre-migration behaviour those import-time reads always had.
+
+    An unknown ``feed`` (not in :data:`FOLLOWABLE_SLUGS`) is 0, same as the async
+    version — there's no DB column to check, and no reason to trust a stale
+    ``cfg.followables`` entry for a feed this module doesn't otherwise recognise.
     """
     slug = FOLLOWABLE_SLUGS.get(feed)
-    default = cfg.followables.get(feed, 0)
     if slug is None:
-        return default
+        return 0
+    default = cfg.followables.get(feed, 0)
     _enabled, value = _raw(slug)
     if value is not None and value != "":
         return int(value)
@@ -307,19 +338,22 @@ def followable_slugs() -> t.Iterable[str]:
     return FOLLOWABLE_SLUGS.keys()
 
 
-def followable_name(*, id: int) -> str | int:
+def followable_name(*, id: int, followables: dict[str, int] | None = None) -> str | int:
     """The configured feed slug for a followable channel id, or the id itself.
 
     Formerly ``dd.common.utils.followable_name`` reading ``cfg.followables`` directly;
     moved here so it reflects DB overrides too. Sync (log-line / status-display call
     sites), via :func:`get_followables_sync`.
+
+    ``followables`` lets a caller resolving names in a loop (e.g. the mirror log's run
+    list) pass one pre-built dict from a single :func:`get_followables_sync` call,
+    instead of this rebuilding — and re-resolving every followable's channel id — on
+    every single lookup.
     """
+    if followables is None:
+        followables = get_followables_sync()
     return next(
-        (
-            feed
-            for feed, channel_id in get_followables_sync().items()
-            if channel_id == id
-        ),
+        (feed for feed, channel_id in followables.items() if channel_id == id),
         id,
     )
 
@@ -355,7 +389,11 @@ async def seed_followables_from_env() -> dict[str, int]:
         await schemas.AutoPostSettings.set_value(slug, str(int(channel_id)))
         written[feed] = int(channel_id)
     if written:
-        invalidate()
+        # preload(), not invalidate(): this runs in an async context, so there's no
+        # reason to leave the cache merely *marked* stale (which only the next async
+        # getter would notice — a *_sync getter reads _cache directly and wouldn't see
+        # this until something else happens to trigger a refresh). Refresh now.
+        await preload()
     return written
 
 
@@ -456,5 +494,8 @@ async def seed_settings_from_env() -> dict[str, str]:
             written["disable_bad_channels"] = str(value)
 
     if written:
-        invalidate()
+        # See seed_followables_from_env's identical comment: preload() over
+        # invalidate() so this (async) process's cache — including its *_sync readers
+        # — is actually fresh on return, not just marked stale for later.
+        await preload()
     return written

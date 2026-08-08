@@ -80,6 +80,23 @@ def _as_request(req: _FakeRequest) -> aiohttp.web.Request:
     return t.cast(aiohttp.web.Request, req)
 
 
+# --- structural: keep _SETTINGS and dd.common.settings.FOLLOWABLE_SLUGS in sync ----
+
+
+async def test_every_followable_slug_has_a_channel_row_on_the_page() -> None:
+    # dd.common.settings.FOLLOWABLE_SLUGS (the feed -> DB column map) and this page's
+    # per-feed "channel" rows are two independently hand-maintained lists of the same
+    # feeds. A followable added to one without the other fails silently (see this
+    # test's counterpart below for the reverse direction) — this asserts both actually
+    # name the same set of feeds, so drift fails loudly here instead.
+    page_channel_slugs = {s.slug for s in aps._SETTINGS if s.kind == "channel"}
+    non_followable_channel_slugs = {"log_channel_id", "alerts_channel_id"}
+
+    assert page_channel_slugs - non_followable_channel_slugs == set(
+        settings.FOLLOWABLE_SLUGS.values()
+    )
+
+
 # --- rendering --------------------------------------------------------------------
 
 
@@ -432,7 +449,7 @@ async def test_handle_save_persists_color_value() -> None:
 
     assert resp.status == 200
     assert await schemas.AutoPostSettings.get_value("embed_error_color") == "#FF0000"
-    # The save invalidates dd.common.settings' cache, so the new value is live at once.
+    # The save refreshes dd.common.settings' cache, so the new value is live at once.
     assert await settings.get_embed_error_color() == h.Color(0xFF0000)
 
 
@@ -590,6 +607,20 @@ async def test_handle_save_persists_channel_value() -> None:
     assert resp.status == 200
     assert await schemas.AutoPostSettings.get_value("xur_channel") == "999"
     assert await settings.get_followable_channel("xur") == 999
+
+
+@pytest.mark.integration
+async def test_handle_save_refreshes_sync_readers_too() -> None:
+    # _handle_save awaits dd.common.settings.preload() (not just invalidate()) so a
+    # *_sync getter — e.g. the one HybridPostSpec.channel_id uses to route an actual
+    # message send — reflects the save immediately in THIS process too, not only
+    # whenever some unrelated async getter happens to trigger a refresh next.
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"xur_channel": "999"}}))
+    )
+
+    assert resp.status == 200
+    assert settings.get_followable_channel_sync("xur") == 999
 
 
 @pytest.mark.integration

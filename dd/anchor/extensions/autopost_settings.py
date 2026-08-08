@@ -41,6 +41,7 @@ middleware in ``web_auth.py`` (it protects every non-allowlisted route, so this 
 needs no auth code).
 """
 
+import asyncio
 import html
 import logging
 import re
@@ -518,11 +519,14 @@ _FOLLOWABLE_SLUG_TO_FEED: dict[str, str] = {
 }
 
 
-async def _current_state(setting: _Setting, session: t.Any) -> bool | str | None:
+async def _current_state(
+    setting: _Setting, rows: dict[str, tuple[bool | None, str | None]]
+) -> bool | str | None:
+    """``setting``'s current value, from a bulk ``AutoPostSettings.get_all_rows()``
+    fetch rather than one query per setting (``rows``, one dict for the whole page)."""
+    enabled, value = rows.get(setting.slug, (None, None))
     if setting.kind == "toggle":
-        return bool(
-            await schemas.AutoPostSettings.get_enabled(setting.slug, session=session)
-        )
+        return bool(enabled)
     feed = (
         _FOLLOWABLE_SLUG_TO_FEED.get(setting.slug)
         if setting.kind == "channel"
@@ -535,9 +539,11 @@ async def _current_state(setting: _Setting, session: t.Any) -> bool | str | None
         # not-yet-seeded feed as "— none configured —"; Save then resubmits every
         # field on the page (see autopost_settings.js), so that blank would get
         # written back as an explicit "0" — permanently overriding the env fallback
-        # for a feed nobody actually meant to touch.
+        # for a feed nobody actually meant to touch. (Goes through dd_settings' own
+        # cache rather than ``rows``, since that's the one place the env fallback
+        # lives.)
         return str(await dd_settings.get_followable_channel(feed))
-    return await schemas.AutoPostSettings.get_value(setting.slug, session=session)
+    return value
 
 
 def _wrap_group(
@@ -570,18 +576,18 @@ async def _render_html() -> str:
     groups: list[str] = []
     current: list[tuple[_Setting, bool | str | None]] = []
     current_category = ""
-    async with schemas.db_session() as session:
-        for setting in _SETTINGS:
-            state = await _current_state(setting, session)
-            if setting.sub:
-                current.append((setting, state))
-            else:
-                if current:
-                    groups.append(_wrap_group(current, current_category))
-                current = [(setting, state)]
-                current_category = setting.category
-        if current:
-            groups.append(_wrap_group(current, current_category))
+    rows = await schemas.AutoPostSettings.get_all_rows()
+    for setting in _SETTINGS:
+        state = await _current_state(setting, rows)
+        if setting.sub:
+            current.append((setting, state))
+        else:
+            if current:
+                groups.append(_wrap_group(current, current_category))
+            current = [(setting, state)]
+            current_category = setting.category
+    if current:
+        groups.append(_wrap_group(current, current_category))
     return _PAGE_HTML_PATH.read_text(encoding="utf-8").replace(
         _TOGGLES_PLACEHOLDER, "".join(groups)
     )
@@ -666,17 +672,26 @@ async def _handle_channels(request: aiohttp.web.Request) -> aiohttp.web.Response
             {"error": "Bot is still starting."}, status=503
         )
 
-    guild_ids = {cfg.kyber_discord_server_id, cfg.control_discord_server_id}
+    guild_ids = [
+        g
+        for g in {cfg.kyber_discord_server_id, cfg.control_discord_server_id}
+        if g and g != -1
+    ]
+    # Both guilds' fetches are independent REST calls — run them concurrently rather
+    # than one after another, since nothing here depends on the other's result.
+    results = await asyncio.gather(
+        *(_bot.rest.fetch_guild_channels(guild_id) for guild_id in guild_ids),
+        return_exceptions=True,
+    )
+
     channels: list[dict[str, str | bool]] = []
-    for guild_id in guild_ids:
-        if not guild_id or guild_id == -1:
+    for guild_id, result in zip(guild_ids, results, strict=True):
+        if isinstance(result, BaseException):
+            logger.info(
+                "Could not list channels for guild %s", guild_id, exc_info=result
+            )
             continue
-        try:
-            guild_channels = await _bot.rest.fetch_guild_channels(guild_id)
-        except Exception:
-            logger.info("Could not list channels for guild %s", guild_id, exc_info=True)
-            continue
-        for channel in guild_channels:
+        for channel in result:
             if channel.type not in _POSTABLE_CHANNEL_TYPES:
                 continue
             channels.append(
@@ -812,9 +827,11 @@ async def _handle_save(request: aiohttp.web.Request) -> aiohttp.web.Response:
             await schemas.AutoPostSettings.set_value(slug, channel_id, session=session)
 
     # dd.common.settings caches every non-toggle row above (colors, urls, followable
-    # channels, ...); drop the cache so this process picks the change up immediately
-    # rather than waiting out the TTL (see that module's docstring).
-    dd_settings.invalidate()
+    # channels, ...); refresh it now rather than waiting out the TTL (see that
+    # module's docstring) — preload(), not invalidate(), so a *_sync reader (e.g. the
+    # one behind message-send channel routing) also sees the new value immediately,
+    # not just whenever some other async getter happens to trigger a refresh.
+    await dd_settings.preload()
 
     return aiohttp.web.json_response({"ok": True})
 

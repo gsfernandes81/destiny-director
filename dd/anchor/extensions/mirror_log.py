@@ -82,10 +82,13 @@ async def _collect_runs() -> dict:
     latest = await schemas.MirrorMessageVersion.latest_for(
         [run["src_msg_id"] for run in runs]
     )
+    # Built once rather than per row — followable_name would otherwise re-resolve
+    # every followable's channel id on every one of up to _RUN_LIMIT lookups below.
+    followables = settings.get_followables_sync()
     for run in runs:
         # Resolve the source channel to its configured feed name (else None → the page
         # falls back to the id). followable_name returns the id itself when unknown.
-        name = settings.followable_name(id=run["src_ch_id"])
+        name = settings.followable_name(id=run["src_ch_id"], followables=followables)
         run["src_name"] = name if isinstance(name, str) else None
         snap = latest.get(run["src_msg_id"])
         run["summary"] = snap["summary"] if snap else None
