@@ -24,6 +24,9 @@
     <link rel="stylesheet" href="/static/shared.css" />
     <link rel="stylesheet" href="/static/cv2_preview.css" />
     <link rel="stylesheet" href="/static/vendor/tom-select.min.css" />
+    <!-- Tom Select's dark-theme overrides, shared with autopost_settings.html — must
+         load after the vendored sheet above, or its light theme wins the cascade. -->
+    <link rel="stylesheet" href="/static/tom_select_dark.css" />
     <link rel="stylesheet" href="/static/weekly_reset_form.css" />
   </head>
   <body class="form-page">
@@ -250,6 +253,7 @@
       </div>
     </dialog>
 
+    <script defer src="/static/ts_single.js"></script>
     <script defer src="/static/weekly_reset_form.js"></script>
   </body>
 </html>

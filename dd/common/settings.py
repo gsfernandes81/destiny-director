@@ -56,6 +56,8 @@ import typing as t
 
 import hikari as h
 
+from dd.hmessage.constants import DEFAULT_COLOR
+
 from . import cfg, schemas
 
 logger = logging.getLogger(__name__)
@@ -66,15 +68,18 @@ logger = logging.getLogger(__name__)
 _TTL = 30.0
 
 # (enabled_default, value_default) for every slug that isn't a followable channel.
-# The colors are hardcoded brand defaults rather than black: #EC42A5 is the Kyber brand
-# pink (shared.css's --accent — the same pink as every focus ring/button/toggle on this
-# site), #ED4245 matches components.CV2_DANGER_COLOR (the app's one other "error" red),
-# so an unconfigured install still looks branded/on-theme rather than defaulting to a
-# literal black accent bar. Every other default is chosen to match its old env-var
-# default exactly, so an unconfigured DB row behaves identically to the var having never
-# been set.
+# The colors are hardcoded brand defaults rather than black, so an unconfigured install
+# still looks branded/on-theme rather than defaulting to a literal black accent bar.
+# embed_default_color reuses dd.hmessage.constants.DEFAULT_COLOR (the Kyber brand pink,
+# also shared.css's --accent — the same pink as every focus ring/button/toggle on the
+# settings site) rather than a second hardcoded copy of that value. embed_error_color
+# can't do the same for components.CV2_DANGER_COLOR (the app's one other "error" red):
+# components.py imports this module, so importing components.py back here would be
+# circular — #ED4245 is a plain literal kept in sync with it by hand. Every other
+# default is chosen to match its old env-var default exactly, so an unconfigured DB row
+# behaves identically to the var having never been set.
 _DEFAULTS: dict[str, tuple[bool | None, str | None]] = {
-    "embed_default_color": (None, "#EC42A5"),
+    "embed_default_color": (None, f"#{int(DEFAULT_COLOR):06X}"),
     "embed_error_color": (None, "#ED4245"),
     "default_url": (None, ""),
     "alert_min_level": (None, "ERROR"),
@@ -177,10 +182,7 @@ async def _get_value(slug: str) -> str | None:
     """The live ``value`` column for ``slug`` (refreshing the cache first), or its
     default."""
     await _ensure_fresh()
-    _enabled, value = _raw(slug)
-    if value is not None:
-        return value
-    return _DEFAULTS.get(slug, (None, None))[1]
+    return _get_value_sync(slug)
 
 
 async def _get_enabled(slug: str) -> bool:
@@ -212,10 +214,13 @@ async def get_embed_error_color() -> h.Color:
 
 
 def _get_value_sync(slug: str) -> str | None:
-    """Sync counterpart to :func:`_get_value`: no :func:`_ensure_fresh`, so it only ever
-    sees whatever is already cached (warm after :func:`preload`, stale/empty otherwise —
-    see :func:`get_embed_default_color_sync`'s docstring for why that's the deal for a
-    sync reader). Same default fallback as :func:`_get_value` otherwise.
+    """The cached ``value`` column for ``slug``, or its default — the fallback rule
+    both :func:`_get_value` and every sync getter share, so it's defined exactly once.
+
+    No :func:`_ensure_fresh` here, so this only ever sees whatever is already cached
+    (warm after :func:`preload`, stale/empty otherwise — see
+    :func:`get_embed_default_color_sync`'s docstring for why that's the deal for a
+    sync reader). :func:`_get_value` is this plus a freshness check first.
     """
     _enabled, value = _raw(slug)
     if value is not None:
@@ -267,7 +272,10 @@ async def get_xur_image_url() -> str:
 
 
 async def get_alert_min_level() -> str:
-    return await _get_value("alert_min_level") or "ERROR"
+    # No `or "ERROR"` fallback needed: _get_value already resolves through _DEFAULTS
+    # ("ERROR"), and a saved row's value is always one of _ALERT_LEVELS (never falsy) —
+    # see autopost_settings.py's _handle_save, the only writer.
+    return t.cast(str, await _get_value("alert_min_level"))
 
 
 async def get_disable_bad_channels() -> bool:

@@ -1,11 +1,12 @@
 /*
   Weekly Reset Overview form styles. The full form skeleton — page layout, fieldsets,
   inputs, the preview pane, the toolbar and its buttons — lives in shared.css under
-  `.form-page` (this page's <body> carries that class). Layered also on
-  /static/vendor/tom-select.min.css (loaded before this file, so the dark-theme overrides
-  at the bottom win). Served statically from /static/weekly_reset_form.css — no build step.
-  This file holds only what's unique to weekly_reset: the .row/.checks/#conquests widget
-  rows and the Tom Select dark theme. Colours come from the shared tokens.
+  `.form-page` (this page's <body> carries that class). The Tom Select dark theme lives
+  in /static/tom_select_dark.css (shared with autopost_settings.html) — loaded after
+  /static/vendor/tom-select.min.css, so its overrides win. Served statically from
+  /static/weekly_reset_form.css — no build step. This file holds only what's unique to
+  weekly_reset: the .row/.checks/#conquests widget rows. Colours come from the shared
+  tokens.
 */
 
 .row { display: flex; gap: .8rem; flex-wrap: wrap; }
@@ -16,56 +17,6 @@
 .checks input { margin: 0; }
 
 #conquests { display: flex; flex-direction: column; gap: .6rem; }
-
-/* --- Tom Select dark theme (overrides the vendored light stylesheet) --- */
-.ts-wrapper { width: 100%; min-width: 0; }
-.ts-wrapper.single .ts-control, .ts-wrapper.multi .ts-control,
-/* Tom Select's default sheet whitens .ts-control while typing (`.input-active`) and
-   with the dropdown open (`.dropdown-active`) at a higher specificity than the plain
-   `.single .ts-control` rule — match it so the control stays dark, not white-on-light. */
-.ts-wrapper.single.input-active .ts-control, .ts-wrapper.multi.input-active .ts-control,
-.ts-wrapper.single.dropdown-active .ts-control, .ts-wrapper.multi.dropdown-active .ts-control {
-  background: var(--surface-3); color: var(--text-1);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  box-shadow: none; padding: .35rem .5rem;
-}
-/* Pin the inner typing input too (transparent bg over the dark control; -webkit-text-fill
-   overrides forced/night-mode text recolouring on Chromium/Samsung Internet). */
-.ts-control, .ts-control input, .ts-control input::placeholder { color: var(--text-1); }
-.ts-control input {
-  background: transparent; color: var(--text-1); -webkit-text-fill-color: #e6e6e6;
-}
-.ts-control input::placeholder, .ts-control > .ts-placeholder { color: var(--text-muted); }
-.ts-wrapper.focus .ts-control, .ts-control.focus { border-color: var(--accent); box-shadow: none; }
-/* The control already turns accent-coloured on focus (rule above), so shared.css's ring
-   on the inner typing input would draw a second indicator inside the first. Tom Select
-   builds that input itself, so it cannot carry .no-focus-ring — hence the rule. */
-.ts-control input:focus-visible { outline: none; }
-.ts-wrapper.disabled .ts-control { opacity: .55; }
-
-.ts-dropdown {
-  background: var(--surface-2); color: var(--text-1);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, .45); margin-top: .2rem; z-index: 30;
-}
-.ts-dropdown .option { padding: .4rem .55rem; }
-.ts-dropdown .active { background: #2a2f37; color: #fff; }
-.ts-dropdown .option.selected { color: var(--link); }
-.ts-dropdown .no-results { color: var(--text-faint); padding: .4rem .55rem; }
-
-/* Multi-select chips. */
-.ts-wrapper.multi .ts-control > .item {
-  background: var(--accent-strong); color: #fff; border: 0; border-radius: 4px;
-  padding: .12rem .45rem;
-}
-.ts-wrapper.multi .ts-control > .item .remove {
-  border-left-color: rgba(255, 255, 255, .4); color: #fff;
-}
-.ts-wrapper.multi .ts-control > .item .remove:hover { background: rgba(255, 255, 255, .18); }
-
-/* clear_button plugin (single-selects). */
-.ts-wrapper .clear-button { color: var(--text-faint); opacity: .8; }
-.ts-wrapper .clear-button:hover { color: var(--text-1); opacity: 1; }
 
 /* Shown when the server rendered the form before the manifest pools were ready (see
    _build_options). Not an error — the rest of the form is usable, the pickers just are

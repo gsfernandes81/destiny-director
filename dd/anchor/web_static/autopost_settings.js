@@ -52,8 +52,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // work at all, unlike log_channel_id/alerts_channel_id, which the bot only ever sends
   // to directly and so may be a plain text channel. A stored id the live fetch didn't
   // return (the bot cannot see that channel right now, or it was deleted) is kept as a
-  // synthetic "unknown" option rather than silently dropped — mirrors
-  // weekly_reset_form.js's tsWeapon/tsSingle.
+  // synthetic "unknown" option rather than silently dropped — via ts_single.js's
+  // tsWithCurrentOption, shared with weekly_reset_form.js's tsSingle.
   async function initChannelPickers() {
     const fields = document.querySelectorAll("select.channelfield");
     if (!fields.length) return;
@@ -74,15 +74,17 @@ document.addEventListener("DOMContentLoaded", () => {
       const announceOnly = select.dataset.announceOnly === "true";
       const allowedGuilds =
         scope === "kyber_control" ? [kyberId, controlId] : [kyberId];
-      const options = channels
+      const rawOptions = channels
         .filter((c) => allowedGuilds.includes(c.guildId))
         .filter((c) => !announceOnly || c.announce)
         .map((c) => ({ value: c.id, text: c.name }));
 
       const current = select.value || "";
-      if (current && !options.some((o) => o.value === current)) {
-        options.unshift({ value: current, text: `Unknown channel (${current})` });
-      }
+      const options = tsWithCurrentOption(
+        rawOptions,
+        current,
+        (id) => `Unknown channel (${id})`,
+      );
 
       const ts = new TomSelect(select, {
         options,

@@ -114,13 +114,16 @@ function tsWeapon(id, weaponRef) {
 }
 
 // A single-select typeahead over a bounded string pool; the option value IS the name, so
-// the slot submits the plain name. A carried-over current value not in the pool is injected
-// up front so it isn't silently dropped.
+// the slot submits the plain name. A carried-over current value not in the pool is
+// injected up front (see ts_single.js) so it isn't silently dropped.
 function tsSingle(id, values, current) {
   const cur = (current || "").trim();
-  const pool = cur && !values.includes(cur) ? [cur, ...values] : values;
+  const pool = tsWithCurrentOption(
+    values.map((v) => ({ value: v, text: v })),
+    cur,
+  );
   const ts = new TomSelect($(id), {
-    options: pool.map((v) => ({ value: v, text: v })),
+    options: pool,
     maxOptions: 500,
     placeholder: "Search…",
     plugins: ["clear_button"],

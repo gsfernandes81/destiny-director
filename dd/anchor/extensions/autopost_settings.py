@@ -180,7 +180,9 @@ _SETTINGS: tuple[_Setting, ...] = (
         False,
         "select",
         options=_ALERT_LEVELS,
-        default="ERROR",
+        # Read from dd.common.settings' own default rather than a second hardcoded
+        # "ERROR" literal — see this field's docstring on why the two must agree.
+        default=dd_settings._DEFAULTS["alert_min_level"][1] or "",
         category="Logging & Alerts",
     ),
     _Setting(
@@ -374,6 +376,60 @@ _SELECT_OPTIONS = {s.slug: s.options for s in _SETTINGS if s.kind == "select"}
 _CHANNEL_SLUGS = frozenset(s.slug for s in _SETTINGS if s.kind == "channel")
 
 
+# One validator per non-toggle kind (a toggle just needs bool(), handled inline in
+# _handle_save): each takes the slug (for its error message) and the client's raw JSON
+# value, and returns (value_to_store, error) — exactly one of the two is set. A blank
+# url/color clears the setting (None -> stored as NULL, "use the default"); a blank
+# channel stores "0" (explicitly dormant — see _Setting's "channel" kind docs on why
+# that must NOT be NULL).
+def _validate_url(slug: str, raw: object) -> tuple[str | None, str | None]:
+    if not isinstance(raw, str):
+        return None, f"'{slug}' must be a string."
+    trimmed = raw.strip()
+    if trimmed and not trimmed.startswith(("http://", "https://")):
+        return None, f"'{slug}' must be an http(s) URL."
+    return trimmed or None, None
+
+
+def _validate_color(slug: str, raw: object) -> tuple[str | None, str | None]:
+    if not isinstance(raw, str):
+        return None, f"'{slug}' must be a string."
+    trimmed = raw.strip()
+    if trimmed and not _HEX_COLOR_RE.match(trimmed):
+        return None, f"'{slug}' must be a #RRGGBB colour."
+    return trimmed or None, None
+
+
+def _validate_select(slug: str, raw: object) -> tuple[str | None, str | None]:
+    options = _SELECT_OPTIONS[slug]
+    if raw not in options:
+        return None, f"'{slug}' must be one of {', '.join(options)}."
+    return t.cast(str, raw), None
+
+
+def _validate_channel(slug: str, raw: object) -> tuple[str | None, str | None]:
+    if isinstance(raw, str):
+        raw = raw.strip()
+    if raw in ("", None):
+        return "0", None
+    try:
+        channel_id = int(t.cast(str, raw))
+    except (TypeError, ValueError):
+        return None, f"'{slug}' must be a Discord channel id."
+    if channel_id < 0:
+        return None, f"'{slug}' must be a Discord channel id."
+    return str(channel_id), None
+
+
+_ValueValidator = t.Callable[[str, object], tuple[str | None, str | None]]
+_VALIDATORS: dict[str, _ValueValidator] = {
+    **dict.fromkeys(_URL_SLUGS, _validate_url),
+    **dict.fromkeys(_COLOR_SLUGS, _validate_color),
+    **dict.fromkeys(_SELECT_OPTIONS, _validate_select),
+    **dict.fromkeys(_CHANNEL_SLUGS, _validate_channel),
+}
+
+
 def _render_row(
     setting: _Setting,
     state: bool | str | None,
@@ -427,15 +483,22 @@ def _render_row(
         actions = ""
     label_block = _label_block(actions)
 
+    def _row(kind_class: str, control_html: str, *, block: str = "") -> str:
+        classes = f"{base_class} {kind_class}" if kind_class else base_class
+        return (
+            f'<div class="{classes}">'
+            f"{block or _label_block()}"
+            f"{control_html}"
+            "</div>"
+        )
+
     if setting.kind == "url":
         value = html.escape(state or "") if isinstance(state, str) else ""
-        return (
-            f'<div class="{base_class} urlrow">'
-            f"{_label_block()}"
+        return _row(
+            "urlrow",
             '<input type="url" class="urlfield" '
             f'data-slug="{html.escape(setting.slug)}"'
-            f' value="{value}" placeholder="https://example.com/banner.png" />'
-            "</div>"
+            f' value="{value}" placeholder="https://example.com/banner.png" />',
         )
 
     if setting.kind == "color":
@@ -443,9 +506,8 @@ def _render_row(
             state if isinstance(state, str) and _HEX_COLOR_RE.match(state) else ""
         )
         swatch_value = hex_value or "#000000"
-        return (
-            f'<div class="{base_class} colorrow">'
-            f"{_label_block()}"
+        return _row(
+            "colorrow",
             '<div class="colorpicker">'
             '<input type="color" class="colorswatch" '
             f'data-for="{html.escape(setting.slug)}"'
@@ -454,8 +516,7 @@ def _render_row(
             f'data-slug="{html.escape(setting.slug)}"'
             f' value="{html.escape(hex_value)}" placeholder="#RRGGBB"'
             ' maxlength="7" />'
-            "</div>"
-            "</div>"
+            "</div>",
         )
 
     if setting.kind == "select":
@@ -465,13 +526,11 @@ def _render_row(
             f"{' selected' if opt == current else ''}>{html.escape(opt)}</option>"
             for opt in setting.options
         )
-        return (
-            f'<div class="{base_class} selectrow">'
-            f"{_label_block()}"
+        return _row(
+            "selectrow",
             f'<select class="selectfield" data-slug="{html.escape(setting.slug)}">'
             f"{opts}"
-            "</select>"
-            "</div>"
+            "</select>",
         )
 
     if setting.kind == "channel":
@@ -486,28 +545,25 @@ def _render_row(
             if channel_id
             else ""
         )
-        return (
-            f'<div class="{base_class} channelrow">'
-            f"{_label_block()}"
+        return _row(
+            "channelrow",
             f'<select class="channelfield" data-slug="{html.escape(setting.slug)}"'
             f' data-scope="{html.escape(setting.channel_scope)}"'
             f' data-announce-only="{"true" if setting.announce_only else "false"}">'
             '<option value="">— none configured —</option>'
             f"{current_opt}"
-            "</select>"
-            "</div>"
+            "</select>",
         )
 
     checked = " checked" if state else ""
-    return (
-        f'<div class="{base_class}">'
-        f"{label_block}"
+    return _row(
+        "",
         '<label class="switch">'
         f'<input type="checkbox" class="no-focus-ring" '
         f'data-slug="{html.escape(setting.slug)}"{checked} />'
         '<span class="slider"></span>'
-        "</label>"
-        "</div>"
+        "</label>",
+        block=label_block,
     )
 
 
@@ -725,82 +781,25 @@ async def _handle_save(request: aiohttp.web.Request) -> aiohttp.web.Response:
             {"error": "Expected a 'settings' object."}, status=400
         )
 
-    # Validate every non-toggle field up front so a bad value fails the whole save
-    # (before opening a transaction) rather than persisting something a producer can't
-    # use. A blank url/color field clears the setting (stored as NULL — "use the
-    # default"); a blank channel field stores "0" (explicitly dormant — see _Setting's
-    # "channel" kind docs on why that must NOT be NULL).
-    url_values: dict[str, str | None] = {}
-    for slug in _URL_SLUGS:
+    # Validate every non-toggle field up front (one validator per kind — see
+    # _VALIDATORS) so a bad value fails the whole save (before opening a transaction)
+    # rather than persisting something a producer can't use.
+    value_updates: dict[str, str | None] = {}
+    for slug, validate in _VALIDATORS.items():
         if slug not in settings_in:
             continue
-        raw = settings_in[slug]
-        if not isinstance(raw, str):
-            return aiohttp.web.json_response(
-                {"error": f"'{slug}' must be a string."}, status=400
-            )
-        trimmed = raw.strip()
-        if trimmed and not trimmed.startswith(("http://", "https://")):
-            return aiohttp.web.json_response(
-                {"error": f"'{slug}' must be an http(s) URL."}, status=400
-            )
-        url_values[slug] = trimmed or None
-
-    color_values: dict[str, str | None] = {}
-    for slug in _COLOR_SLUGS:
-        if slug not in settings_in:
-            continue
-        raw = settings_in[slug]
-        if not isinstance(raw, str):
-            return aiohttp.web.json_response(
-                {"error": f"'{slug}' must be a string."}, status=400
-            )
-        trimmed = raw.strip()
-        if trimmed and not _HEX_COLOR_RE.match(trimmed):
-            return aiohttp.web.json_response(
-                {"error": f"'{slug}' must be a #RRGGBB colour."}, status=400
-            )
-        color_values[slug] = trimmed or None
-
-    select_values: dict[str, str] = {}
-    for slug, options in _SELECT_OPTIONS.items():
-        if slug not in settings_in:
-            continue
-        raw = settings_in[slug]
-        if raw not in options:
-            return aiohttp.web.json_response(
-                {"error": f"'{slug}' must be one of {', '.join(options)}."}, status=400
-            )
-        select_values[slug] = raw
-
-    channel_values: dict[str, str] = {}
-    for slug in _CHANNEL_SLUGS:
-        if slug not in settings_in:
-            continue
-        raw = settings_in[slug]
-        if isinstance(raw, str):
-            raw = raw.strip()
-        if raw in ("", None):
-            channel_values[slug] = "0"
-            continue
-        try:
-            channel_id = int(raw)
-        except (TypeError, ValueError):
-            return aiohttp.web.json_response(
-                {"error": f"'{slug}' must be a Discord channel id."}, status=400
-            )
-        if channel_id < 0:
-            return aiohttp.web.json_response(
-                {"error": f"'{slug}' must be a Discord channel id."}, status=400
-            )
-        channel_values[slug] = str(channel_id)
+        value, error = validate(slug, settings_in[slug])
+        if error:
+            return aiohttp.web.json_response({"error": error}, status=400)
+        value_updates[slug] = value
 
     # Confirm the bot can actually post there before persisting — a channel id being
     # syntactically valid says nothing about whether the bot can see it, has been
     # kicked from that server, or lacks Send/Embed/External-Emoji there. Skipped for
     # "0" (clearing a channel back to dormant needs no permission to do).
-    for slug, channel_id in channel_values.items():
-        if channel_id == "0":
+    for slug in _CHANNEL_SLUGS:
+        channel_id = value_updates.get(slug)
+        if not channel_id or channel_id == "0":
             continue
         problem = await _channel_permission_problem(int(channel_id))
         if problem:
@@ -817,14 +816,8 @@ async def _handle_save(request: aiohttp.web.Request) -> aiohttp.web.Response:
                 await schemas.AutoPostSettings.set_enabled(
                     slug, bool(value), session=session
                 )
-        for slug, url in url_values.items():
-            await schemas.AutoPostSettings.set_value(slug, url, session=session)
-        for slug, color in color_values.items():
-            await schemas.AutoPostSettings.set_value(slug, color, session=session)
-        for slug, choice in select_values.items():
-            await schemas.AutoPostSettings.set_value(slug, choice, session=session)
-        for slug, channel_id in channel_values.items():
-            await schemas.AutoPostSettings.set_value(slug, channel_id, session=session)
+        for slug, value in value_updates.items():
+            await schemas.AutoPostSettings.set_value(slug, value, session=session)
 
     # dd.common.settings caches every non-toggle row above (colors, urls, followable
     # channels, ...); refresh it now rather than waiting out the TTL (see that

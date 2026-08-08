@@ -234,9 +234,16 @@ def _silence_progress(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest_asyncio.fixture(loop_scope="module", autouse=True)
 async def _fresh_db() -> AsyncIterator[None]:
-    """Reset the (SQLite, from conftest) schema between tests for hermetic rows."""
+    """Reset the (SQLite, from conftest) schema between tests for hermetic rows.
+
+    Also resets dd.common.settings' process-global cache — otherwise a setting written
+    and cached by one test can still be served by a *_sync getter in a later test
+    within the 30s TTL, even though the underlying row was just wiped above.
+    """
     await schemas.destroy_all()
     await schemas.create_all()
+    settings.invalidate()
+    settings._cache.clear()
     yield
 
 
