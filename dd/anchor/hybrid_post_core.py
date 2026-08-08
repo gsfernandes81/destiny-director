@@ -53,7 +53,7 @@ from ..common import schemas, settings
 from ..common.bot import CachedFetchBot
 from ..common.components import footer_button_specs, link_button_row
 from ..common.utils import fetch_emoji_dict
-from . import utils
+from . import utils, web
 from .extensions import bungie_api as api
 
 logger = logging.getLogger(__name__)
@@ -507,14 +507,17 @@ async def preview_emoji_dict(bot: CachedFetchBot | None) -> dict[str, h.Emoji]:
 #
 # One set of handler bodies serves every producer; the producer-specific bits (context
 # model, bootstrap payload, option pools) come through ``spec``. Each producer keeps six
-# thin ``_handle_*`` wrappers that pass its ``spec`` and live ``_bot`` in, so the tests
-# that call the wrappers and monkeypatch the module ``_bot`` keep working unchanged.
-
-_STARTING_MSG = "Bot is still starting — try again in a moment."
+# thin ``_handle_*`` wrappers that pass its ``spec`` and ``web.get_bot()`` in, read at
+# call time so they track the one stash.
+#
+# The bot arrives as an argument rather than being read here, so these stay pure
+# functions of their inputs (the tests call them with a fake bot); ``None`` is answered
+# with the same 503 body ``web.require_bot()`` produces via its middleware, so a request
+# that lands too early reads identically whichever route it hit.
 
 
 def _bot_starting() -> aiohttp.web.Response:
-    return aiohttp.web.json_response({"error": _STARTING_MSG}, status=503)
+    return web.bot_not_ready_response()
 
 
 def _retire_meta(meta: DraftMeta) -> None:

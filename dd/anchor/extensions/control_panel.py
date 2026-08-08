@@ -47,7 +47,6 @@ import hikari as h
 import lightbulb as lb
 
 from ...common import cfg, lifecycle, settings
-from ...common.bot import CachedFetchBot
 from ...common.components import cv2_error, cv2_notice, respond_cv2
 from .. import web
 
@@ -59,16 +58,6 @@ _PANEL_HTML_PATH = (
     Path(__file__).resolve().parent.parent / "web_static" / "control_panel.html"
 )
 _CARDS_PLACEHOLDER = "<!--__CARDS__-->"
-
-# The live bot, stashed at StartedEvent so /bot/stop can reach it (the pattern every
-# other route-owning extension here uses).
-_bot: CachedFetchBot | None = None
-
-
-@loader.listener(h.StartedEvent)
-async def _on_started(_event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED):
-    global _bot
-    _bot = bot
 
 
 def _render_panel_html() -> str:
@@ -108,10 +97,11 @@ async def _channel_entry(feed: str, channel_id: int | None) -> dict[str, str | N
         "channelName": None,
         "url": None,
     }
-    if not channel_id or _bot is None:
+    bot = web.get_bot()
+    if not channel_id or bot is None:
         return row
     try:
-        channel = await _bot.fetch_channel(channel_id)
+        channel = await bot.fetch_channel(channel_id)
     except Exception:
         logger.info("Could not resolve channel %s for /bot/info", channel_id)
         return row
@@ -152,14 +142,12 @@ async def _handle_bot_stop(request: aiohttp.web.Request) -> aiohttp.web.Response
 
     Auth + Origin (CSRF) are already enforced by the middleware. The shutdown is
     scheduled rather than awaited, so this response reaches the browser first — see the
-    module docstring.
+    module docstring. A request landing in the window before the bot is up raises
+    ``BotNotReady``, which ``web``'s middleware answers with the shared 503.
     """
-    if _bot is None:
-        return aiohttp.web.json_response(
-            {"error": "Bot is still starting — try again in a moment."}, status=503
-        )
+    bot = web.require_bot()
     logger.warning("Shutdown requested from the web control panel")
-    await lifecycle.request_shutdown(_bot, lifecycle.STOP_EXIT_CODE)
+    await lifecycle.request_shutdown(bot, lifecycle.STOP_EXIT_CODE)
     return aiohttp.web.json_response({"ok": True, "stopping": True})
 
 

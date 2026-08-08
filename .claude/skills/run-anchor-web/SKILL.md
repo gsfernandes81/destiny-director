@@ -138,7 +138,7 @@ they skip. The rest of the suite does not need a browser.
   refuses to serve.
 - **The DB is MySQL-only in config.** `cfg._db_urls` hardcodes `mysql+asyncmy`, and there
   is no MySQL in a container. `schemas.configure_test_db(engine)` swaps in SQLite — the
-  same thing `dd/anchor/tests/conftest.py` does. Don't try to point `MYSQL_URL` at SQLite.
+  same thing the repo-root `conftest.py` does. Don't try to point `MYSQL_URL` at SQLite.
 - **`Cv2Draft.create` takes `id=`, `created_by=`, `action=`** — the id is caller-supplied
   (a UUID4 hex string), and `action` must be one of `post` / `edit` / `copy`. There is no
   `owner_id` or `purpose`.

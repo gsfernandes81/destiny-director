@@ -30,6 +30,7 @@ import aiohttp.web
 import hikari as h
 import pytest
 
+from dd.anchor import web
 from dd.anchor.extensions import weekly_reset as wr
 
 # The three real "Weekly Reset Overview" posts this feature was reverse-engineered from.
@@ -720,7 +721,7 @@ async def test_create_publish_returns_problems_for_invalid_draft(monkeypatch) ->
     # Create-and-publish an empty draft: it fails validate_post, so publish_draft raises
     # ValueError before it ever touches the bot — a non-None sentinel just clears the
     # 503 "bot unset" gate.
-    monkeypatch.setattr(wr, "_bot", object())
+    monkeypatch.setattr(web, "_bot", object())
     await wr.save_meta(wr.DraftMeta())
     resp = await wr._handle_create(_req(body={"reset_ts": 1, "publish": True}))
     assert resp.status == 422
@@ -995,7 +996,7 @@ async def test_handle_edit_publish_returns_502_when_crosspost_fails(
     # End-to-end via the web handler: a failed crosspost returns a 502 with a real error
     # (not an indefinitely-hanging request), and the persisted post is NOT marked
     # published — so a retry from the form is safe.
-    monkeypatch.setattr(wr, "_bot", _FakeBot())
+    monkeypatch.setattr(web, "_bot", _FakeBot())
     monkeypatch.setattr(wr, "current_reset_ts", lambda *a, **k: 1783443600)
     await wr.save_meta(
         wr.DraftMeta(message_id=42, reset_ts=1783443600, status="posted")
@@ -1041,7 +1042,7 @@ async def test_handle_create_posts_and_returns_warnings(
     monkeypatch, fake_publish_env, stub_indexes
 ) -> None:
     bot = _FakeBot()
-    monkeypatch.setattr(wr, "_bot", bot)
+    monkeypatch.setattr(web, "_bot", bot)
     # Pin "this week" to the draft's reset boundary so post_this_period reads True.
     monkeypatch.setattr(wr, "current_reset_ts", lambda *a, **k: 1783443600)
     await wr.save_meta(wr.DraftMeta())  # fresh: no post yet
@@ -1066,7 +1067,7 @@ async def test_handle_create_preserves_last_editor(
     # Create resets the message-tracking fields but keeps editorial metadata like the
     # last editor (a slash-command edit may have set it) — it isn't wiped to 0.
     bot = _FakeBot()
-    monkeypatch.setattr(wr, "_bot", bot)
+    monkeypatch.setattr(web, "_bot", bot)
     monkeypatch.setattr(wr, "current_reset_ts", lambda *a, **k: 1783443600)
     await wr.save_meta(wr.DraftMeta(last_edited_by=12345))  # no post yet
     resp = await wr._handle_create(_req(body={"reset_ts": 1783443600}))
@@ -1081,7 +1082,7 @@ async def test_handle_create_reports_problem_when_post_fails(monkeypatch) -> Non
     # created, so the handler returns a blocking `problems` 502 — NOT a green ok:true —
     # and the meta is not persisted with a phantom message id.
     bot = _FakeBot()
-    monkeypatch.setattr(wr, "_bot", bot)
+    monkeypatch.setattr(web, "_bot", bot)
     monkeypatch.setattr(wr, "current_reset_ts", lambda *a, **k: 1783443600)
 
     async def boom(*a: t.Any, **k: t.Any) -> t.Any:
@@ -1101,7 +1102,7 @@ async def test_handle_create_reports_problem_when_post_fails(monkeypatch) -> Non
 async def test_handle_create_refuses_when_post_exists(monkeypatch) -> None:
     # Create is a no-op guard when this week already has a post — the form hides the
     # button, and the server enforces it so a stale tab can't orphan the live message.
-    monkeypatch.setattr(wr, "_bot", object())
+    monkeypatch.setattr(web, "_bot", object())
     monkeypatch.setattr(wr, "current_reset_ts", lambda *a, **k: 1783443600)
     await wr.save_meta(
         wr.DraftMeta(message_id=42, reset_ts=1783443600, status="posted")
@@ -1116,7 +1117,7 @@ async def test_handle_edit_edits_existing_in_place(
     monkeypatch, fake_publish_env, stub_indexes
 ) -> None:
     bot = _FakeBot()
-    monkeypatch.setattr(wr, "_bot", bot)
+    monkeypatch.setattr(web, "_bot", bot)
     monkeypatch.setattr(wr, "current_reset_ts", lambda *a, **k: 1783443600)
     # A published post for this week: Edit updates it in place (re-mirrors) and keeps
     # the crossposted state; no new message is sent.
@@ -1138,7 +1139,7 @@ async def test_handle_edit_edits_existing_in_place(
 
 @pytest.mark.asyncio
 async def test_handle_edit_refuses_when_no_post(monkeypatch) -> None:
-    monkeypatch.setattr(wr, "_bot", object())
+    monkeypatch.setattr(web, "_bot", object())
     monkeypatch.setattr(wr, "current_reset_ts", lambda *a, **k: 1783443600)
     await wr.save_meta(wr.DraftMeta())  # no post this week
     resp = await wr._handle_edit(_req(body={"reset_ts": 1783443600}))
@@ -1150,7 +1151,7 @@ async def test_handle_edit_refuses_when_no_post(monkeypatch) -> None:
 async def test_handle_edit_refuses_stale_prior_week_post(monkeypatch) -> None:
     # A post tracked from a PRIOR week isn't editable here — the form starts fresh and
     # Edit refuses, so we never accidentally edit last week's message.
-    monkeypatch.setattr(wr, "_bot", object())
+    monkeypatch.setattr(web, "_bot", object())
     monkeypatch.setattr(wr, "current_reset_ts", lambda *a, **k: 1783443600)
     await wr.save_meta(
         wr.DraftMeta(message_id=42, reset_ts=1782838800, status="posted")
@@ -1161,7 +1162,7 @@ async def test_handle_edit_refuses_stale_prior_week_post(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_handle_create_503_when_bot_unset(monkeypatch) -> None:
-    monkeypatch.setattr(wr, "_bot", None)
+    monkeypatch.setattr(web, "_bot", None)
     resp = await wr._handle_create(_req(body={"reset_ts": 1}))
     assert resp.status == 503
 
@@ -1246,7 +1247,7 @@ async def test_form_get_legacy_post_offers_create(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_handle_delete_removes_post_and_resets(monkeypatch) -> None:
     bot = _FakeBot()
-    monkeypatch.setattr(wr, "_bot", bot)
+    monkeypatch.setattr(web, "_bot", bot)
     await wr.save_meta(
         wr.DraftMeta(message_id=77, status="published", crossposted=True)
     )
@@ -1262,7 +1263,7 @@ async def test_handle_delete_removes_post_and_resets(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_handle_delete_noop_when_unposted(monkeypatch) -> None:
     bot = _FakeBot()
-    monkeypatch.setattr(wr, "_bot", bot)
+    monkeypatch.setattr(web, "_bot", bot)
     await wr.save_meta(wr.DraftMeta(message_id=0, status="draft"))
     resp = await wr._handle_delete(_req())
     assert resp.status == 200 and json.loads(resp.text or "") == {"ok": True}
@@ -1271,6 +1272,6 @@ async def test_handle_delete_noop_when_unposted(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_handle_delete_503_when_bot_unset(monkeypatch) -> None:
-    monkeypatch.setattr(wr, "_bot", None)
+    monkeypatch.setattr(web, "_bot", None)
     resp = await wr._handle_delete(_req())
     assert resp.status == 503

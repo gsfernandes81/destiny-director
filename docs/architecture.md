@@ -216,8 +216,11 @@ escalates storms. Deterministic error reference codes live in `dd/common/utils.p
 
 Tests live inside each package as `tests/` subdirs (including nested ones, e.g.
 `dd/anchor/extensions/tests/`, `dd/anchor/extensions/bungie_api/tests/`). Every package
-has tests. `conftest.py` exists only in `dd/beacon/tests/` and `dd/anchor/tests/`; its
-key fixture is a session-scoped, autouse `_test_db` that repoints the DB layer at a
-temp-file SQLite database via `schemas.configure_test_db()`. Set `TEST_USE_MYSQL=1` to run
-DB tests against MySQL instead (guarded by `_db_is_local()` / `ALLOW_REMOTE_SCHEMA_DESTROY`
-so it can't wipe a remote DB). Run tests with `make test` (see `CLAUDE.md`).
+has tests. The **repo-root `conftest.py`** holds the one shared fixture: a session-scoped,
+autouse `_test_db` that repoints the DB layer at a temp-file SQLite database via
+`schemas.configure_test_db()`. Set `TEST_USE_MYSQL=1` to run DB tests against MySQL
+instead (guarded by `_db_is_local()` / `ALLOW_REMOTE_SCHEMA_DESTROY` so it can't wipe a
+remote DB) — that guard is why the fixture lives in exactly one file rather than being
+copied per package. Per-package `conftest.py`s hold only what is specific to them
+(`dd/anchor/tests/` adds `configured_followables`). Run tests with `make test` (see
+`CLAUDE.md`).

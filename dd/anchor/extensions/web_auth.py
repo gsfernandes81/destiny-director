@@ -51,7 +51,6 @@ from uuid import uuid4
 import aiohttp
 import aiohttp.typedefs
 import aiohttp.web
-import hikari as h
 import lightbulb as lb
 from yarl import URL
 
@@ -61,6 +60,9 @@ from .. import web
 
 logger = logging.getLogger(__name__)
 
+# Nothing is registered on it — the routes and middleware are contributed to the web app
+# at import time, and the bot now comes from web.get_bot() — but load_extensions_strict
+# requires every extension module to expose a Loader, so it stays.
 loader = lb.Loader()
 
 # --- constants --------------------------------------------------------------------
@@ -100,10 +102,6 @@ _ALLOWLIST_PREFIXES = ("/auth/", "/static/")
 _ALLOWLIST_EXACT = frozenset({"/oauth/callback"})
 
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-
-#: The live bot, stashed by the StartedEvent listener so the middleware can resolve the
-#: owner list. ``None`` until StartedEvent fires; the middleware 503s until then.
-_bot: CachedFetchBot | None = None
 
 #: When the owner list was last force-refreshed (see :func:`_is_owner`). ``None`` until
 #: the first auth check.
@@ -416,11 +414,11 @@ async def _handle_callback(request: aiohttp.web.Request) -> aiohttp.web.StreamRe
     error = _config_error()
     if error is not None:
         return error
-    if _bot is None:
-        return aiohttp.web.Response(
-            status=503, text="Bot is still starting — try again in a moment."
-        )
-    bot = _bot
+    # text/plain, not the shared JSON 503: this is a browser navigation landing back
+    # from Discord, not a page's fetch(), so the body is read by a human.
+    bot = web.get_bot()
+    if bot is None:
+        return aiohttp.web.Response(status=503, text=web.BOT_STARTING_MSG)
 
     # Single-use state consume is the CSRF defence and yields the server-held next path;
     # an unknown / expired / replayed state finds nothing.
@@ -548,9 +546,12 @@ async def _auth_middleware(
             request, 401, "Your session has expired — reload the page to sign in again."
         )
 
-    if _bot is None:
-        return _reject(request, 503, "Bot is still starting — try again in a moment.")
-    if not await _is_owner(_bot, user_id):
+    # This is the middleware itself, so it answers rather than raising BotNotReady:
+    # web's converter middleware is installed INSIDE this one and would never see it.
+    bot = web.get_bot()
+    if bot is None:
+        return _reject(request, 503, web.BOT_STARTING_MSG)
+    if not await _is_owner(bot, user_id):
         return _reject(request, 403, "This account is not authorized to use this tool.")
     request[AUTH_USER_KEY] = user_id
     return await handler(request)
@@ -569,12 +570,3 @@ def register_auth_middleware(app: aiohttp.web.Application) -> None:
 # assembled from all registrars when the web server starts.
 web.register_routes(register_auth_routes)
 web.register_routes(register_auth_middleware)
-
-
-@loader.listener(h.StartedEvent)
-async def _stash_bot(
-    event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED
-) -> None:
-    """Stash the live bot so the middleware / callback can resolve the owner list."""
-    global _bot
-    _bot = bot

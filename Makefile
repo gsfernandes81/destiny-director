@@ -160,15 +160,18 @@ dump-prod-db:
 dump-dev-db:
 	railway run -e dev -s MySQL bash -c 'mysqldump -h "$$MYSQLHOST" -P "$$MYSQLPORT" -u "$$MYSQLUSER" -p"$$MYSQLPASSWORD" --skip-ssl-verify-server-cert --single-transaction --quick --no-tablespaces "$$MYSQLDATABASE" > "kyber-dev-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
 
+# conftest.py is named alongside `dd` in all three: it is the one Python file outside
+# the package tree (repo-root, where pytest's session DB fixture and its non-local-DB
+# wipe guard live), so a bare `dd` path would leave it unlinted and untyped.
 lint:
-	uv run ruff check dd
+	uv run ruff check dd conftest.py
 
 format:
-	uv run ruff format dd
-	uv run ruff check --fix dd
+	uv run ruff format dd conftest.py
+	uv run ruff check --fix dd conftest.py
 
 typecheck:
-	uv run ty check dd
+	uv run ty check dd conftest.py
 
 test: .env
 	uv run --env-file .env python -m pytest -m "not discord"

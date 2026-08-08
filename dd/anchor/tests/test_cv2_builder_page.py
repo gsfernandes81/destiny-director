@@ -32,6 +32,7 @@ import uuid
 import aiohttp.web
 import pytest
 
+from dd.anchor import web
 from dd.anchor.extensions import cv2_builder_page as page
 from dd.anchor.extensions.web_auth import AUTH_USER_KEY
 from dd.common.schemas import Cv2Draft
@@ -121,7 +122,7 @@ class _StubBot:
 @pytest.fixture
 def stub_bot(monkeypatch: pytest.MonkeyPatch) -> _StubBot:
     bot = _StubBot()
-    monkeypatch.setattr(page, "_bot", bot)
+    monkeypatch.setattr(web, "_bot", bot)
     # The emoji map is a REST round-trip; short-circuit it (its own degrade path is
     # covered by the try/except in _emoji_map).
     monkeypatch.setattr(page, "_emoji_cache", {})

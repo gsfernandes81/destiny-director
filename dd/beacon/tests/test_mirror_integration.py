@@ -242,8 +242,7 @@ async def _fresh_db() -> AsyncIterator[None]:
     """
     await schemas.destroy_all()
     await schemas.create_all()
-    settings.invalidate()
-    settings._cache.clear()
+    settings.reset_cache_for_tests()
     yield
 
 
@@ -298,7 +297,7 @@ async def test_failing_dest_is_disabled(
     """A destination that probes unreachable past the grace window is auto-disabled by
     the reachability sweep, while a healthy one keeps delivering."""
     await schemas.AutoPostSettings.set_enabled("disable_bad_channels", True)
-    settings.invalidate()
+    settings.reset_cache_for_tests()
 
     src = await mirror_env.make_channel("src-fail")
     good = await mirror_env.make_channel("dst-good")

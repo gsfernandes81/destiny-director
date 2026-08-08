@@ -48,33 +48,21 @@ async def refresh_message_for_command(bot: CachedFetchBot):
     global last_message_in_channel
     global unavailable_reason
 
-    channel_id = await settings.get_followable_channel("free_games")
-    if not channel_id:
-        unavailable_reason = utils.FEED_UNCONFIGURED
-        # resolve_followable_channel already alerted at import; this path is reached
-        # again on every message event, so don't re-page for the same known state.
-        return
-    try:
-        channel = await bot.fetch_channel(channel_id)
-    except (h.NotFoundError, h.ForbiddenError):
-        # The configured channel was deleted, or the bot lost access to it, since it
-        # was set — alert instead of letting this raise out of a StartedEvent/message
-        # listener where nothing else would report it. CRITICAL, not ERROR, pages the
-        # bot owner(s) directly (see nav.py's identical rationale).
-        unavailable_reason = utils.FEED_UNREACHABLE
-        logging.critical(
-            "Free Games followable channel %s is configured but no longer "
-            "reachable (deleted, or the bot lost access) — /free games will answer "
-            "'unavailable' until it's fixed on the Autopost Settings page.",
-            channel_id,
-        )
+    # alert_when_unset=False: this runs again whenever the repeated message is
+    # deleted, and resolve_followable_channel already paged once at import for the
+    # unset state — see open_feed_source. An unreachable channel does still alert.
+    channel, reason = await utils.open_feed_source(
+        "free_games", "Free Games", bot.fetch_channel, alert_when_unset=False
+    )
+    if channel is None:
+        unavailable_reason = reason
         return
     if not isinstance(channel, h.TextableChannel):
         unavailable_reason = utils.FEED_UNREACHABLE
         logging.critical(
             "Free Games followable channel %s is not a textable channel — /free games "
             "will answer 'unavailable' until it's fixed on the Autopost Settings page.",
-            channel_id,
+            channel.id,
         )
         return
     async for message in channel.fetch_history():

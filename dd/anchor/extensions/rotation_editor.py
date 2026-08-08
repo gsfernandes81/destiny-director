@@ -382,7 +382,9 @@ async def _handle_preview(request: aiohttp.web.Request) -> aiohttp.web.Response:
 
     try:
         obj = _build_domain_object(post_type, data)
-        payload_out = await _render_preview(post_type, obj, _bot)
+        # get_bot(), not require_bot(): _render_preview degrades to escaped ``:name:``
+        # without the guild emoji, so a preview during startup is worth serving.
+        payload_out = await _render_preview(post_type, obj, web.get_bot())
     except Exception as e:
         return aiohttp.web.Response(status=400, text=f"Could not render preview:\n{e}")
     return aiohttp.web.json_response(payload_out)
@@ -504,20 +506,11 @@ web.register_routes(register_rotation_routes)
 # and cancelled — mid-download, leaving the index cold for the whole process.
 _warm_tasks: set[asyncio.Task[None]] = set()
 
-#: The live bot, stashed by the StartedEvent listener so the preview can fetch guild
-#: emoji for the render (``preview_emoji_dict`` degrades to escaped ``:name:`` if None).
-_bot: CachedFetchBot | None = None
-
 
 @loader.listener(h.StartedEvent)
-async def _warm_item_index(
-    _event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED
-) -> None:
+async def _warm_item_index(_event: h.StartedEvent) -> None:
     """Build the manifest weapon/armor index in the background (for autocomplete + link
-    baking), so requests never block on the (large) manifest download; also stash the
-    live bot so the preview can fetch guild emoji for the rendered post."""
-    global _bot
-    _bot = bot
+    baking), so requests never block on the (large) manifest download."""
     task = asyncio.create_task(item_index.warm(schemas.BungieCredentials.api_key))
     _warm_tasks.add(task)
     task.add_done_callback(_warm_tasks.discard)

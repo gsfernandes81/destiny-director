@@ -25,6 +25,7 @@ import aiohttp.web
 import pytest
 from yarl import URL
 
+from dd.anchor import web
 from dd.anchor.extensions import web_auth as auth
 
 pytestmark = pytest.mark.asyncio
@@ -234,7 +235,7 @@ async def test_sanitize_next(raw: str, expected: str) -> None:
 async def test_middleware_allowlist_passes_without_cookie(
     monkeypatch: pytest.MonkeyPatch, path: str
 ) -> None:
-    monkeypatch.setattr(auth, "_bot", _StubBot([123]))
+    monkeypatch.setattr(web, "_bot", _StubBot([123]))
     resp = await auth._auth_middleware(_req(path=path), _ok_handler)
     assert resp.status == 200
 
@@ -242,7 +243,7 @@ async def test_middleware_allowlist_passes_without_cookie(
 async def test_middleware_unauth_get_redirects_to_login(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(auth, "_bot", _StubBot([123]))
+    monkeypatch.setattr(web, "_bot", _StubBot([123]))
     resp = await auth._auth_middleware(
         _req(path="/rotation", path_qs="/rotation"), _ok_handler
     )
@@ -253,7 +254,7 @@ async def test_middleware_unauth_get_redirects_to_login(
 async def test_middleware_unauth_post_is_401_json_not_redirect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(auth, "_bot", _StubBot([123]))
+    monkeypatch.setattr(web, "_bot", _StubBot([123]))
     resp = await auth._auth_middleware(
         _req(path="/rotation/edit", method="POST"), _ok_handler
     )
@@ -268,7 +269,7 @@ async def test_middleware_unauth_post_is_401_json_not_redirect(
 async def test_middleware_owner_cookie_runs_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(auth, "_bot", _StubBot([123]))
+    monkeypatch.setattr(web, "_bot", _StubBot([123]))
     request = _req(path="/rotation", cookies=_owner_cookie(123))
     resp = await auth._auth_middleware(request, _ok_handler)
     assert resp.status == 200
@@ -286,7 +287,7 @@ async def test_authed_user_id_rejects_a_request_the_middleware_never_admitted() 
 async def test_middleware_non_owner_cookie_is_403(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(auth, "_bot", _StubBot([123]))
+    monkeypatch.setattr(web, "_bot", _StubBot([123]))
     resp = await auth._auth_middleware(
         _req(path="/rotation", cookies=_owner_cookie(999)), _ok_handler
     )
@@ -296,7 +297,7 @@ async def test_middleware_non_owner_cookie_is_403(
 async def test_middleware_origin_mismatch_on_post_is_403(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(auth, "_bot", _StubBot([123]))
+    monkeypatch.setattr(web, "_bot", _StubBot([123]))
     monkeypatch.setattr(auth.cfg, "public_base_url", "https://anchor.example")
     resp = await auth._auth_middleware(
         _req(
@@ -313,7 +314,7 @@ async def test_middleware_origin_mismatch_on_post_is_403(
 async def test_middleware_same_origin_post_allowed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(auth, "_bot", _StubBot([123]))
+    monkeypatch.setattr(web, "_bot", _StubBot([123]))
     monkeypatch.setattr(auth.cfg, "public_base_url", "https://anchor.example")
     resp = await auth._auth_middleware(
         _req(
@@ -328,7 +329,7 @@ async def test_middleware_same_origin_post_allowed(
 
 
 async def test_middleware_bot_unset_is_503(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(auth, "_bot", None)
+    monkeypatch.setattr(web, "_bot", None)
     # A valid owner cookie clears auth resolution, so the bot-None guard is what fires.
     resp = await auth._auth_middleware(
         _req(path="/rotation", cookies=_owner_cookie(123)), _ok_handler
@@ -339,7 +340,7 @@ async def test_middleware_bot_unset_is_503(monkeypatch: pytest.MonkeyPatch) -> N
 async def test_middleware_dev_bypass_triple_gated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(auth, "_bot", _StubBot([123]))
+    monkeypatch.setattr(web, "_bot", _StubBot([123]))
     # All three gates on (TEST_ENV + dev id + no public URL): unauth request passes.
     monkeypatch.setattr(auth.cfg, "test_env", (1000,))
     monkeypatch.setattr(auth.cfg, "dev_auth_user_id", "1000")
@@ -468,7 +469,7 @@ async def test_login_preserves_and_sanitizes_next(oauth_cfg) -> None:
 async def test_callback_happy_path_sets_cookie_and_redirects(
     oauth_cfg, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(auth, "_bot", _StubBot([123]))
+    monkeypatch.setattr(web, "_bot", _StubBot([123]))
     _patch_oauth_http(monkeypatch, user_json={"id": "123"})
     state = auth._AuthStateManager.issue("/weekly_reset")
     resp = await auth._handle_callback(_req(query={"state": state, "code": "abc"}))
@@ -484,7 +485,7 @@ async def test_callback_happy_path_sets_cookie_and_redirects(
 async def test_callback_unknown_state_is_400(
     oauth_cfg, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(auth, "_bot", _StubBot([123]))
+    monkeypatch.setattr(web, "_bot", _StubBot([123]))
     _patch_oauth_http(monkeypatch)
     resp = await auth._handle_callback(
         _req(query={"state": "never-issued", "code": "abc"})
@@ -495,7 +496,7 @@ async def test_callback_unknown_state_is_400(
 async def test_callback_reused_state_is_400(
     oauth_cfg, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(auth, "_bot", _StubBot([123]))
+    monkeypatch.setattr(web, "_bot", _StubBot([123]))
     _patch_oauth_http(monkeypatch)
     state = auth._AuthStateManager.issue("/")
     first = await auth._handle_callback(_req(query={"state": state, "code": "abc"}))
@@ -508,7 +509,7 @@ async def test_callback_reused_state_is_400(
 async def test_callback_non_owner_is_403_without_cookie(
     oauth_cfg, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(auth, "_bot", _StubBot([123]))
+    monkeypatch.setattr(web, "_bot", _StubBot([123]))
     _patch_oauth_http(monkeypatch, user_json={"id": "999"})
     state = auth._AuthStateManager.issue("/")
     resp = await auth._handle_callback(_req(query={"state": state, "code": "abc"}))
@@ -524,7 +525,7 @@ async def test_callback_error_param_is_403(oauth_cfg) -> None:
 async def test_callback_token_exchange_failure_is_502(
     oauth_cfg, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(auth, "_bot", _StubBot([123]))
+    monkeypatch.setattr(web, "_bot", _StubBot([123]))
     # Discord returned an error body (no access_token).
     _patch_oauth_http(monkeypatch, token_json={"error": "invalid_grant"})
     state = auth._AuthStateManager.issue("/")

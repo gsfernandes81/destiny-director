@@ -41,11 +41,14 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      # conftest.py is passed alongside `dd`: it is the one Python file outside the
+      # package tree (repo-root, holding the session DB fixture and its non-local-DB
+      # wipe guard), so a bare `dd` path would leave it unlinted and untyped.
       - name: Lint (ruff)
-        run: uv run ruff check dd
+        run: uv run ruff check dd conftest.py
 
       - name: Type check (ty)
-        run: uv run ty check dd
+        run: uv run ty check dd conftest.py
 
       # Playwright ships as a dev dep but the browser binary is a separate ~150MB
       # download. Without it the CV2 builder's drag tests SKIP rather than fail, so these

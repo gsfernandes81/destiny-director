@@ -69,6 +69,82 @@ def _responded_embed(ctx: MagicMock) -> h.Embed:
     return embed
 
 
+def _criticals(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.levelno >= logging.CRITICAL]
+
+
+# --- the shared source-open helper ---------------------------------------------------
+#
+# Every reader (navigators, /free games) goes through open_feed_source, so these cover
+# the two unusable states once; the per-reader tests below then only assert that each
+# reader records the reason where its command looks for it.
+
+
+async def test_open_feed_source_returns_what_it_opened(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=42))
+    opened = object()
+    open_source = AsyncMock(return_value=opened)
+
+    assert await utils.open_feed_source("xur", "Xûr", open_source) == (opened, None)
+    open_source.assert_awaited_once_with(42)
+
+
+async def test_open_feed_source_alerts_on_an_unset_channel(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=0))
+    open_source = AsyncMock()
+
+    with caplog.at_level(logging.CRITICAL):
+        result = await utils.open_feed_source("xur", "Xûr", open_source)
+
+    assert result == (None, utils.FEED_UNCONFIGURED)
+    open_source.assert_not_awaited()  # never "open" channel 0
+    assert _criticals(caplog)
+
+
+async def test_open_feed_source_can_stay_quiet_about_an_unset_channel(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A reader that re-opens its source on later events passes alert_when_unset=False:
+    # the state was already paged for at import, and re-paging for an unchanged state
+    # adds nothing. The *reason* is still recorded — the command must still answer.
+    monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=0))
+
+    with caplog.at_level(logging.CRITICAL):
+        result = await utils.open_feed_source(
+            "free_games", "Free Games", AsyncMock(), alert_when_unset=False
+        )
+
+    assert result == (None, utils.FEED_UNCONFIGURED)
+    assert not _criticals(caplog)
+
+
+@pytest.mark.parametrize("error_cls", [h.NotFoundError, h.ForbiddenError])
+async def test_open_feed_source_alerts_on_an_unreachable_channel(
+    error_cls: type[h.NotFoundError] | type[h.ForbiddenError],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Deleted (404) and no-longer-visible (403) are the same story to a reader, and
+    # both are alerted even when the unset state isn't: this one is new information.
+    monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=42))
+    error = error_cls(url="", headers={}, raw_body=b"")
+
+    with caplog.at_level(logging.CRITICAL):
+        result = await utils.open_feed_source(
+            "free_games",
+            "Free Games",
+            AsyncMock(side_effect=error),
+            alert_when_unset=False,
+        )
+
+    assert result == (None, utils.FEED_UNREACHABLE)
+    assert _criticals(caplog)
+
+
 # --- /autopost <feed> ----------------------------------------------------------------
 
 
@@ -171,6 +247,38 @@ async def test_free_games_answers_when_it_has_no_message(
     await _invoke(command, ctx)
 
     assert "Free Games" in (_responded_embed(ctx).title or "")
+
+
+async def test_free_games_records_an_unset_channel_quietly(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=0))
+    monkeypatch.setattr(free_games, "unavailable_reason", None)
+
+    with caplog.at_level(logging.CRITICAL):
+        await free_games.refresh_message_for_command(MagicMock())
+
+    assert free_games.unavailable_reason == utils.FEED_UNCONFIGURED
+    # Refreshing happens repeatedly (every delete of the repeated message), so this
+    # path must not re-page for a state resolve_followable_channel already alerted on.
+    assert not _criticals(caplog)
+
+
+async def test_free_games_records_an_unreachable_channel(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=42))
+    monkeypatch.setattr(free_games, "unavailable_reason", None)
+    bot = MagicMock()
+    bot.fetch_channel = AsyncMock(
+        side_effect=h.ForbiddenError(url="", headers={}, raw_body=b"")
+    )
+
+    with caplog.at_level(logging.CRITICAL):
+        await free_games.refresh_message_for_command(bot)
+
+    assert free_games.unavailable_reason == utils.FEED_UNREACHABLE
+    assert _criticals(caplog)
 
 
 # --- registration ---------------------------------------------------------------------

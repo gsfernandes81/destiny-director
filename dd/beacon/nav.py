@@ -921,43 +921,23 @@ def setup_nav_pages(
     ``lookahead_len``, ``suppress_content_autoembeds``, ``no_data_message`` ...).
 
     An unusable channel never stops the listener registering, and never raises out of
-    it: it records why on the holder (so the command can answer for itself) and logs
-    CRITICAL, which forwards to the alerts channel AND pings the bot owner(s) — a
-    source channel is ours to fix, and a user hitting it can do nothing about it.
+    it: ``utils.open_feed_source`` records why on the holder (so the command can answer
+    for itself) and pages the bot owner(s) — a source channel is ours to fix, and a user
+    hitting it can do nothing about it.
     """
     holder = NavPagesHolder()
 
     @loader.listener(h.StartedEvent)
     async def _on_start(event: h.StartedEvent) -> None:
-        channel_id = await settings.get_followable_channel(feed)
-        if not channel_id:
-            holder.unavailable = utils.FEED_UNCONFIGURED
-            logging.critical(
-                "%s has no channel set — its commands will answer 'unavailable' until "
-                "one is picked on the Autopost Settings page.",
-                display_name,
-            )
-            return
-        try:
-            holder.pages = await pages_cls.from_channel(
+        # "Open" here is building the pages themselves: from_channel reads the
+        # channel's history, so it is where an unreachable channel actually shows up.
+        holder.pages, holder.unavailable = await utils.open_feed_source(
+            feed,
+            display_name,
+            lambda channel_id: pages_cls.from_channel(
                 event.app, channel_id, **from_channel_kwargs
-            )
-        except (h.NotFoundError, h.ForbiddenError):
-            # The configured channel was deleted, or the bot lost access to it, since
-            # it was set — this used to surface as an unhandled exception in the
-            # StartedEvent listener (easy to miss; nothing else reports it). CRITICAL,
-            # not ERROR, pages the bot owner(s) directly (see
-            # resolve_followable_channel's identical rationale in autoposts.py) — a
-            # channel vanishing out from under a configured feed is exactly the kind of
-            # silent regression nobody watches for on their own.
-            holder.unavailable = utils.FEED_UNREACHABLE
-            logging.critical(
-                "%s channel %s is configured but no longer reachable (deleted, or the "
-                "bot lost access) — its commands will answer 'unavailable' until it's "
-                "fixed on the Autopost Settings page.",
-                display_name,
-                channel_id,
-            )
+            ),
+        )
 
     return holder
 

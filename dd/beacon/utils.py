@@ -15,6 +15,7 @@
 
 import enum
 import inspect
+import logging
 import typing as t
 
 import hikari as h
@@ -23,6 +24,8 @@ from toolbox.errors import CacheFailureError
 from toolbox.members import calculate_permissions
 
 from dd.hmessage import HMessage
+
+logger = logging.getLogger(__name__)
 
 
 def get_function_name() -> str:
@@ -384,3 +387,60 @@ async def feed_unavailable_embed(display_name: str, reason: str) -> h.Embed:
         ),
         color=await settings.get_embed_error_color(),
     )
+
+
+async def open_feed_source[T](
+    feed: str,
+    display_name: str,
+    open_source: t.Callable[[int], t.Awaitable[T]],
+    *,
+    alert_when_unset: bool = True,
+) -> tuple[T | None, str | None]:
+    """Open ``feed``'s source channel for a reader, or report why it can't be.
+
+    ``open_source`` is handed the configured channel id and does whatever "open"
+    means for that reader — fetch the channel, build a :class:`NavPages` over its
+    history, ... — so every reader shares one definition of the two ways a source
+    can be unusable: never configured, or configured and since deleted / no longer
+    visible to the bot (a 404/403 out of ``open_source``).
+
+    Returns ``(opened, None)`` on success and ``(None, reason)`` otherwise, where
+    ``reason`` is a ``FEED_*`` string the caller records for its command to answer
+    with. Nothing raises: the callers are ``StartedEvent``/message listeners, where an
+    exception is reported nowhere and simply loses the feed silently. Instead this
+    logs CRITICAL, which forwards to the alerts channel AND pings the bot owner(s) —
+    same rationale as ``autoposts.resolve_followable_channel``, whose docstring has
+    the long version.
+
+    ``alert_when_unset`` is False for a reader that re-opens its source on later
+    events too: the unset state was already paged for once at import by
+    ``resolve_followable_channel``, and re-paging for a state nobody has changed
+    since adds nothing.
+    """
+    from dd.common import settings
+
+    channel_id = await settings.get_followable_channel(feed)
+    if not channel_id:
+        if alert_when_unset:
+            logger.critical(
+                "%s has no channel set — its commands will answer 'unavailable' until "
+                "one is picked on the Autopost Settings page.",
+                display_name,
+            )
+        return None, FEED_UNCONFIGURED
+
+    try:
+        return await open_source(channel_id), None
+    except (h.NotFoundError, h.ForbiddenError):
+        # Configured, but deleted or the bot lost access since — this used to surface
+        # as an unhandled exception in a listener (easy to miss; nothing else reports
+        # it). A channel vanishing out from under a configured feed is exactly the
+        # kind of silent regression nobody watches for on their own, hence CRITICAL.
+        logger.critical(
+            "%s channel %s is configured but no longer reachable (deleted, or the bot "
+            "lost access) — its commands will answer 'unavailable' until it's fixed "
+            "on the Autopost Settings page.",
+            display_name,
+            channel_id,
+        )
+        return None, FEED_UNREACHABLE

@@ -61,33 +61,19 @@ from ...common import (
     schemas,
     settings as dd_settings,
 )
-from ...common.bot import CachedFetchBot
 from .. import web
 from ..autopost import registered_feeds
 
 logger = logging.getLogger(__name__)
 
 # No commands live here, but load_extensions_strict → load_extensions requires every
-# extension module to expose a Loader, so define one (it also carries the StartedEvent
-# listener that stashes the bot, below).
+# extension module to expose a Loader, so define one.
 loader = lb.Loader()
 
 _PAGE_HTML_PATH = (
     Path(__file__).resolve().parent.parent / "web_static" / "autopost_settings.html"
 )
 _TOGGLES_PLACEHOLDER = "<!--__TOGGLES__-->"
-
-# The live bot, stashed at StartedEvent so /autopost_settings/channels can list guild
-# channels (the pattern every other route-owning extension here uses — see
-# control_panel.py's identical stash).
-_bot: CachedFetchBot | None = None
-
-
-@loader.listener(h.StartedEvent)
-async def _on_started(_event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED):
-    global _bot
-    _bot = bot
-
 
 _ALERT_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
@@ -130,11 +116,6 @@ class _Setting(t.NamedTuple):
     #: False for log_channel_id/alerts_channel_id: nothing follows them, the bot only
     #: sends there directly, so a plain text channel works fine too.
     announce_only: bool = True
-    #: For "select": which option is pre-selected when no row is saved yet. Must match
-    #: dd.common.settings' own default for this slug — otherwise the page shows the
-    #: first listed option "selected" (an HTML <select> always has one) while the bot
-    #: is actually using a different value, which is worse than showing nothing.
-    default: str = ""
     #: A general (non-feed) group's display title, set on the group's FIRST setting only
     #: (``sub=False``) — a feed group's own toggle row already names it, so a feed
     #: setting leaves this blank. Rendered above the group's rows rather than reusing
@@ -182,9 +163,6 @@ _SETTINGS: tuple[_Setting, ...] = (
         False,
         "select",
         options=_ALERT_LEVELS,
-        # Read from dd.common.settings' own default rather than a second hardcoded
-        # "ERROR" literal — see this field's docstring on why the two must agree.
-        default=dd_settings._DEFAULTS["alert_min_level"][1] or "",
         category="Logging & Alerts",
     ),
     _Setting(
@@ -531,7 +509,22 @@ def _render_row(
         hex_value = (
             state if isinstance(state, str) and _HEX_COLOR_RE.match(state) else ""
         )
-        swatch_value = hex_value or "#000000"
+        # With no row saved, every producer is already painting dd.common.settings'
+        # built-in default (a brand colour, not black) — so that is what an unset field
+        # has to show, in the swatch and as the text field's placeholder. The text
+        # field's *value* stays empty on purpose: blank is what stores NULL, and
+        # pre-filling the hex would turn any later save into one that pins today's
+        # default into the DB, losing "never set" for good.
+        # Held to the same #RRGGBB shape a saved value is, since the swatch is a native
+        # input[type=color]: a default the browser can't parse would silently render as
+        # black there while the placeholder claimed otherwise.
+        fallback = dd_settings.default_for(setting.slug) or ""
+        if not _HEX_COLOR_RE.match(fallback):
+            fallback = ""
+        # input[type=color] cannot be blank, so it needs *some* value; black only when
+        # there's no usable default to show either.
+        swatch_value = hex_value or fallback or "#000000"
+        placeholder = fallback or "#RRGGBB"
         return _row(
             "colorrow",
             '<div class="colorpicker">'
@@ -540,13 +533,22 @@ def _render_row(
             f' value="{html.escape(swatch_value)}" />'
             '<input type="text" class="colorfield no-focus-ring" '
             f'data-slug="{html.escape(setting.slug)}"'
-            f' value="{html.escape(hex_value)}" placeholder="#RRGGBB"'
+            f' value="{html.escape(hex_value)}"'
+            f' placeholder="{html.escape(placeholder)}"'
             ' maxlength="7" />'
             "</div>",
         )
 
     if setting.kind == "select":
-        current = state if isinstance(state, str) and state else setting.default
+        # Same fallback, for the same reason — and here it's load-bearing rather than
+        # cosmetic: an HTML <select> always renders *some* option as selected, so
+        # without this a slug with no row would show the first listed option (DEBUG)
+        # while the bot applies the real default (ERROR).
+        current = (
+            state
+            if isinstance(state, str) and state
+            else dd_settings.default_for(setting.slug) or ""
+        )
         opts = "".join(
             f'<option value="{html.escape(opt)}"'
             f"{' selected' if opt == current else ''}>{html.escape(opt)}</option>"
@@ -720,10 +722,14 @@ async def _channel_problem(setting: _Setting, channel_id: int) -> str | None:
     rather than failing silently — see resolve_followable_channel/nav.py — but this is
     what stops a bad one going in to begin with).
     """
-    if _bot is None:
+    # get_bot(), not require_bot(): this function owes its caller a REASON, and a
+    # BotNotReady would leave the save's error path with no sentence to show. Fail
+    # closed with the reason, as every other branch here does.
+    bot = web.get_bot()
+    if bot is None:
         return "the bot hasn't finished starting yet — try again in a moment."
     try:
-        channel = await _bot.rest.fetch_channel(channel_id)
+        channel = await bot.rest.fetch_channel(channel_id)
     except (h.NotFoundError, h.ForbiddenError):
         return "the bot can't see that channel (deleted, or its access was revoked)."
     except Exception:
@@ -745,11 +751,11 @@ async def _channel_problem(setting: _Setting, channel_id: int) -> str | None:
     allowed_guilds = _allowed_guild_ids(setting)
     if allowed_guilds and int(channel.guild_id) not in allowed_guilds:
         return "that channel is in a server this setting can't post to."
-    me = _bot.get_me()
+    me = bot.get_me()
     if me is None:
         return "the bot's own identity isn't available yet — try again in a moment."
     try:
-        member = await _bot.rest.fetch_member(channel.guild_id, me.id)
+        member = await bot.rest.fetch_member(channel.guild_id, me.id)
         perms = calculate_permissions(member, channel)
     except CacheFailureError:
         return (
@@ -779,10 +785,9 @@ async def _handle_channels(request: aiohttp.web.Request) -> aiohttp.web.Response
     rather than failing the whole list — the affected pickers fall back to their
     current raw id (see autopost_settings.js).
     """
-    if _bot is None:
-        return aiohttp.web.json_response(
-            {"error": "Bot is still starting."}, status=503
-        )
+    # No degraded answer to give — an empty picker is indistinguishable from "this guild
+    # has no postable channels" — so refuse, and let web's middleware say why.
+    bot = web.require_bot()
 
     guild_ids = [
         g
@@ -792,7 +797,7 @@ async def _handle_channels(request: aiohttp.web.Request) -> aiohttp.web.Response
     # Both guilds' fetches are independent REST calls — run them concurrently rather
     # than one after another, since nothing here depends on the other's result.
     results = await asyncio.gather(
-        *(_bot.rest.fetch_guild_channels(guild_id) for guild_id in guild_ids),
+        *(bot.rest.fetch_guild_channels(guild_id) for guild_id in guild_ids),
         return_exceptions=True,
     )
 
@@ -886,9 +891,10 @@ async def _handle_save(request: aiohttp.web.Request) -> aiohttp.web.Response:
 
     # dd.common.settings caches every non-toggle row above (colors, urls, followable
     # channels, ...); refresh it now rather than waiting out the TTL (see that
-    # module's docstring) — preload(), not invalidate(), so a *_sync reader (e.g. the
-    # one behind message-send channel routing) also sees the new value immediately,
-    # not just whenever some other async getter happens to trigger a refresh.
+    # module's docstring). A real refetch, not merely marking the cache stale, so a
+    # *_sync reader (e.g. the one behind message-send channel routing) also sees the
+    # new value immediately — those never check freshness, so they'd otherwise keep
+    # serving the pre-save value until some other async getter triggered a refresh.
     await dd_settings.preload()
 
     return aiohttp.web.json_response({"ok": True})

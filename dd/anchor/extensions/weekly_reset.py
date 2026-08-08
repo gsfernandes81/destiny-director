@@ -1281,13 +1281,6 @@ _FORM_HTML_PATH = (
     Path(__file__).resolve().parent.parent / "web_static" / "weekly_reset_form.html"
 )
 
-#: The live bot, stashed by the StartedEvent listener so the create/edit routes can
-#: reach the REST client. A module global (not aiohttp app state) because the listener
-#: that holds the bot is DI-injected and never sees the app object, while the routes
-#: live in this module — a global is the least-plumbing option. ``None`` until the
-#: StartedEvent fires, at which point the create/edit routes stop 503-ing.
-_bot: CachedFetchBot | None = None
-
 
 def _pair(raw: t.Any) -> tuple[str, str]:
     """Coerce an arbitrary client value into a 2-tuple of trimmed strings."""
@@ -1447,26 +1440,33 @@ async def _persist_default_image(
 
 
 # The routes are auth-free thin wrappers over the shared hybrid_post_core handlers,
-# passing this producer's ``_SPEC`` and live ``_bot`` (read at call time, so a test that
-# monkeypatches ``wr._bot`` is honoured). Auth is enforced by the web_auth middleware.
+# passing this producer's ``_SPEC`` and the live bot from ``web.get_bot()`` (read at
+# call time, so it tracks the stash). ``get_bot()`` rather than ``require_bot()``
+# because hybrid_post_core already answers a ``None`` bot with the shared 503 — every
+# producer's routes give the same answer without each one raising it. Auth is enforced
+# by the web_auth middleware.
 async def _handle_form_get(request: aiohttp.web.Request) -> aiohttp.web.Response:
-    return await hybrid_post_core.form_get(_SPEC, request, _bot)
+    return await hybrid_post_core.form_get(_SPEC, request, web.get_bot())
 
 
 async def _handle_create(request: aiohttp.web.Request) -> aiohttp.web.Response:
-    return await hybrid_post_core.post_action(_SPEC, request, _bot, create=True)
+    return await hybrid_post_core.post_action(
+        _SPEC, request, web.get_bot(), create=True
+    )
 
 
 async def _handle_edit(request: aiohttp.web.Request) -> aiohttp.web.Response:
-    return await hybrid_post_core.post_action(_SPEC, request, _bot, create=False)
+    return await hybrid_post_core.post_action(
+        _SPEC, request, web.get_bot(), create=False
+    )
 
 
 async def _handle_preview(request: aiohttp.web.Request) -> aiohttp.web.Response:
-    return await hybrid_post_core.preview(_SPEC, request, _bot)
+    return await hybrid_post_core.preview(_SPEC, request, web.get_bot())
 
 
 async def _handle_delete(request: aiohttp.web.Request) -> aiohttp.web.Response:
-    return await hybrid_post_core.delete(_SPEC, request, _bot)
+    return await hybrid_post_core.delete(_SPEC, request, web.get_bot())
 
 
 #: Wires this producer to the shared hybrid_post_core (built after every hook exists).
@@ -1510,15 +1510,9 @@ web.register_card(
 
 
 @loader.listener(h.StartedEvent)
-async def _on_started(
-    event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED
-) -> None:
+async def _on_started(event: h.StartedEvent) -> None:
     if not await settings.get_followable_channel("weekly_reset"):
         return
-
-    # Stash the live bot so the web form's create/edit routes can reach the REST client.
-    global _bot
-    _bot = bot
 
     # Prewarm the manifest-backed option-pool indexes so the first form load is fast.
     asyncio.create_task(get_indexes())

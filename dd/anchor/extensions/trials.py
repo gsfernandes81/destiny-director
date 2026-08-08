@@ -462,9 +462,6 @@ _FORM_HTML_PATH = (
     Path(__file__).resolve().parent.parent / "web_static" / "trials_form.html"
 )
 
-#: The live bot, stashed by the StartedEvent listener so the routes can reach REST.
-_bot: CachedFetchBot | None = None
-
 #: Serialises read-modify-write of the shared draft doc (single bot process).
 _draft_lock = asyncio.Lock()
 
@@ -544,7 +541,7 @@ async def _card_emoji_urls(
     generic ``weapon`` fallback, so the payload stays tiny. Empty if the guild dict is
     not available yet — the cards then render names without icons.
     """
-    emoji = await hybrid_post_core.preview_emoji_dict(_bot)
+    emoji = await hybrid_post_core.preview_emoji_dict(web.get_bot())
     if not emoji:
         return {}
     names: set[str] = {
@@ -643,27 +640,32 @@ async def _persist_carryover(
 # Web routes — thin wrappers over the shared hybrid_post_core handlers
 # ---------------------------------------------------------------------------
 # Auth is enforced centrally by the web_auth middleware; these pass this producer's
-# ``_SPEC`` and live ``_bot`` (read at call time) into the shared handlers.
+# ``_SPEC`` and the live bot from ``web.get_bot()`` (read at call time) into the shared
+# handlers, which answer a ``None`` bot with the shared 503 themselves.
 
 
 async def _handle_form_get(request: aiohttp.web.Request) -> aiohttp.web.Response:
-    return await hybrid_post_core.form_get(_SPEC, request, _bot)
+    return await hybrid_post_core.form_get(_SPEC, request, web.get_bot())
 
 
 async def _handle_create(request: aiohttp.web.Request) -> aiohttp.web.Response:
-    return await hybrid_post_core.post_action(_SPEC, request, _bot, create=True)
+    return await hybrid_post_core.post_action(
+        _SPEC, request, web.get_bot(), create=True
+    )
 
 
 async def _handle_edit(request: aiohttp.web.Request) -> aiohttp.web.Response:
-    return await hybrid_post_core.post_action(_SPEC, request, _bot, create=False)
+    return await hybrid_post_core.post_action(
+        _SPEC, request, web.get_bot(), create=False
+    )
 
 
 async def _handle_preview(request: aiohttp.web.Request) -> aiohttp.web.Response:
-    return await hybrid_post_core.preview(_SPEC, request, _bot)
+    return await hybrid_post_core.preview(_SPEC, request, web.get_bot())
 
 
 async def _handle_delete(request: aiohttp.web.Request) -> aiohttp.web.Response:
-    return await hybrid_post_core.delete(_SPEC, request, _bot)
+    return await hybrid_post_core.delete(_SPEC, request, web.get_bot())
 
 
 #: Wires this producer to the shared hybrid_post_core (built after every hook exists).
@@ -719,10 +721,6 @@ async def _on_started(
 ) -> None:
     if not await settings.get_followable_channel("trials"):
         return
-
-    # Stash the live bot so the web form's routes can reach the REST client.
-    global _bot
-    _bot = bot
 
     # Prewarm the manifest weapon pool so the first form load is fast.
     asyncio.create_task(get_weapon_items())

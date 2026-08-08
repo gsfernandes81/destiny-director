@@ -28,7 +28,7 @@ import aiohttp.web
 import hikari as h
 import pytest
 
-from dd.anchor import autopost
+from dd.anchor import autopost, web
 from dd.anchor.extensions import feed_actions
 from dd.hmessage import HMessage
 
@@ -73,7 +73,7 @@ def _isolated_registry(monkeypatch: pytest.MonkeyPatch) -> t.Iterator[None]:
     predictable feeds (including a dormant one) without touching them.
     """
     monkeypatch.setattr(autopost, "_feeds", {})
-    monkeypatch.setattr(feed_actions, "_bot", object())
+    monkeypatch.setattr(web, "_bot", object())
     monkeypatch.setattr(feed_actions, "_sending", set())
     yield
 
@@ -302,7 +302,7 @@ async def test_preview_before_the_bot_is_up_says_what_to_do(
     # The message must survive to the page. An HTTPServiceUnavailable here stringified
     # to "Service Unavailable" — technically true, useless to read — because both call
     # sites report str(e) rather than letting it propagate as a response.
-    monkeypatch.setattr(feed_actions, "_bot", None)
+    monkeypatch.setattr(web, "_bot", None)
     _register()
     res = await feed_actions._handle_preview(_as_request(_FakeRequest("xur")))
     assert "still starting" in json.loads(_text(res))["error"]

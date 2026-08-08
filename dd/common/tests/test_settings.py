@@ -36,11 +36,9 @@ async def _reset_settings_cache():
     fixture) and an unloaded settings cache, so tests can't leak into each other."""
     async with schemas.db_session() as session, session.begin():
         await session.execute(delete(schemas.AutoPostSettings))
-    settings.invalidate()
-    settings._cache.clear()
+    settings.reset_cache_for_tests()
     yield
-    settings.invalidate()
-    settings._cache.clear()
+    settings.reset_cache_for_tests()
 
 
 # --- cache refresh single-flight --------------------------------------------------
@@ -99,6 +97,22 @@ async def test_concurrent_stale_reads_share_one_refresh(
     assert calls == 1
 
 
+async def test_reset_cache_for_tests_drops_rows_not_just_the_freshness_stamp():
+    # The whole reason this helper exists rather than a stale-mark: every test module's
+    # reset fixture wipes the settings rows, but the *_sync getters never check
+    # freshness, so anything left in _cache would still be served to the next test for
+    # a full TTL window. Clearing both is what makes the reset actually hermetic.
+    await schemas.AutoPostSettings.set_value("xur_channel", "7")
+    await settings.preload()
+    assert settings.get_followable_channel_sync("xur") == 7
+
+    settings.reset_cache_for_tests()
+
+    assert settings._cache == {}
+    assert settings._loaded_at == 0.0
+    assert settings.get_followable_channel_sync("xur") == 0
+
+
 # --- colors ----------------------------------------------------------------------
 
 
@@ -109,7 +123,7 @@ async def test_embed_default_color_defaults_to_brand_pink_when_unset():
 
 async def test_embed_default_color_reflects_a_saved_row():
     await schemas.AutoPostSettings.set_value("embed_default_color", "#EC42A5")
-    settings.invalidate()
+    settings.reset_cache_for_tests()
     assert await settings.get_embed_default_color() == h.Color(0xEC42A5)
 
 
@@ -119,9 +133,33 @@ async def test_embed_default_color_sync_matches_async_after_preload():
     assert settings.get_embed_default_color_sync() == h.Color(0x123456)
 
 
+async def test_default_for_exposes_the_same_default_the_getters_apply():
+    # The accessor the settings page renders unset fields from — it must agree with what
+    # a getter resolves to for the same slug, or the page shows one colour while the
+    # bots draw another.
+    assert settings.default_for("embed_default_color") == "#EC42A5"
+    assert await settings.get_embed_default_color() == h.Color(0xEC42A5)
+
+
+async def test_default_for_ignores_a_saved_row():
+    # Strictly the built-in default, never the live value: a caller that wants what is
+    # actually in effect uses a getter.
+    await schemas.AutoPostSettings.set_value("embed_default_color", "#123456")
+    settings.reset_cache_for_tests()
+
+    assert settings.default_for("embed_default_color") == "#EC42A5"
+
+
+async def test_default_for_unknown_slug_is_none():
+    # Followable channels (and anything else with no _DEFAULTS entry) have no default to
+    # render — the page has to treat that as "nothing to show", not as an empty string.
+    assert settings.default_for("lost_sector_channel") is None
+    assert settings.default_for("not_a_setting") is None
+
+
 async def test_malformed_stored_color_falls_back_to_black():
     await schemas.AutoPostSettings.set_value("embed_default_color", "not-a-color")
-    settings.invalidate()
+    settings.reset_cache_for_tests()
     assert await settings.get_embed_default_color() == h.Color(0)
 
 
@@ -134,7 +172,7 @@ async def test_default_url_defaults_to_empty_string():
 
 async def test_default_url_reflects_a_saved_row():
     await schemas.AutoPostSettings.set_value("default_url", "https://example.com")
-    settings.invalidate()
+    settings.reset_cache_for_tests()
     assert await settings.get_default_url() == "https://example.com"
 
 
@@ -148,7 +186,7 @@ async def test_disable_bad_channels_defaults_to_false():
 
 async def test_disable_bad_channels_reflects_a_saved_row():
     await schemas.AutoPostSettings.set_enabled("disable_bad_channels", True)
-    settings.invalidate()
+    settings.reset_cache_for_tests()
     assert await settings.get_disable_bad_channels() is True
 
 
@@ -159,7 +197,7 @@ async def test_log_and_alerts_channel_id_default_to_zero():
 
 async def test_alerts_channel_id_reflects_a_saved_row():
     await schemas.AutoPostSettings.set_value("alerts_channel_id", "123456")
-    settings.invalidate()
+    settings.reset_cache_for_tests()
     assert await settings.get_alerts_channel_id() == 123456
 
 
@@ -174,7 +212,7 @@ async def test_followable_channel_is_zero_until_a_row_is_saved():
 
 async def test_followable_channel_reflects_a_saved_row():
     await schemas.AutoPostSettings.set_value("lost_sector_channel", "99")
-    settings.invalidate()
+    settings.reset_cache_for_tests()
     assert await settings.get_followable_channel("lost_sector") == 99
 
 
@@ -193,8 +231,7 @@ async def test_followable_channel_sync_is_zero_before_preload():
     # value when preload() hasn't run — dormant, and alerted by
     # resolve_followable_channel.
     await schemas.AutoPostSettings.set_value("xur_channel", "7")
-    settings.invalidate()
-    settings._cache.clear()
+    settings.reset_cache_for_tests()
     assert settings.get_followable_channel_sync("xur") == 0
 
 

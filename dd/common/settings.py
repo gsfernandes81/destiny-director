@@ -26,10 +26,10 @@ is the sole editor.
 (:data:`_TTL`), refilled with one bulk query rather than one round trip per setting —
 these are read on nearly every embed built anywhere in either bot, so an uncached read
 would put the DB on the hot path for basic command responses. A save on the settings
-page calls :func:`invalidate` so the *saving* process picks up its own change
-immediately; other processes (e.g. beacon, when the edit was made from anchor's web UI)
-see it within one TTL window. That cross-process staleness window is the accepted cost
-of not needing a redeploy to change these anymore.
+page awaits :func:`preload` so the *saving* process picks up its own change immediately,
+``*_sync`` readers included; other processes (e.g. beacon, when the edit was made from
+anchor's web UI) see it within one TTL window. That cross-process staleness window is
+the accepted cost of not needing a redeploy to change these anymore.
 
 **Followables and import-time reads.** Every other setting here is read at call time
 inside an async function, so an ``await`` is all a consumer needs. Followable channel
@@ -155,19 +155,24 @@ async def preload() -> None:
     _loaded_at = time.monotonic()
 
 
-def invalidate() -> None:
-    """Mark the cache stale so the next *async* read refetches.
+def reset_cache_for_tests() -> None:
+    """Drop the cache entirely — the cached rows *and* the "loaded at" stamp.
 
-    Sync — usable from a context that can't ``await``. That's also its limit: it
-    doesn't touch ``_cache`` itself, so a ``*_sync`` getter (which reads ``_cache``
-    directly, with no freshness check of its own — see e.g.
-    :func:`get_followable_channel_sync`'s docstring) keeps serving whatever was cached
-    until *some* async getter happens to run elsewhere in the process and trigger a
-    real refresh. An async caller that wants the cache genuinely fresh on return
-    (including for its own ``*_sync`` reads) should ``await`` :func:`preload` directly
-    instead — that's what the settings page's save handler does.
+    Tests only, and named for it: production's one writer (the settings page's save
+    handler) awaits :func:`preload` instead, which refetches in the same breath rather
+    than leaving a hole for the ``*_sync`` getters to read through. Tests want the
+    opposite — the module back at its import-time state — because the cache is
+    process-global and outlives any one test, so a value one case writes would keep
+    being served to the next for a whole TTL window even after its row was deleted.
+
+    Clearing ``_cache`` and not just ``_loaded_at`` is the whole point: a stale stamp
+    alone only makes the *async* getters refetch, leaving the ``*_sync`` ones (which
+    read ``_cache`` directly with no freshness check — see
+    :func:`get_followable_channel_sync`) serving the previous test's values until some
+    async getter happened to trigger a real refresh.
     """
     global _loaded_at
+    _cache.clear()
     _loaded_at = 0.0
 
 
@@ -180,6 +185,19 @@ def _raw(slug: str) -> tuple[bool | None, str | None]:
     toggle's ``enabled`` column and a url/id's ``value`` column.
     """
     return _cache.get(slug, (None, None))
+
+
+def default_for(slug: str) -> str | None:
+    """``slug``'s built-in ``value`` default — what the getters here resolve to while no
+    row is saved — or ``None`` for a slug with no default (every followable channel).
+
+    Public because the settings page has to *render* the same fallback the producers
+    read: an unset colour is really the brand hex below, so showing the field's blank
+    value as black would have the page contradict every embed the bots build. Resolves
+    the default only, never the stored value or the cache — a caller after the live
+    value wants a getter, not this.
+    """
+    return _DEFAULTS.get(slug, (None, None))[1]
 
 
 async def _get_value(slug: str) -> str | None:
@@ -350,9 +368,11 @@ def followable_name(*, id: int, followables: dict[str, int] | None = None) -> st
     (log-line / status-display call sites), via :func:`get_followables_sync`.
 
     ``followables`` lets a caller resolving names in a loop (e.g. the mirror log's run
-    list) pass one pre-built dict from a single :func:`get_followables_sync` call,
-    instead of this rebuilding — and re-resolving every followable's channel id — on
-    every single lookup.
+    list) pass one pre-built dict from a single :func:`get_followables` /
+    :func:`get_followables_sync` call, instead of this rebuilding — and re-resolving
+    every followable's channel id — on every single lookup. An async caller should build
+    it with the awaitable getter; passing it in is what keeps this helper itself sync
+    and usable from log lines.
     """
     if followables is None:
         followables = get_followables_sync()

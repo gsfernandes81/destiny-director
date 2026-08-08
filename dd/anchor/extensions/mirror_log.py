@@ -84,7 +84,11 @@ async def _collect_runs() -> dict:
     )
     # Built once rather than per row — followable_name would otherwise re-resolve
     # every followable's channel id on every one of up to _RUN_LIMIT lookups below.
-    followables = settings.get_followables_sync()
+    # Awaited rather than get_followables_sync(): this handler is already async, so the
+    # sync reader bought nothing here except skipping the TTL freshness check — a feed
+    # whose channel was set (or changed) on the settings page would keep rendering as a
+    # bare snowflake until some *unrelated* async getter happened to refresh the cache.
+    followables = await settings.get_followables()
     for run in runs:
         # Resolve the source channel to its configured feed name (else None → the page
         # falls back to the id). followable_name returns the id itself when unknown.

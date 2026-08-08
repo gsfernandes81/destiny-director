@@ -32,6 +32,7 @@ import pytest
 
 from dd.anchor import (
     hybrid_post_core as hpc,
+    web,
 )
 from dd.anchor.extensions import trials as tr
 
@@ -443,7 +444,7 @@ async def test_publish_draft_raises_on_invalid(fake_publish_env) -> None:
 async def test_handle_create_posts_and_returns_warnings(
     monkeypatch, fake_publish_env, stub_weapon_items
 ) -> None:
-    monkeypatch.setattr(tr, "_bot", _FakeBot())
+    monkeypatch.setattr(web, "_bot", _FakeBot())
     await tr.save_meta(tr.DraftMeta())  # fresh: no post this period
     # An empty draft trips validate_post, but Create still posts it — the problems come
     # back as non-blocking warnings, not a 422; the post is stamped as this period's.
@@ -463,7 +464,7 @@ async def test_handle_create_posts_and_returns_warnings(
 async def test_handle_create_refuses_when_post_exists(
     monkeypatch, stub_weapon_items
 ) -> None:
-    monkeypatch.setattr(tr, "_bot", _FakeBot())
+    monkeypatch.setattr(web, "_bot", _FakeBot())
     # A live post stamped with the current period is "current" — Create is refused.
     await tr.save_meta(
         tr.DraftMeta(message_id=42, reset_ts=tr.current_reset_ts(), status="posted")
@@ -477,7 +478,7 @@ async def test_handle_create_refuses_when_post_exists(
 async def test_handle_create_publish_crossposts(
     monkeypatch, fake_publish_env, stub_weapon_items
 ) -> None:
-    monkeypatch.setattr(tr, "_bot", _FakeBot())
+    monkeypatch.setattr(web, "_bot", _FakeBot())
     await tr.save_meta(tr.DraftMeta())
     resp = await tr._handle_create(
         _req(body={"reset_ts": SAMPLE_RESET, "maps_text": "Burnout", "publish": True})
@@ -492,7 +493,7 @@ async def test_handle_edit_edits_existing_in_place(
     monkeypatch, fake_publish_env, stub_weapon_items
 ) -> None:
     bot = _FakeBot()
-    monkeypatch.setattr(tr, "_bot", bot)
+    monkeypatch.setattr(web, "_bot", bot)
     await tr.save_meta(
         tr.DraftMeta(message_id=42, reset_ts=tr.current_reset_ts(), status="posted")
     )
@@ -508,7 +509,7 @@ async def test_handle_edit_edits_existing_in_place(
 
 @pytest.mark.asyncio
 async def test_handle_edit_refuses_when_absent(monkeypatch, stub_weapon_items) -> None:
-    monkeypatch.setattr(tr, "_bot", _FakeBot())
+    monkeypatch.setattr(web, "_bot", _FakeBot())
     await tr.save_meta(tr.DraftMeta())  # no post this period
     resp = await tr._handle_edit(_req(body={"reset_ts": SAMPLE_RESET}))
     assert resp.status == 409
@@ -519,7 +520,7 @@ async def test_handle_edit_refuses_when_absent(monkeypatch, stub_weapon_items) -
 async def test_create_carries_maps_but_unpublished_does_not_advance_cursor(
     monkeypatch, fake_publish_env, stub_weapon_items
 ) -> None:
-    monkeypatch.setattr(tr, "_bot", _FakeBot())
+    monkeypatch.setattr(web, "_bot", _FakeBot())
     await tr.save_config(tr.TrialsConfig())  # reset the shared-DB rotation state (-1)
     await _seed_default_loot_rotation()
     await tr.save_meta(tr.DraftMeta())
@@ -543,7 +544,7 @@ async def test_create_carries_maps_but_unpublished_does_not_advance_cursor(
 async def test_publish_advances_cursor_to_matched_set(
     monkeypatch, fake_publish_env, stub_weapon_items
 ) -> None:
-    monkeypatch.setattr(tr, "_bot", _FakeBot())
+    monkeypatch.setattr(web, "_bot", _FakeBot())
     await tr.save_config(tr.TrialsConfig())  # cursor -1
     await _seed_default_loot_rotation()
     await tr.save_meta(tr.DraftMeta())
@@ -570,7 +571,7 @@ async def test_publish_advances_cursor_to_matched_set(
 async def test_publish_custom_pool_advances_cursor_by_one(
     monkeypatch, fake_publish_env, stub_weapon_items
 ) -> None:
-    monkeypatch.setattr(tr, "_bot", _FakeBot())
+    monkeypatch.setattr(web, "_bot", _FakeBot())
     await tr.save_config(tr.TrialsConfig())  # cursor -1
     await _seed_default_loot_rotation()
     await tr.save_meta(tr.DraftMeta())
@@ -590,7 +591,7 @@ async def test_publish_custom_pool_advances_cursor_by_one(
 
 @pytest.mark.asyncio
 async def test_handle_create_503_when_bot_unset(monkeypatch) -> None:
-    monkeypatch.setattr(tr, "_bot", None)
+    monkeypatch.setattr(web, "_bot", None)
     resp = await tr._handle_create(_req(body={"reset_ts": 1}))
     assert resp.status == 503
 
@@ -598,7 +599,7 @@ async def test_handle_create_503_when_bot_unset(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_handle_delete_removes_and_clears_reset_ts(monkeypatch) -> None:
     bot = _FakeBot()
-    monkeypatch.setattr(tr, "_bot", bot)
+    monkeypatch.setattr(web, "_bot", bot)
     await tr.save_meta(
         tr.DraftMeta(
             message_id=77, reset_ts=SAMPLE_RESET, status="published", crossposted=True

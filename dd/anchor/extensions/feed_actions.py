@@ -49,23 +49,20 @@ import logging
 import typing as t
 
 import aiohttp.web
-import hikari as h
 import lightbulb as lb
 
 from dd.hmessage import HMessage
 from dd.hmessage.snapshot import cv2_payload
 
-from ...common.bot import CachedFetchBot
 from .. import web
 from ..autopost import Feed, registered_feeds
 
 logger = logging.getLogger(__name__)
 
+# Nothing is registered on it — the routes are contributed to the web app at import time
+# and the bot comes from web.require_bot() — but load_extensions_strict requires every
+# extension module to expose a Loader, so it stays.
 loader = lb.Loader()
-
-# The live bot, stashed at StartedEvent so the routes can reach the REST client (the
-# pattern weekly_reset / rotation_editor / cv2_builder_page already use).
-_bot: CachedFetchBot | None = None
 
 # Feeds with a send in flight, so a double-click or a second tab can't fire two posts.
 # `send_message`'s own dedupe only guards retry-races within one send — it does not stop
@@ -73,27 +70,6 @@ _bot: CachedFetchBot | None = None
 _sending: set[str] = set()
 # Strong refs to the in-flight send tasks, so they are not garbage collected mid-flight.
 _send_tasks: set[asyncio.Task] = set()
-
-
-@loader.listener(h.StartedEvent)
-async def _on_started(_event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED):
-    global _bot
-    _bot = bot
-
-
-class BotNotReady(RuntimeError):
-    """Raised when a route needs the bot before ``StartedEvent`` has stashed it."""
-
-
-def _require_bot() -> CachedFetchBot:
-    # A plain exception, not HTTPServiceUnavailable. Both call sites are inside a
-    # `except Exception` that reports `str(e)` to the page, so nothing ever propagated
-    # this as an HTTP response — it just arrived on screen as "Service Unavailable",
-    # aiohttp's stringification of the class, with the sentence explaining what to do
-    # dropped on the floor. That sentence is the whole value of the error.
-    if _bot is None:
-        raise BotNotReady("The bot is still starting — try again in a moment.")
-    return _bot
 
 
 def _feed_or_404(request: aiohttp.web.Request) -> Feed:
@@ -110,8 +86,14 @@ def _title(name: str) -> str:
 
 
 async def _build(feed: Feed) -> HMessage:
-    """Build the feed's post once, as the producer would right now."""
-    return await feed.message_constructor_coro(bot=_require_bot())
+    """Build the feed's post once, as the producer would right now.
+
+    ``BotNotReady`` is a plain exception, so both call sites' ``except Exception`` catch
+    it and report its sentence to the page — which is the point of it not being an
+    ``HTTPServiceUnavailable``, whose stringification ("Service Unavailable") drops the
+    part telling the operator what to do.
+    """
+    return await feed.message_constructor_coro(bot=web.require_bot())
 
 
 async def _handle_preview(request: aiohttp.web.Request) -> aiohttp.web.Response:
@@ -140,7 +122,7 @@ def _announce(feed: Feed, publish: bool) -> t.Awaitable[t.Any]:
     """The announcer call for this feed, as an un-awaited awaitable."""
     assert feed.message_announcer_coro is not None  # guarded by the caller
     return feed.message_announcer_coro(
-        bot=_require_bot(),
+        bot=web.require_bot(),
         channel_id=feed.channel_id,
         check_enabled=False,
         construct_message_coro=feed.message_constructor_coro,

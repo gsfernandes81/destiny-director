@@ -101,6 +101,12 @@ async def on_start_install_logging(_event: h.StartedEvent):
 async def on_start_web_app(_event: h.StartedEvent):
     # One persistent HTTP server for the OAuth callback + rotation editor. Extensions
     # (loaded on StartingEvent) have already contributed their routes by now.
+    #
+    # Stash the bot BEFORE the first socket accept, not from a listener of its own: the
+    # routes (and the auth middleware) reach it through web.get_bot()/require_bot(), and
+    # StartedEvent listeners run concurrently — so a separate listener would leave a
+    # window in which the server is up and the bot is not.
+    web.stash_bot(bot)
     await web.start()
 
 

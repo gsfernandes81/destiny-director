@@ -53,8 +53,7 @@ def _clean_settings() -> t.Iterator[None]:
     asyncio.run(_clear())
     # dd.common.settings caches rows across the whole process; without this a test can
     # read another test's (now-deleted) values until the TTL happens to lapse.
-    settings.invalidate()
-    settings._cache.clear()
+    settings.reset_cache_for_tests()
     yield
 
 
@@ -429,16 +428,38 @@ async def test_render_shows_color_field_with_value() -> None:
 
 
 @pytest.mark.integration
-async def test_render_blank_color_swatch_falls_back_to_black() -> None:
-    # No row saved yet: the text field stays blank, but the swatch (a native
-    # input[type=color], which cannot be blank) shows black rather than nothing.
+async def test_render_unset_color_shows_the_settings_default_not_black() -> None:
+    # No row saved yet, so every producer is painting dd.common.settings' own default.
+    # The swatch (a native input[type=color], which cannot be blank) and the text
+    # field's placeholder both have to show *that*, not black — the page previously
+    # rendered #000000 here while the bots drew the brand pink.
     html_out = await aps._render_html()
+    default_hex = settings.default_for("embed_default_color")
 
-    assert 'data-for="embed_default_color" value="#000000"' in html_out
+    assert default_hex == "#EC42A5"  # sanity: the brand pink, not black
+    assert f'data-for="embed_default_color" value="{default_hex}"' in html_out
+    # The field itself stays empty: blank is what stores NULL ("use the default"), so
+    # pre-filling it would make the next save pin today's default into the DB.
     assert re.search(
-        r'class="colorfield no-focus-ring" data-slug="embed_default_color" value=""',
+        r'class="colorfield no-focus-ring" data-slug="embed_default_color" value=""'
+        rf' placeholder="{re.escape(default_hex)}"',
         html_out,
     )
+
+
+@pytest.mark.integration
+async def test_render_unset_color_still_saves_as_untouched() -> None:
+    # The rendered default is display-only: an operator who opens the page and saves
+    # without touching the colour submits null (unchanged), which the server skips, so
+    # the slug stays NULL rather than becoming an explicit copy of the default.
+    await aps._render_html()
+
+    resp = await aps._handle_save(
+        _as_request(_FakeRequest({"settings": {"embed_default_color": None}}))
+    )
+
+    assert resp.status == 200
+    assert await schemas.AutoPostSettings.get_value("embed_default_color") is None
 
 
 @pytest.mark.integration
@@ -541,7 +562,7 @@ async def test_render_shows_a_followable_with_no_row_as_unconfigured() -> None:
     # There is no env fallback any more (see dd.common.settings' docstring): a
     # followable with no DB row genuinely IS unconfigured, and the page has to show it
     # that way — the page is the only place it can be set from.
-    settings.invalidate()
+    settings.reset_cache_for_tests()
 
     html_out = await aps._render_html()
 
@@ -552,7 +573,7 @@ async def test_render_shows_a_followable_with_no_row_as_unconfigured() -> None:
 @pytest.mark.integration
 async def test_render_shows_the_saved_row_for_a_followable() -> None:
     await schemas.AutoPostSettings.set_value("lost_sector_channel", "99")
-    settings.invalidate()
+    settings.reset_cache_for_tests()
 
     html_out = await aps._render_html()
 
@@ -621,10 +642,10 @@ async def test_handle_save_persists_channel_value(
 async def test_handle_save_refreshes_sync_readers_too(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # _handle_save awaits dd.common.settings.preload() (not just invalidate()) so a
-    # *_sync getter — e.g. the one HybridPostSpec.channel_id uses to route an actual
-    # message send — reflects the save immediately in THIS process too, not only
-    # whenever some unrelated async getter happens to trigger a refresh next.
+    # _handle_save awaits dd.common.settings.preload() — a real refetch, not merely a
+    # stale mark — so a *_sync getter (e.g. the one HybridPostSpec.channel_id uses to
+    # route an actual message send) reflects the save immediately in THIS process too,
+    # not only whenever some unrelated async getter happens to trigger a refresh next.
     await _allow_channel_permission(monkeypatch)
 
     resp = await aps._handle_save(
@@ -819,7 +840,7 @@ async def test_handle_save_clearing_a_channel_skips_the_permission_check(
 async def test_channel_problem_before_bot_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(aps, "_bot", None)
+    monkeypatch.setattr(web, "_bot", None)
 
     problem = await aps._channel_problem(_ANNOUNCE_SETTING, 555)
 
@@ -839,7 +860,7 @@ async def test_channel_problem_when_bot_cannot_see_the_channel(
     class _FakeBotNoChannel:
         rest = _RaisingRest()
 
-    monkeypatch.setattr(aps, "_bot", _FakeBotNoChannel())
+    monkeypatch.setattr(web, "_bot", _FakeBotNoChannel())
 
     problem = await aps._channel_problem(_ANNOUNCE_SETTING, 555)
 
@@ -882,7 +903,7 @@ def _fake_channel_bot(
 async def test_channel_problem_when_perms_are_missing(
     monkeypatch: pytest.MonkeyPatch, _guild_ids: tuple[int, int]
 ) -> None:
-    monkeypatch.setattr(aps, "_bot", _fake_channel_bot())
+    monkeypatch.setattr(web, "_bot", _fake_channel_bot())
     monkeypatch.setattr(
         aps,
         "calculate_permissions",
@@ -901,7 +922,7 @@ async def test_channel_problem_when_perms_are_missing(
 async def test_channel_problem_when_fully_permitted(
     monkeypatch: pytest.MonkeyPatch, _guild_ids: tuple[int, int]
 ) -> None:
-    monkeypatch.setattr(aps, "_bot", _fake_channel_bot())
+    monkeypatch.setattr(web, "_bot", _fake_channel_bot())
     full_perms = (
         h.Permissions.VIEW_CHANNEL
         | h.Permissions.SEND_MESSAGES
@@ -921,7 +942,7 @@ async def test_channel_problem_fails_closed_on_cache_failure(
     def _raise_cache_failure(_member: t.Any, _channel: t.Any) -> h.Permissions:
         raise aps.CacheFailureError("no cache")
 
-    monkeypatch.setattr(aps, "_bot", _fake_channel_bot())
+    monkeypatch.setattr(web, "_bot", _fake_channel_bot())
     monkeypatch.setattr(aps, "calculate_permissions", _raise_cache_failure)
 
     # A permission calc that can't resolve (no gateway cache yet) rejects the save
@@ -956,7 +977,7 @@ async def test_channel_problem_rejects_a_text_channel_for_a_followable(
     # The browser's picker filters these out (data-announce-only), but the picker is
     # not the enforcement point: a followable's channel MUST be an announcement
     # channel or nothing can follow it, and the save endpoint is where that's decided.
-    monkeypatch.setattr(aps, "_bot", _fake_channel_bot(kind=h.ChannelType.GUILD_TEXT))
+    monkeypatch.setattr(web, "_bot", _fake_channel_bot(kind=h.ChannelType.GUILD_TEXT))
     _permit_everything(monkeypatch)
 
     problem = await aps._channel_problem(_ANNOUNCE_SETTING, 555)
@@ -970,7 +991,7 @@ async def test_channel_problem_allows_a_text_channel_for_the_log_channel(
 ) -> None:
     # Nothing follows the log channel — the bot only sends to it — so a plain text
     # channel is fine there, unlike a followable's post channel.
-    monkeypatch.setattr(aps, "_bot", _fake_channel_bot(kind=h.ChannelType.GUILD_TEXT))
+    monkeypatch.setattr(web, "_bot", _fake_channel_bot(kind=h.ChannelType.GUILD_TEXT))
     _permit_everything(monkeypatch)
 
     assert await aps._channel_problem(_LOG_SETTING, 555) is None
@@ -982,7 +1003,7 @@ async def test_channel_problem_rejects_a_channel_outside_the_settings_scope(
     # A followable posts in Kyber only; the control server is out of scope for it even
     # though the bot is in both and can post in both.
     _kyber, control = _guild_ids
-    monkeypatch.setattr(aps, "_bot", _fake_channel_bot(guild_id=control))
+    monkeypatch.setattr(web, "_bot", _fake_channel_bot(guild_id=control))
     _permit_everything(monkeypatch)
 
     problem = await aps._channel_problem(_ANNOUNCE_SETTING, 555)
@@ -995,7 +1016,7 @@ async def test_channel_problem_allows_the_control_guild_for_a_control_scoped_set
     monkeypatch: pytest.MonkeyPatch, _guild_ids: tuple[int, int]
 ) -> None:
     _kyber, control = _guild_ids
-    monkeypatch.setattr(aps, "_bot", _fake_channel_bot(guild_id=control))
+    monkeypatch.setattr(web, "_bot", _fake_channel_bot(guild_id=control))
     _permit_everything(monkeypatch)
 
     assert await aps._channel_problem(_LOG_SETTING, 555) is None
@@ -1005,7 +1026,7 @@ async def test_channel_problem_allows_the_control_guild_for_a_control_scoped_set
 async def test_handle_save_rejects_a_text_channel_for_a_followable(
     monkeypatch: pytest.MonkeyPatch, _guild_ids: tuple[int, int]
 ) -> None:
-    monkeypatch.setattr(aps, "_bot", _fake_channel_bot(kind=h.ChannelType.GUILD_TEXT))
+    monkeypatch.setattr(web, "_bot", _fake_channel_bot(kind=h.ChannelType.GUILD_TEXT))
     _permit_everything(monkeypatch)
 
     resp = await aps._handle_save(
@@ -1052,7 +1073,7 @@ async def test_handle_channels_lists_postable_channels_from_both_guilds(
 ) -> None:
     kyber, control = _guild_ids
     monkeypatch.setattr(
-        aps,
+        web,
         "_bot",
         _FakeBot(
             {
@@ -1096,7 +1117,7 @@ async def test_handle_channels_survives_an_unreachable_guild(
     class _PartialBot:
         rest = _RaisingRest()
 
-    monkeypatch.setattr(aps, "_bot", _PartialBot())
+    monkeypatch.setattr(web, "_bot", _PartialBot())
 
     resp = await aps._handle_channels(_as_request(_FakeRequest(None)))
     payload = t.cast(dict, json.loads(resp.text or ""))
@@ -1107,11 +1128,13 @@ async def test_handle_channels_survives_an_unreachable_guild(
 async def test_handle_channels_before_bot_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(aps, "_bot", None)
+    # The picker list needs the bot outright, so the handler raises and web's middleware
+    # answers with the shared 503 (test_web_bot.py) — unlike _channel_problem below,
+    # which owes the operator a sentence and so fails closed with one instead.
+    monkeypatch.setattr(web, "_bot", None)
 
-    resp = await aps._handle_channels(_as_request(_FakeRequest(None)))
-
-    assert resp.status == 503
+    with pytest.raises(web.BotNotReady):
+        await aps._handle_channels(_as_request(_FakeRequest(None)))
 
 
 # --- homepage card ----------------------------------------------------------------

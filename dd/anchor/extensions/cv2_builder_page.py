@@ -59,7 +59,6 @@ import hikari as h
 import lightbulb as lb
 
 from ...common import cfg, settings
-from ...common.bot import CachedFetchBot
 from ...common.schemas import Cv2Draft
 from ...common.utils import fetch_emoji_dict
 from .. import cv2_nodes, web
@@ -72,21 +71,9 @@ _PAGE_HTML_PATH = (
     Path(__file__).resolve().parent.parent / "web_static" / "cv2_builder.html"
 )
 
-# The live bot, stashed at StartedEvent so the routes can reach the REST client (the
-# pattern weekly_reset/rotation_editor already use).
-_bot: CachedFetchBot | None = None
-
 # Emoji dicts are a REST round-trip per guild; the builder asks for one on every page
 # load, so keep the last result briefly rather than re-fetching per draft.
 _emoji_cache: dict[str, dict[str, t.Any]] | None = None
-
-
-def _require_bot() -> CachedFetchBot:
-    if _bot is None:
-        raise aiohttp.web.HTTPServiceUnavailable(
-            text="Bot is still starting — try again in a moment."
-        )
-    return _bot
 
 
 async def _emoji_map() -> dict[str, dict[str, t.Any]]:
@@ -107,7 +94,7 @@ async def _emoji_map() -> dict[str, dict[str, t.Any]]:
     if _emoji_cache is not None:
         return _emoji_cache
     try:
-        emoji_dict = await fetch_emoji_dict(t.cast(h.GatewayBot, _require_bot()))
+        emoji_dict = await fetch_emoji_dict(t.cast(h.GatewayBot, web.require_bot()))
         _emoji_cache = {
             name: {
                 "url": str(getattr(emoji, "url", "")),
@@ -229,7 +216,7 @@ async def _handle_publish(request: aiohttp.web.Request) -> aiohttp.web.Response:
     if problems:
         return aiohttp.web.json_response({"error": " ".join(problems)}, status=400)
 
-    bot = _require_bot()
+    bot = web.require_bot()
     components = [RawComponentBuilder(node) for node in nodes]
     channel_id = _as_opt_int(draft.target_channel_id)
     if channel_id is None:
@@ -329,13 +316,9 @@ web.register_routes(register_cv2_builder_routes)
 
 
 @loader.listener(h.StartedEvent)
-async def _on_started(
-    event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED
-) -> None:
-    # Stash the live bot so the routes can reach the REST client, and drop stale drafts
-    # once per boot — they are scratch space, not history.
-    global _bot
-    _bot = bot
+async def _on_started(event: h.StartedEvent) -> None:
+    # Drop stale drafts once per boot — they are scratch space, not history. (The bot
+    # itself is stashed centrally in dd.anchor.web; the routes read it from there.)
     try:
         removed = await Cv2Draft.prune()
         if removed:

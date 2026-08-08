@@ -27,11 +27,12 @@ import typing as t
 
 import aiohttp.web
 import pytest
+import pytest_asyncio
 from sqlalchemy import delete
 
 from dd.anchor import web
 from dd.anchor.extensions import mirror_log
-from dd.common import schemas
+from dd.common import schemas, settings
 from dd.common.schemas import DeliveryState, MirrorDelivery
 
 pytestmark = pytest.mark.asyncio
@@ -47,6 +48,26 @@ def _clean_ledger() -> t.Iterator[None]:
 
     asyncio.run(_clear())
     yield
+
+
+@pytest_asyncio.fixture
+async def _stale_settings_cache() -> t.AsyncIterator[None]:
+    """Empty ``auto_post_settings`` and an *unloaded* settings cache, both ways round.
+
+    Opt-in rather than autouse: only the followable-naming test cares, and both the
+    table and the cache are process-global (session-scoped DB, module-level cache), so
+    the cleanup afterwards matters as much as the setup — a row left behind would keep
+    being served to later modules for a whole TTL window.
+    """
+
+    async def _wipe() -> None:
+        async with schemas.db_session() as session, session.begin():
+            await session.execute(delete(schemas.AutoPostSettings))
+        settings.reset_cache_for_tests()
+
+    await _wipe()
+    yield
+    await _wipe()
 
 
 def _as_request(query: dict | None = None) -> aiohttp.web.Request:
@@ -107,6 +128,25 @@ async def test_data_endpoint_returns_runs_json_shaped() -> None:
     assert run["total"] == 2 and run["delivered"] == 2
     assert run["started"].endswith("+00:00")
     assert run["last_at"].endswith("+00:00")
+
+
+@pytest.mark.integration
+async def test_data_endpoint_names_a_followable_configured_since_the_last_preload(
+    _stale_settings_cache: None,
+) -> None:
+    # _collect_runs awaits get_followables() rather than reading the cache through
+    # get_followables_sync(). The distinction only shows with a cache that is stale (or,
+    # as here, never loaded) while the row is already in the DB — the state a running
+    # anchor is in for up to one TTL window after a channel is set on the settings page.
+    # The sync reader rendered a bare snowflake until some unrelated async getter
+    # happened to refresh; the awaited getter refreshes here, on this request.
+    await _seed([_base(3333333333333333333, 10, src_ch_id=4242, dest_msg_id=44)])
+    await schemas.AutoPostSettings.set_value("lost_sector_channel", "4242")
+
+    resp = await mirror_log._handle_data(_as_request())
+
+    (run,) = json.loads(_text(resp))["runs"]
+    assert run["src_name"] == "lost_sector"
 
 
 @pytest.mark.integration

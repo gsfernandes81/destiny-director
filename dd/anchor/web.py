@@ -27,9 +27,11 @@ import logging
 import typing as t
 from pathlib import Path
 
+import aiohttp.typedefs
 import aiohttp.web
 
 from ..common import cfg
+from ..common.bot import CachedFetchBot
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,86 @@ def register_card(card: Card) -> None:
 def registered_cards() -> list[Card]:
     """Return the contributed homepage cards (a copy; caller sorts for display)."""
     return list(_cards)
+
+
+# --- the live bot -------------------------------------------------------------------
+
+#: The live bot, for every route in the app. Stashed once, by the ``StartedEvent``
+#: listener in ``dd/anchor/__main__.py`` immediately before :func:`start` — so a route
+#: can never be served before it is set, which a per-module ``StartedEvent`` stash could
+#: not promise (listeners run concurrently with the one that starts the server).
+#:
+#: One stash here rather than the module global each route-owning extension used to
+#: keep: the copies drifted into three different "not ready yet" answers, and two were
+#: written only when *that* module's unrelated startup work got that far — so a page
+#: could keep refusing on a bot that had been up for hours.
+_bot: CachedFetchBot | None = None
+
+#: What every "the bot isn't up yet" answer says, in one place.
+BOT_STARTING_MSG = "Bot is still starting — try again in a moment."
+
+
+class BotNotReady(RuntimeError):
+    """Raised by :func:`require_bot` before the bot has been stashed.
+
+    A plain exception, not ``aiohttp.web.HTTPServiceUnavailable``: a handler that
+    reports ``str(e)`` to the page (rather than letting the exception propagate as a
+    response) renders the HTTP one as "Service Unavailable" — aiohttp's stringification
+    of the class, with the sentence explaining what to do dropped on the floor, and that
+    sentence is the whole value of the error. The ones that DO propagate become the
+    standard 503 JSON in :func:`_bot_not_ready_middleware`.
+    """
+
+
+def stash_bot(bot: CachedFetchBot) -> None:
+    """Record the live bot for the whole web app. Call once, at ``StartedEvent``."""
+    global _bot
+    _bot = bot
+
+
+def get_bot() -> CachedFetchBot | None:
+    """The live bot, or ``None`` if the process has not finished starting.
+
+    For the call sites that *degrade* rather than refuse — a preview that renders
+    without guild emoji, a panel row that stays a raw snowflake, the fail-closed channel
+    check that owes the operator a readable reason. Anything that simply needs the bot
+    wants :func:`require_bot` instead.
+    """
+    return _bot
+
+
+def require_bot() -> CachedFetchBot:
+    """The live bot, or raise :class:`BotNotReady` (a 503 via the middleware)."""
+    if _bot is None:
+        raise BotNotReady(BOT_STARTING_MSG)
+    return _bot
+
+
+def bot_not_ready_response() -> aiohttp.web.Response:
+    """The standard body for a request that arrived before the bot was up.
+
+    JSON, because every page here reads ``data.error`` off a failed fetch; a text/plain
+    503 surfaces as an unhelpful parse error instead.
+    """
+    return aiohttp.web.json_response({"error": BOT_STARTING_MSG}, status=503)
+
+
+@aiohttp.web.middleware
+async def _bot_not_ready_middleware(
+    request: aiohttp.web.Request,
+    handler: aiohttp.typedefs.Handler,
+) -> aiohttp.web.StreamResponse:
+    """Turn a handler's :class:`BotNotReady` into :func:`bot_not_ready_response`.
+
+    So a route needing the bot is one ``require_bot()`` call and no error plumbing —
+    which is what keeps the answer identical across every page, rather than each route
+    inventing its own status and wording again.
+    """
+    try:
+        return await handler(request)
+    except BotNotReady:
+        logger.info("%s %s arrived before the bot was up", request.method, request.path)
+        return bot_not_ready_response()
 
 
 #: Everything under web_static/tests/. Matched ahead of the static mount in `start`.
@@ -198,6 +280,15 @@ async def start(port: int | None = None) -> None:
             "Anchor web app has no middleware registered — refusing to start an "
             "unauthenticated web surface (is the web_auth extension loading?)."
         )
+
+    # Installed here, AFTER the check above, and that order is the point: the check asks
+    # whether a REGISTRAR contributed a middleware, i.e. whether web_auth loaded. A
+    # middleware contributed from inside this module would answer that question on
+    # web_auth's behalf and silently reopen the hole the check exists to close (the trap
+    # _security_headers documents). Appending also nests it INSIDE the auth middleware
+    # — aiohttp treats middlewares[0] as outermost — so it only ever converts a
+    # BotNotReady raised by a handler the auth gate already admitted.
+    app.middlewares.append(_bot_not_ready_middleware)
 
     # Registered BEFORE the static route below, because the router matches in
     # registration order — see _hide_test_fixtures for why.

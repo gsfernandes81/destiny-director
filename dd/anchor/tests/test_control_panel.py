@@ -145,7 +145,7 @@ async def test_bot_info_resolves_channel_names(
         async def fetch_channel(self, _channel_id: int) -> _Channel:
             return _Channel()
 
-    monkeypatch.setattr(control_panel, "_bot", _Bot())
+    monkeypatch.setattr(web, "_bot", _Bot())
     payload = json.loads(
         _text(await control_panel._handle_bot_info(_as_request(_FakeRequest())))
     )
@@ -162,7 +162,7 @@ async def test_bot_info_survives_an_unresolvable_channel(
         async def fetch_channel(self, _channel_id: int) -> object:
             raise RuntimeError("not found")
 
-    monkeypatch.setattr(control_panel, "_bot", _Bot())
+    monkeypatch.setattr(web, "_bot", _Bot())
     payload = json.loads(
         _text(await control_panel._handle_bot_info(_as_request(_FakeRequest())))
     )
@@ -172,14 +172,16 @@ async def test_bot_info_survives_an_unresolvable_channel(
     assert any(c["channelId"] for c in payload["channels"])
 
 
-async def test_bot_stop_503s_before_the_bot_is_up(
+async def test_bot_stop_before_the_bot_is_up_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Routes are live from web.start(); _bot is only set on StartedEvent, so a request
-    # in that window must not blow up.
-    monkeypatch.setattr(control_panel, "_bot", None)
-    resp = await control_panel._handle_bot_stop(_as_request(_FakeRequest()))
-    assert resp.status == 503
+    # Routes are live from web.start(); the bot is stashed immediately before that, so a
+    # request in that window must not shut anything down. The handler only says "I need
+    # the bot" — web's middleware is what turns that into the one shared 503 (covered in
+    # test_web_bot.py), so the handler carries no status or wording of its own.
+    monkeypatch.setattr(web, "_bot", None)
+    with pytest.raises(web.BotNotReady):
+        await control_panel._handle_bot_stop(_as_request(_FakeRequest()))
 
 
 async def test_bot_stop_schedules_a_clean_shutdown(
@@ -195,7 +197,7 @@ async def test_bot_stop_schedules_a_clean_shutdown(
         seen["exit_code"] = exit_code
 
     sentinel = object()
-    monkeypatch.setattr(control_panel, "_bot", sentinel)
+    monkeypatch.setattr(web, "_bot", sentinel)
     monkeypatch.setattr(control_panel.lifecycle, "request_shutdown", _request_shutdown)
 
     resp = await control_panel._handle_bot_stop(_as_request(_FakeRequest()))
