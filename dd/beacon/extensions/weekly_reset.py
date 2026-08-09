@@ -24,7 +24,7 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 18, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = resolve_followable_channel("weekly_reset", "Weekly Reset")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("weekly_reset")
 
 _pages = setup_nav_pages(
     loader,
@@ -47,9 +47,4 @@ weekly_reset_command_group.register(
 
 loader.command(weekly_reset_command_group)
 
-follow_control_command_maker(
-    "weekly_reset",
-    "weekly_reset",
-    "Weekly reset",
-    "Weekly reset auto posts",
-)
+follow_control_command_maker("weekly_reset", "Weekly reset auto posts")

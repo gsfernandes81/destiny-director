@@ -34,7 +34,7 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 20, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = resolve_followable_channel("lost_sector", "Lost Sector")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("lost_sector")
 
 
 class SectorMessages(NavPages):
@@ -102,6 +102,4 @@ ls_group_2.register(
 loader.command(ls_group)
 loader.command(ls_group_2)
 
-follow_control_command_maker(
-    "lost_sector", "lost_sector", "Lost sector", "Lost sector auto posts"
-)
+follow_control_command_maker("lost_sector", "Lost sector auto posts")

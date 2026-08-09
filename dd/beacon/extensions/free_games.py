@@ -30,7 +30,7 @@ loader = lb.Loader()
 
 # Read once at import purely for the boot-time alert on an unconfigured feed; the
 # listeners and the command below resolve the channel live (see _followable_channel).
-FOLLOWABLE_CHANNEL = resolve_followable_channel("free_games", "Free Games")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("free_games")
 
 HELP_STRING = "See the current free games on The Epic Store, etc"
 
@@ -147,4 +147,4 @@ class FreeGames(lb.SlashCommand, name="games", description=HELP_STRING):
 
 loader.command(slash_command_group)
 
-follow_control_command_maker("free_games", "free_games", "Free Games", HELP_STRING)
+follow_control_command_maker("free_games", HELP_STRING)

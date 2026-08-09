@@ -90,4 +90,7 @@ if not IGNORE:
 
     loader.command(SlashCommand)
 
-    follow_control_command_maker("xur", "xur", "Xur", "Xur auto posts")
+    # The slug is the only feed identity passed in: the /autopost subcommand name and
+    # the name shown to users both come from that feed's entry in ``dd.common.feeds``,
+    # which is where a new followable is declared before it gets a module like this one.
+    follow_control_command_maker("xur", "Xur auto posts")

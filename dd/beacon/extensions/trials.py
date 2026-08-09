@@ -26,7 +26,7 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2024, 1, 9, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = resolve_followable_channel("trials", "Trials")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("trials")
 
 _pages = setup_nav_pages(
     loader,
@@ -49,4 +49,4 @@ loader.command(
     )
 )
 
-follow_control_command_maker("trials", "trials", "Trials", "Trials weekly auto posts")
+follow_control_command_maker("trials", "Trials weekly auto posts")

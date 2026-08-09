@@ -157,9 +157,7 @@ async def test_follow_control_refuses_an_unconfigured_feed(
     enable = AsyncMock()
     monkeypatch.setattr(autoposts, "_enable_autopost", enable)
 
-    command_cls = autoposts.follow_control_command_maker(
-        "xur", "xur_test", "Xur", "Xur auto posts"
-    )
+    command_cls = autoposts.follow_control_command_maker("xur", "Xur auto posts")
     command = command_cls()
     command.option = 1
     command.ping_role = None

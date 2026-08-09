@@ -27,7 +27,7 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 14, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = resolve_followable_channel("xur", "Xûr")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("xur")
 
 _pages = setup_nav_pages(
     loader,
@@ -57,4 +57,4 @@ loader.command(
     )
 )
 
-follow_control_command_maker("xur", "xur", "Xur", "Xur auto posts")
+follow_control_command_maker("xur", "Xur auto posts")

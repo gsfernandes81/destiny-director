@@ -24,7 +24,7 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 18, 17, tzinfo=dt.UTC)
 
-EVERVERSE = resolve_followable_channel("eververse", "Eververse")
+EVERVERSE = resolve_followable_channel("eververse")
 
 _pages = setup_nav_pages(
     loader,
@@ -46,9 +46,4 @@ loader.command(
     )
 )
 
-follow_control_command_maker(
-    "eververse",
-    "eververse",
-    "Eververse",
-    "Eververse auto posts",
-)
+follow_control_command_maker("eververse", "Eververse auto posts")

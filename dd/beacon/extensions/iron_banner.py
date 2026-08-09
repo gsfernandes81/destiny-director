@@ -19,8 +19,6 @@ from .autoposts import follow_control_command_maker, resolve_followable_channel
 
 loader = lb.Loader()
 
-FOLLOWABLE_CHANNEL = resolve_followable_channel("iron_banner", "Iron Banner")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("iron_banner")
 
-follow_control_command_maker(
-    "iron_banner", "iron_banner", "Iron Banner", "Iron Banner auto posts"
-)
+follow_control_command_maker("iron_banner", "Iron Banner auto posts")

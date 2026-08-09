@@ -31,7 +31,7 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2025, 3, 20, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = resolve_followable_channel("twab", "This Week At Bungie")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("twab")
 
 
 class TWIDPages(NavPages):
@@ -108,9 +108,4 @@ loader.command(
     make_navigator_command(_pages, name="twab", description=_TWID_DESCRIPTION)
 )
 
-follow_control_command_maker(
-    "twab",
-    "twid",
-    "TWID",
-    "This Week In Destiny weekly auto posts",
-)
+follow_control_command_maker("twab", "This Week In Destiny weekly auto posts")

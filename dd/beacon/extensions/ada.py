@@ -25,7 +25,7 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 14, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = resolve_followable_channel("ada", "Ada")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("ada")
 
 SINGLE_PAGE_MODE = True
 
@@ -82,4 +82,4 @@ class AdaCommand(
 
 loader.command(AdaCommand)
 
-follow_control_command_maker("ada", "ada", "Ada", "Ada's weekly item auto posts")
+follow_control_command_maker("ada", "Ada-1's weekly item auto posts")
