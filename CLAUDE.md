@@ -115,14 +115,28 @@ DB layer, or building a message/embed, read it.** Quick orientation:
   `make format-check` (`ruff format --check`, what CI runs), `make typecheck`
   (`ty check dd`). `make check` = lint + format-check + typecheck + test (the local
   mirror of CI).
-- **Format what you edited, not the tree.** `make format` rewrites all of `dd`, so any
-  file that has drifted from the formatter gets reformatted whether or not your change
-  touched it — and rides into your branch. That happened twice on one refactor branch
-  (`cfg.py`, both times reverted by hand). Prefer `uv run ruff format <paths you
-  changed>`. Before committing, read `git diff --stat` and revert any file your change
-  has no business touching: a refactor branch that reformats an unrelated module has a
-  bug in its process, not a tidy diff. CI's `ruff format --check` now stops the drift
-  accumulating, so this should stay a one-file annoyance rather than a sweep.
+- **Run `make format` over the whole tree before EVERY commit.** Not "the files you
+  edited" — all of it, every time. `make format` is `ruff format dd conftest.py` plus
+  `ruff check --fix`, and CI runs `ruff format --check` over exactly that path set, so
+  anything it would rewrite is a red build.
+  - This reverses an earlier rule ("format what you edited, not the tree"), which
+    existed because the tree had drifted from the formatter and a whole-tree `make
+    format` swept unrelated files into your branch — it cost `cfg.py` two hand-reverts
+    on one refactor branch. That hazard is **gone**: the projectwide reformat put the
+    tree at the formatter's fixed point and CI's `format-check` holds it there, so
+    formatting everything now touches only the files you actually changed. Do not
+    reintroduce the old advice.
+  - Formatting a subset is the failure mode now, not the fix. Deleting a constant left
+    a stray blank line in `portal_ops.py`; every other edited file got formatted, that
+    one did not, and CI went red on a one-line whitespace diff.
+  - **`ruff check` will not save you.** Lint and format are separate passes — blank
+    lines, wrapping and trailing commas are invisible to `ruff check` and only
+    `ruff format --check` sees them. `make check` runs both (plus ty, pytest, node);
+    prefer it over running the pieces by hand, and take a green `ruff check` as proof
+    of nothing.
+  - Still read `git diff --stat` before committing and revert any file your change has
+    no business touching. It no longer catches formatter drift — it catches an edit you
+    did not mean to make, which is the more interesting bug.
 - ruff removes **unused imports** (F401 fails CI, and the developer's editor strips them
   on save). When you add an import, add its usage in the **same edit**.
 - ty: prefer fixing types over suppressing. When ty genuinely can't model a pattern
