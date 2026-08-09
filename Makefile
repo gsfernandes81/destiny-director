@@ -177,6 +177,11 @@ format:
 	uv run ruff format dd conftest.py
 	uv run ruff check --fix dd conftest.py
 
+# What CI runs: reports drift, writes nothing. Part of `check` so the local mirror of
+# CI catches a formatting failure before a push does.
+format-check:
+	uv run ruff format --check dd conftest.py
+
 typecheck:
 	uv run ty check dd conftest.py
 
@@ -222,7 +227,7 @@ test-mirror-integration: .env
 test-all: .env
 	uv run --env-file .env python -m pytest -v
 
-check: lint typecheck test test-js
+check: lint format-check typecheck test test-js
 
 .env:
 	@echo "Please create a .env file with all variables as per beacon.cfg"

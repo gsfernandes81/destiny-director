@@ -47,6 +47,12 @@ jobs:
       - name: Lint (ruff)
         run: uv run ruff check dd conftest.py
 
+      # Formatting is checked, never applied. Without this the tree is free to drift
+      # from `ruff format` — and it did, silently, until whoever next ran `make format`
+      # picked the drift up into an unrelated branch.
+      - name: Format check (ruff)
+        run: uv run ruff format --check dd conftest.py
+
       - name: Type check (ty)
         run: uv run ty check dd conftest.py
 

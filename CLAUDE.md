@@ -112,8 +112,17 @@ DB layer, or building a message/embed, read it.** Quick orientation:
   `force-wrap-aliases` on; lint rule set `E`, `F`, `W`, `I`, `UP`, `B`, `SIM`
   (pycodestyle, pyflakes, isort, pyupgrade, bugbear, simplify).
 - Run `make lint` (`ruff check dd`), `make format` (`ruff format` + `ruff check --fix`),
-  `make typecheck` (`ty check dd`). `make check` = lint + typecheck + test (the local
+  `make format-check` (`ruff format --check`, what CI runs), `make typecheck`
+  (`ty check dd`). `make check` = lint + format-check + typecheck + test (the local
   mirror of CI).
+- **Format what you edited, not the tree.** `make format` rewrites all of `dd`, so any
+  file that has drifted from the formatter gets reformatted whether or not your change
+  touched it — and rides into your branch. That happened twice on one refactor branch
+  (`cfg.py`, both times reverted by hand). Prefer `uv run ruff format <paths you
+  changed>`. Before committing, read `git diff --stat` and revert any file your change
+  has no business touching: a refactor branch that reformats an unrelated module has a
+  bug in its process, not a tidy diff. CI's `ruff format --check` now stops the drift
+  accumulating, so this should stay a one-file annoyance rather than a sweep.
 - ruff removes **unused imports** (F401 fails CI, and the developer's editor strips them
   on save). When you add an import, add its usage in the **same edit**.
 - ty: prefer fixing types over suppressing. When ty genuinely can't model a pattern
