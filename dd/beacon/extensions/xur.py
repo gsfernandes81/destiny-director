@@ -32,7 +32,6 @@ FOLLOWABLE_CHANNEL = resolve_followable_channel("xur")
 _pages = setup_nav_pages(
     loader,
     feed="xur",
-    display_name="Xûr",
     history_len=12,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,

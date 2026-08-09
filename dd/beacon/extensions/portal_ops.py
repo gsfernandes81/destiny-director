@@ -29,6 +29,7 @@ import datetime as dt
 
 import lightbulb as lb
 
+from ...common import feeds as dd_feeds
 from ..nav import ResetPages, make_navigator_command, setup_nav_pages
 from .autoposts import follow_control_command_maker, resolve_followable_channel
 
@@ -45,7 +46,6 @@ _pages = setup_nav_pages(
     loader,
     pages_cls=ResetPages,
     feed="portal_ops",
-    display_name="Portal Ops",
     history_len=14,
     period=dt.timedelta(days=1),
     reference_date=REFERENCE_DATE,
@@ -57,7 +57,7 @@ portal_command_group.register(
     make_navigator_command(
         _pages,
         name="ops",
-        display_name="Portal Ops",
+        display_name=dd_feeds.FEEDS["portal_ops"].display_name,
         description="Find out about today's featured Portal ops",
     )
 )

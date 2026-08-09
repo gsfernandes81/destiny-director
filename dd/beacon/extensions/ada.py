@@ -17,6 +17,7 @@ import datetime as dt
 
 import lightbulb as lb
 
+from ...common import feeds as dd_feeds
 from .. import utils
 from ..nav import NO_DATA_HERE_EMBED, NavigatorView, setup_nav_pages
 from .autoposts import follow_control_command_maker, resolve_followable_channel
@@ -32,7 +33,6 @@ SINGLE_PAGE_MODE = True
 _pages = setup_nav_pages(
     loader,
     feed="ada",
-    display_name="Ada",
     history_len=12,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,
@@ -52,7 +52,8 @@ class AdaCommand(
             # raising at the user. Same answer make_navigator_command gives.
             await ctx.respond(
                 await utils.feed_unavailable_embed(
-                    "Ada-1", _pages.unavailable or "the bot is still starting up"
+                    dd_feeds.FEEDS["ada"].display_name,
+                    _pages.unavailable or "the bot is still starting up",
                 )
             )
             return

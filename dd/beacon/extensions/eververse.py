@@ -29,7 +29,6 @@ EVERVERSE = resolve_followable_channel("eververse")
 _pages = setup_nav_pages(
     loader,
     feed="eververse",
-    display_name="Eververse",
     history_len=14,
     period=dt.timedelta(days=1),
     reference_date=REFERENCE_DATE,

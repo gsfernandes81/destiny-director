@@ -93,7 +93,6 @@ _pages = setup_nav_pages(
     loader,
     pages_cls=TWIDPages,
     feed="twab",
-    display_name="This Week At Bungie",
     history_len=4,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,

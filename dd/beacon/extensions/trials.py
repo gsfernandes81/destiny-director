@@ -31,7 +31,6 @@ FOLLOWABLE_CHANNEL = resolve_followable_channel("trials")
 _pages = setup_nav_pages(
     loader,
     feed="trials",
-    display_name="Trials",
     history_len=12,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,

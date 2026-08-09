@@ -30,7 +30,6 @@ _pages = setup_nav_pages(
     loader,
     pages_cls=ResetPages,
     feed="weekly_reset",
-    display_name="Weekly Reset",
     history_len=12,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,

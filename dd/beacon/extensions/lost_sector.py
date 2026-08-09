@@ -77,7 +77,6 @@ _pages = setup_nav_pages(
     loader,
     pages_cls=SectorMessages,
     feed="lost_sector",
-    display_name="Lost Sector",
     history_len=14,
     lookahead_len=7,
     period=dt.timedelta(days=1),

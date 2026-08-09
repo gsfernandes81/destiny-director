@@ -391,7 +391,6 @@ async def feed_unavailable_embed(display_name: str, reason: str) -> h.Embed:
 
 async def open_feed_source[T](
     feed: str,
-    display_name: str,
     open_source: t.Callable[[int], t.Awaitable[T]],
     *,
     alert_when_unset: bool = True,
@@ -417,7 +416,10 @@ async def open_feed_source[T](
     ``resolve_followable_channel``, and re-paging for a state nobody has changed
     since adds nothing.
     """
-    from dd.common import settings
+    from dd.common import (
+        feeds as dd_feeds,
+        settings,
+    )
 
     channel_id = await settings.get_followable_channel(feed)
     if not channel_id:
@@ -425,7 +427,7 @@ async def open_feed_source[T](
             logger.critical(
                 "%s has no channel set — its commands will answer 'unavailable' until "
                 "one is picked on the Autopost Settings page.",
-                display_name,
+                dd_feeds.display_name(feed),
             )
         return None, FEED_UNCONFIGURED
 
@@ -440,7 +442,7 @@ async def open_feed_source[T](
             "%s channel %s is configured but no longer reachable (deleted, or the bot "
             "lost access) — its commands will answer 'unavailable' until it's fixed "
             "on the Autopost Settings page.",
-            display_name,
+            dd_feeds.display_name(feed),
             channel_id,
         )
         return None, FEED_UNREACHABLE

@@ -52,7 +52,7 @@ async def refresh_message_for_command(bot: CachedFetchBot):
     # deleted, and resolve_followable_channel already paged once at import for the
     # unset state — see open_feed_source. An unreachable channel does still alert.
     channel, reason = await utils.open_feed_source(
-        "free_games", "Free Games", bot.fetch_channel, alert_when_unset=False
+        "free_games", bot.fetch_channel, alert_when_unset=False
     )
     if channel is None:
         unavailable_reason = reason

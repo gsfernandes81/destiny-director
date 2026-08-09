@@ -76,7 +76,6 @@ _pages = setup_nav_pages(
     loader,
     pages_cls=NightfallPages,
     feed="weekly_nightfall",
-    display_name="Weekly Nightfall",
     history_len=12,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,

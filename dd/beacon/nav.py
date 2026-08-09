@@ -907,7 +907,6 @@ def setup_nav_pages(
     loader: lb.Loader,
     *,
     feed: str,
-    display_name: str,
     pages_cls: type[NavPages] = NavPages,
     **from_channel_kwargs: t.Any,
 ) -> NavPagesHolder:
@@ -923,7 +922,8 @@ def setup_nav_pages(
     An unusable channel never stops the listener registering, and never raises out of
     it: ``utils.open_feed_source`` records why on the holder (so the command can answer
     for itself) and pages the bot owner(s) — a source channel is ours to fix, and a user
-    hitting it can do nothing about it.
+    hitting it can do nothing about it. What that page calls the feed comes from
+    ``dd.common.feeds``, so ``feed`` is the only identity this takes.
     """
     holder = NavPagesHolder()
 
@@ -933,7 +933,6 @@ def setup_nav_pages(
         # channel's history, so it is where an unreachable channel actually shows up.
         holder.pages, holder.unavailable = await utils.open_feed_source(
             feed,
-            display_name,
             lambda channel_id: pages_cls.from_channel(
                 event.app, channel_id, **from_channel_kwargs
             ),
