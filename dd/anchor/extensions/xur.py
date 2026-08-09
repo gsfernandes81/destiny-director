@@ -30,7 +30,12 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import cfg, schemas, settings
+from ...common import (
+    cfg,
+    feeds as dd_feeds,
+    schemas,
+    settings,
+)
 from ...common.bot import CachedFetchBot
 from ...common.components import (
     build_container,
@@ -513,7 +518,9 @@ async def format_xur_vendor(
     # Resolve :emoji: then cap CV2 text (naive front-to-back truncate + CRITICAL alert
     # on overflow, measured on the final rendered length).
     return await finalize_cv2_post(
-        HMessage(components=[container]), emoji_dict, post_name="Xûr"
+        HMessage(components=[container]),
+        emoji_dict,
+        post_name=dd_feeds.FEEDS["xur"].display_name,
     )
 
 

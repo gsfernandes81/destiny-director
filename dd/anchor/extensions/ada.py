@@ -34,7 +34,12 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import components, schemas, settings
+from ...common import (
+    components,
+    feeds as dd_feeds,
+    schemas,
+    settings,
+)
 from ...common.bot import CachedFetchBot
 from ...common.utils import fetch_emoji_dict
 from ..autopost import Feed, register_feed
@@ -145,7 +150,9 @@ async def format_ada_vendor(
     # on overflow — the trailing footer is dropped first, then the shader block; the
     # title is kept whole).
     return await components.finalize_cv2_post(
-        HMessage(components=[container]), emoji_dict, post_name="Ada"
+        HMessage(components=[container]),
+        emoji_dict,
+        post_name=dd_feeds.FEEDS["ada"].display_name,
     )
 
 

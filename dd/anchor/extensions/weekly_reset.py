@@ -57,7 +57,11 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import schemas, settings
+from ...common import (
+    feeds as dd_feeds,
+    schemas,
+    settings,
+)
 from ...common.bot import CachedFetchBot
 from ...common.components import (
     finalize_cv2_post,
@@ -739,7 +743,9 @@ async def format_weekly_reset(ctx: WeeklyResetContext, bot: CachedFetchBot) -> H
     hmsg = build_cv2(build_body(ctx), ctx.image_url, buttons=footer_button_specs())
     # Resolve :emoji: then cap CV2 text (naive front-to-back truncate + CRITICAL alert).
     return await finalize_cv2_post(
-        hmsg, await fetch_emoji_dict(bot), post_name="Weekly Reset"
+        hmsg,
+        await fetch_emoji_dict(bot),
+        post_name=dd_feeds.FEEDS["weekly_reset"].display_name,
     )
 
 

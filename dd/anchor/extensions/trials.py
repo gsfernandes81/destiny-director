@@ -48,7 +48,12 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import rotation_schema, schemas, settings
+from ...common import (
+    feeds as dd_feeds,
+    rotation_schema,
+    schemas,
+    settings,
+)
 from ...common.bot import CachedFetchBot
 from ...common.components import (
     finalize_cv2_post,
@@ -396,7 +401,9 @@ async def format_trials(ctx: TrialsContext, bot: CachedFetchBot) -> HMessage:
     )
     # Resolve :emoji: then cap CV2 text (naive front-to-back truncate + CRITICAL alert).
     return await finalize_cv2_post(
-        hmsg, await fetch_emoji_dict(bot), post_name="Trials"
+        hmsg,
+        await fetch_emoji_dict(bot),
+        post_name=dd_feeds.FEEDS["trials"].display_name,
     )
 
 
