@@ -44,17 +44,25 @@ RAILWAY_RUN = railway run $(RAILWAY_ENV_FLAG) --service $(RAILWAY_SERVICE) -- \
 	env -u DATABASE_PRIVATE_URL -u MYSQL_PRIVATE_URL
 
 # ── Deploys ────────────────────────────────────────────────────────────────────────
-# One rule for what used to be four near-identical targets. The guard keeps the pattern
-# from swallowing a typo: `make deploy-ancor` should fail, not attempt a deploy.
-deploy-%:
-	@case "$*" in beacon|anchor) ;; *) \
-		echo "No such service '$*'. Use deploy-beacon or deploy-anchor." >&2; exit 1;; esac
+# One recipe each for what used to be four near-identical targets, over one service
+# list. These are **static** pattern rules (`targets: pattern: prereqs`), not plain
+# pattern rules, for two reasons that turn out to be the same reason:
+#
+#   - A plain `deploy-%:` is an *implicit* rule, and make skips implicit-rule search
+#     for a target it knows is phony. So `.PHONY: deploy-anchor` over a plain pattern
+#     rule does not harden the target — it stops it working at all. A static pattern
+#     rule is an explicit rule, so .PHONY and the recipe coexist.
+#   - Naming the targets up front means a typo has no rule rather than matching one:
+#     `make deploy-ancor` now says "No rule to make target", with no guard to write.
+BOTS := beacon anchor
+
+$(addprefix deploy-,$(BOTS)): deploy-%:
 	railway up $(RAILWAY_ENV_FLAG) --detach --service $*
 
 # Removes the most recent deployment of a service. Explicit about both service and
 # environment — it used to be a bare `railway down`, which acted on whatever the CLI
 # happened to be linked to at the time.
-remove-last-deploy-%:
+$(addprefix remove-last-deploy-,$(BOTS)): remove-last-deploy-%:
 	railway down $(RAILWAY_ENV_FLAG) --service $*
 
 # Remote Pi dev container (docker-compose.dev.yml). dev-up builds the image with
@@ -241,7 +249,16 @@ dump-mysql:
 
 # EXECUTE=1 is the write gate on the two destructive-ish steps, matching the repo's
 # existing ALLOW_REMOTE_SCHEMA_DESTROY convention: the dangerous thing needs a word.
+#
+# Compared with `filter`, not tested for emptiness. Make's `$(if)` asks whether a
+# variable is NON-EMPTY, not whether it is true — so `EXECUTE=0`, `EXECUTE=no` and
+# `EXECUTE=false` all used to arm the gate and write to whatever environment was named.
+# Only the exact string `1` counts now; every other spelling, including a typo, is off,
+# and off is the direction a mistake should fall.
 EXECUTE ?=
+OVERWRITE ?=
+WRITE = $(if $(filter 1,$(EXECUTE)),--execute,)
+FORCE = $(if $(filter 1,$(OVERWRITE)),--overwrite,)
 
 cutover-backup: dump-mysql
 
@@ -255,14 +272,14 @@ cutover-schema:
 # copied and destination-after, and writes nothing. Read it, then EXECUTE=1.
 # --source is the old database, taken from the same injected environment.
 cutover-copy:
-	$(RAILWAY_RUN) sh -c 'uv run python -m dd.common.db_transfer --source "$$MYSQL_URL" $(if $(EXECUTE),--execute,)'
+	$(RAILWAY_RUN) sh -c 'uv run python -m dd.common.db_transfer --source "$$MYSQL_URL" $(WRITE)'
 
 # Loads FOLLOWABLES, the alerts channel and level, the colours, the default URL, the
 # bad-channel switch and the two image URLs into auto_post_settings — the step that
 # used to be "type twelve channels into a web form". Dry run by default, same as above.
 # Never overwrites a row that already holds a value (OVERWRITE=1 if you mean to).
 cutover-settings:
-	$(RAILWAY_RUN) uv run python -m dd.common.settings_import $(if $(EXECUTE),--execute,) $(if $(OVERWRITE),--overwrite,)
+	$(RAILWAY_RUN) uv run python -m dd.common.settings_import $(WRITE) $(FORCE)
 
 # Read the settings back out of the new database, as the bots will see them: the import
 # in dry-run mode, which prints every setting's stored value beside the env's. After a
@@ -275,17 +292,23 @@ cutover-verify:
 # creates the schema, then dry-runs the copy and the settings import so you can read
 # both reports before committing to anything.
 #
+# "Rehearsal" is precise, not a synonym for read-only: the backup is taken for real and
+# the schema is migrated for real (`alembic upgrade head` is idempotent, and the copy
+# cannot be dry-run without it). What EXECUTE=1 gates is the two steps that move data —
+# the row copy and the settings write — and the closing line says exactly that rather
+# than claiming nothing happened.
+#
 # There is no confirmation prompt. The gate is EXECUTE=1 plus the word `prod`, both of
 # which have to be typed on the same line — and a rehearsal against dev is a different
 # command from the real thing by exactly one word, which is the property worth having.
 mysql-to-postgres:
-	@echo "==> environment: $(RAILWAY_ENV)$(if $(EXECUTE), (EXECUTE=1 — this writes), (dry run — set EXECUTE=1 to write))"
+	@echo "==> environment: $(RAILWAY_ENV)$(if $(WRITE), (EXECUTE=1 — this writes), (rehearsal))"
 	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) cutover-backup
 	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) cutover-schema
 	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) EXECUTE=$(EXECUTE) cutover-copy
-	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) EXECUTE=$(EXECUTE) cutover-settings
-	@$(if $(EXECUTE),$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) cutover-verify,:)
-	@echo "==> done$(if $(EXECUTE),, — nothing was written. Re-run with EXECUTE=1.)"
+	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) EXECUTE=$(EXECUTE) OVERWRITE=$(OVERWRITE) cutover-settings
+	@$(if $(WRITE),$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) cutover-verify,:)
+	@echo "==> done. $(if $(WRITE),Rows copied and settings written; check cutover-verify above.,Backup taken and the schema is at head on $(RAILWAY_ENV); NO rows were copied and NO settings were written. Re-run with EXECUTE=1.)"
 
 # conftest.py is named alongside `dd` in all three: it is the one Python file outside
 # the package tree (repo-root, where pytest's session DB fixture and its non-local-DB
@@ -359,7 +382,13 @@ check: lint format-check typecheck test test-js
 # Every target here names an action, not a file it produces — except `.env`, which IS a
 # real file and is the guard that fails when it is missing. Without this a stray file
 # named `check` or `test` in the repo root would silently make those targets no-ops.
-.PHONY: prod deploy-% remove-last-deploy-% dev dev-up dev-login dev-down \
+#
+# The per-bot targets are expanded from $(BOTS) rather than written out: `%` is literal
+# in .PHONY, so a `.PHONY: deploy-%` declares a target called "deploy-%" and leaves the
+# real ones unprotected. They are static pattern rules for the same reason — see the
+# note on the deploy block for why a *plain* pattern rule cannot be made phony at all.
+.PHONY: prod $(addprefix deploy-,$(BOTS)) $(addprefix remove-last-deploy-,$(BOTS)) \
+	dev dev-up dev-login dev-down \
 	dev-down-volumes run-beacon-local run-anchor-local _require-mem-cap \
 	run-beacon-devbot run-anchor-devbot devbot-up devbot-down devbot-logs \
 	devbot-status destroy-schemas create-schemas migration-plan migration-apply \

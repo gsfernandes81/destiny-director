@@ -61,6 +61,14 @@ def _getenv(key: str, default: int | str | None = None) -> int | str:
         return value
 
 
+#: The spellings :func:`_getbool` reads as true. Public because ``settings_import`` has
+#: to reproduce *this* reading exactly when it copies a boolean env var into the DB —
+#: it briefly kept its own slightly wider set, which turned a ``DISABLE_BAD_CHANNELS=t``
+#: that had been behaving as False into a True. A migration that changes a value is
+#: worse than one that fails, so there is one definition and both sides read it.
+TRUE_VALUES = frozenset({"true", "1", "yes", "on"})
+
+
 def _getbool(key: str, default: bool) -> bool:
     """Parse a boolean env var case-insensitively (``true``/``1``/``yes``/``on``).
 
@@ -71,7 +79,7 @@ def _getbool(key: str, default: bool) -> bool:
     value = __getenv(key)
     if value is None:
         return default
-    return value.strip().lower() in {"true", "1", "yes", "on"}
+    return value.strip().lower() in TRUE_VALUES
 
 
 # The kernel's legal range for /proc/<pid>/oom_score_adj (see proc(5)). Kept here

@@ -41,11 +41,13 @@ what prod has been posting to, so they are proven by use in a way a fresh entry 
 import argparse
 import asyncio
 import json
+import logging
 import os
 import sys
 from dataclasses import dataclass
 
 from . import (
+    cfg,
     feeds as dd_feeds,
     schemas,
 )
@@ -71,7 +73,11 @@ _BOOL_VAR = ("DISABLE_BAD_CHANNELS", "disable_bad_channels")
 #: is no row to put it in and nothing would read one.
 _DROPPED_VARS = ("LOG_CHANNEL_ID",)
 
-_TRUE = frozenset({"1", "true", "yes", "on", "t", "y"})
+#: The levels the settings page's <select> offers. A value outside this set matches no
+#: option, so the browser shows the first one and the next save of *any* setting on that
+#: page silently persists it. Kept in step with autopost_settings._ALERT_LEVELS by the
+#: test that pins them equal.
+_ALERT_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
 class SettingsImportError(Exception):
@@ -123,7 +129,37 @@ def _normalise_channel_id(raw: str) -> str:
         raise SettingsImportError(f"{raw!r} is not a channel id") from e
 
 
+def _normalise_alert_level(raw: str) -> str:
+    """A legacy alert level as the page stores it: upper-case, and one of the five.
+
+    The old ``cfg`` upper-cased on read (``_resolve_level`` does ``.upper()``), so
+    ``ALERT_MIN_LEVEL=warning`` is legal and has been working. Written through verbatim
+    it matches no option in the page's ``<select>``, the browser falls back to showing
+    the first one, and the next save of any setting on that page persists it.
+
+    Anything not a level raises rather than being written, on the same reasoning as the
+    colours: refusing while the env var still exists to be read beats a wrong value
+    discovered from its effects weeks later. Note this is about what gets *stored* — the
+    runtime read fails open, deliberately, and in the other direction (see
+    ``settings.get_alert_min_level``).
+    """
+    resolved = logging.getLevelName(raw.strip().upper())
+    if isinstance(resolved, int):
+        # Round-trip through the number to land on the canonical spelling: Python
+        # registers WARN and FATAL as aliases, both legal under the old cfg (which
+        # resolved by name) and neither an option on the page. Rejecting them would
+        # stop the cutover over a value that has been working for years.
+        canonical = logging.getLevelName(resolved)
+        if canonical in _ALERT_LEVELS:
+            return canonical
+    raise SettingsImportError(
+        f"{raw!r} is not an alert level — expected one of " + ", ".join(_ALERT_LEVELS)
+    )
+
+
 def _normalise(slug: str, raw: str) -> str:
+    if slug == "alert_min_level":
+        return _normalise_alert_level(raw)
     if slug.endswith("_color"):
         return _normalise_color(raw)
     if slug.endswith("_channel_id") or slug.endswith("_channel"):
@@ -207,7 +243,7 @@ def _change(
     new = (
         _normalise(slug, raw)
         if column == "value"
-        else str(raw.strip().lower() in _TRUE)
+        else str(raw.strip().lower() in cfg.TRUE_VALUES)
     )
     current = _render(rows.get(slug), column)
     skip = ""
@@ -215,7 +251,13 @@ def _change(
         # Includes a channel already stored as "0": rewriting 0 over 0 is a no-op, and
         # reporting it as a write would make a second run look like it had work to do.
         skip = "unchanged"
-    elif current is not None and current not in ("", "0"):
+    # A stored "0" counts as set, and is deliberately NOT exempted below. It used to be,
+    # on the reasoning that 0 means dormant-and-therefore-unset — but the branch above
+    # already covers the 0-over-0 case that was about, and the exemption meant an
+    # alerts channel somebody had cleared on purpose (the feed channels are unclearable,
+    # that one is not) got refilled from the environment on the next run, against this
+    # module's promise that a re-run is a no-op rather than a rollback.
+    elif current is not None and current != "":
         skip = "already set — kept (--overwrite replaces)"
     return Change(
         slug=slug, source=source, column=column, new=new, current=current, skip=skip
@@ -322,7 +364,15 @@ async def _main(argv: list[str] | None = None) -> int:
     await schemas.wait_for_db()
     rows = await schemas.AutoPostSettings.get_all_rows()
     changes = await collect(rows, overwrite=args.overwrite)
-    if not changes:
+    # `changes` is never empty — an unset variable still produces a skip row saying so —
+    # so testing it told us nothing, and the run this guard exists to catch (no legacy
+    # environment at all) printed its table, said "Written." and exited 0 having written
+    # nothing, with the cutover chain carrying on as though the step had succeeded.
+    if not any(c.writes for c in changes):
+        if any(c.current not in (None, "") for c in changes):
+            print(format_report(changes, execute=False))
+            print("\nNothing to do: every setting is already imported.")
+            return 0
         print("Nothing to import: none of the legacy variables are set here.")
         print("Is this running under `railway run` against the old deployment?")
         return 1

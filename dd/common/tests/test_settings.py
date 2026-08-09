@@ -18,6 +18,7 @@
 disable_bad_channels). Uses the ambient SQLite test DB (dd/common/tests/conftest.py)."""
 
 import asyncio
+import logging
 
 import hikari as h
 import pytest
@@ -228,9 +229,40 @@ async def test_alerts_channel_and_level_survive_an_unreachable_db(
     _break_the_db(monkeypatch)
 
     # 0 is the inert state every caller already handles ("Discord logging disabled"),
-    # not an error — so an outage degrades exactly like an unconfigured install.
+    # not an error — so an outage degrades exactly like an unconfigured install. There
+    # is no failing open for a channel id: you cannot invent somewhere to post.
     assert await settings.get_alerts_channel_id() == 0
+    # The level can, and does. DEBUG rather than the configured ERROR default: when the
+    # setting that decides which alerts to forward cannot be read, the safe direction is
+    # to forward more, not less — an outage that silences its own alerts is how one goes
+    # unnoticed. Bounded by discord_logging._QUEUE_FLOOR (WARNING), so this means every
+    # warning rather than every log line.
+    assert await settings.get_alert_min_level() == "DEBUG"
+
+
+async def test_an_unconfigured_alert_level_is_not_treated_as_a_failure():
+    # The other half of the rule above: a healthy database with no row saved is a fresh
+    # install, not an outage, and keeps the ERROR default the env var used to have.
+    # Failing open there would make every new deployment noisy for no reason.
+    settings.reset_cache_for_tests()
+    await settings.preload()
+
     assert await settings.get_alert_min_level() == "ERROR"
+
+
+async def test_a_stored_level_that_is_not_a_level_fails_open(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Neither writer can produce this (the page's <select> and settings_import both
+    # constrain it), so a bad row means something is genuinely wrong — forward more.
+    from dd.common import discord_logging
+
+    assert discord_logging._resolve_level("NOTALEVEL") == logging.DEBUG
+    assert discord_logging._resolve_level("") == logging.DEBUG
+    # WARN is a real alias in the logging module, so it is not garbage and resolves.
+    assert discord_logging._resolve_level("WARN") == logging.WARNING
+    # A real level still resolves to itself, whatever its case.
+    assert discord_logging._resolve_level("warning") == logging.WARNING
 
 
 async def test_alerting_reads_serve_the_last_good_cache_when_the_db_dies(

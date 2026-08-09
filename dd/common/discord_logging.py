@@ -473,8 +473,18 @@ def _detach_startup_buffer(*, replay_into: "DiscordLogHandler | None") -> None:
 
 
 def _resolve_level(name: str) -> int:
+    """A stored alert level as a logging level, failing **open** on anything else.
+
+    An unrecognised name means the row is wrong — the page's ``<select>`` and
+    ``settings_import`` both constrain what can be written, so garbage here is a genuine
+    fault. Resolving it to DEBUG forwards more rather than less, matching
+    ``settings.get_alert_min_level``: when the setting that decides which alerts to
+    forward is itself broken, being noisy is recoverable and being quiet is not. Bounded
+    by ``_QUEUE_FLOOR`` (WARNING), so the floor on the noise is every warning, not every
+    log line.
+    """
     level = logging.getLevelName(str(name).upper())
-    return level if isinstance(level, int) else logging.ERROR
+    return level if isinstance(level, int) else logging.DEBUG
 
 
 def _install_reference_formatter() -> None:

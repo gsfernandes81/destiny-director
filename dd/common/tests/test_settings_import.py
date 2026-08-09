@@ -24,8 +24,11 @@ env vars it came from already deleted.
 import typing as t
 
 import pytest
+import pytest_asyncio
+from sqlalchemy import delete
 
 from dd.common import (
+    cfg,
     feeds as dd_feeds,
     schemas,
     settings,
@@ -52,6 +55,22 @@ _PROD_ENV = {
         ' "weekly_nightfall": 13, "emblems_and_cosmetics": 14}'
     ),
 }
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _empty_settings_table() -> t.AsyncIterator[None]:
+    """Start each test from an empty ``auto_post_settings`` and a cold cache.
+
+    The DB fixture is session-scoped and shared with every other module, so without
+    this a row one test writes is still there for the next — and since the importer
+    deliberately skips a slug that already holds a value, a later test's write would be
+    silently skipped rather than performed. Matches test_settings.py's fixture.
+    """
+    async with schemas.db_session() as session, session.begin():
+        await session.execute(delete(schemas.AutoPostSettings))
+    settings.reset_cache_for_tests()
+    yield
+    settings.reset_cache_for_tests()
 
 
 @pytest.fixture
@@ -240,3 +259,104 @@ async def test_the_report_names_the_dropped_log_channel(
 
     assert "LOG_CHANNEL_ID" in report
     assert "no longer has a setting" in report
+
+
+# --- what the first review round found -----------------------------------------------
+#
+# Five of these seven were the kind that pass a suite silently: a wrong value written
+# without complaint, or a guard that reads correct and never fires. Each gets a case.
+
+
+async def test_the_level_list_matches_the_pages_select() -> None:
+    # The importer validates against its own copy of the levels; if the page ever offers
+    # a different set, a value legal here would again match no option there — which is
+    # the whole failure this validation exists to stop.
+    from dd.anchor.extensions import autopost_settings as aps
+
+    assert settings_import._ALERT_LEVELS == aps._ALERT_LEVELS
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("warning", "WARNING"),
+        ("WARNING", "WARNING"),
+        ("Error", "ERROR"),
+        # WARN and FATAL are logging-module aliases: legal under the old cfg, which
+        # resolved by name, and not options on the page. They map rather than raise —
+        # halting a cutover over a value that has worked for years is the wrong call.
+        ("WARN", "WARNING"),
+        ("fatal", "CRITICAL"),
+    ],
+)
+async def test_alert_levels_normalise_to_something_the_page_offers(
+    raw: str, expected: str
+) -> None:
+    assert settings_import._normalise_alert_level(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["", "NOTSET", "garbage", "30"])
+async def test_a_level_the_page_cannot_show_raises(raw: str) -> None:
+    # Written through, these match no <option>; the browser then shows the first one
+    # (DEBUG) and the next save of any setting on that page silently persists it.
+    with pytest.raises(settings_import.SettingsImportError):
+        settings_import._normalise_alert_level(raw)
+
+
+async def test_a_lower_case_level_is_stored_as_the_page_spells_it(
+    _prod_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ALERT_MIN_LEVEL", "warning")
+
+    await _import()
+
+    assert await settings.get_alert_min_level() == "WARNING"
+
+
+@pytest.mark.parametrize(
+    "raw", ["true", "TRUE", "1", "yes", "on", "t", "y", "false", "0", "", "maybe"]
+)
+async def test_the_importer_reads_a_bool_exactly_as_cfg_did(
+    raw: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The property that matters is agreement, not membership: the importer briefly had
+    # its own slightly wider set, so a DISABLE_BAD_CHANNELS=t that had been behaving as
+    # False would have imported as True. Compared against cfg's own reader rather than
+    # against a literal, so this keeps holding if the accepted set is ever changed.
+    monkeypatch.setenv("DISABLE_BAD_CHANNELS", raw)
+    as_cfg_read_it = cfg._getbool("DISABLE_BAD_CHANNELS", False)
+
+    rows = await schemas.AutoPostSettings.get_all_rows()
+    changes = await settings_import.collect(rows, overwrite=False)
+    await settings_import.apply(changes)
+    settings.reset_cache_for_tests()
+
+    assert await settings.get_disable_bad_channels() is as_cfg_read_it
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"), [("t", False), ("y", False), ("on", True)]
+)
+async def test_a_bool_spelling_reads_the_same_before_and_after(
+    raw: str, expected: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DISABLE_BAD_CHANNELS", raw)
+    rows = await schemas.AutoPostSettings.get_all_rows()
+
+    changes = await settings_import.collect(rows, overwrite=False)
+    await settings_import.apply(changes)
+    settings.reset_cache_for_tests()
+
+    assert await settings.get_disable_bad_channels() is expected
+
+
+async def test_a_channel_cleared_on_the_page_stays_cleared(_prod_env: None) -> None:
+    # alerts_channel_id is deliberately clearable (unlike the feed channels), so 0 there
+    # is a choice, not an absence. A re-run used to refill it from the environment.
+    await _import()
+    await schemas.AutoPostSettings.set_value("alerts_channel_id", "0")
+    settings.reset_cache_for_tests()
+
+    await _import()
+
+    assert await settings.get_alerts_channel_id() == 0

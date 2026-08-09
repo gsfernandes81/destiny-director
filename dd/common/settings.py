@@ -333,12 +333,44 @@ async def get_xur_image_url() -> str:
     return await _get_value("xur_image_url") or ""
 
 
+#: What the alerting path resolves to when it cannot find out what the level should be.
+#: DEBUG, not the configured default — see :func:`get_alert_min_level`.
+_FAIL_OPEN_LEVEL = "DEBUG"
+
+
 async def get_alert_min_level() -> str:
-    # Alerting path: reads through _get_value_for_alerting so an unreachable DB resolves
-    # to the cached value, or to _DEFAULTS' "ERROR", instead of raising. A saved row's
-    # value is always one of _ALERT_LEVELS (see autopost_settings.py's _handle_save, the
-    # only writer), and _resolve_level treats anything unrecognised as ERROR anyway.
-    return t.cast(str, await _get_value_for_alerting("alert_min_level"))
+    """The minimum level forwarded to the alerts channel.
+
+    **Fails open.** Every other getter here degrades towards its configured default; on
+    this one a database that cannot be read at all resolves to ``DEBUG`` instead, which
+    forwards *more* than any real configuration would. The asymmetry is deliberate:
+    losing alerts is how an outage stays invisible, so when the thing that decides which
+    alerts to forward is itself broken, the safe direction is noisy, not quiet. The same
+    applies to a stored value that is not a level (see
+    ``discord_logging._resolve_level``).
+
+    The noise this can cause is bounded, which is what makes it affordable: the handler
+    is installed at ``_QUEUE_FLOOR`` (WARNING), so nothing below WARNING is ever queued
+    and "fail open to DEBUG" means "forward every WARNING and above", not "forward
+    everything the process logs".
+
+    A *missing row* is not a failure and does not trigger this — that is a fresh
+    install nobody has configured yet, and it resolves to ``_DEFAULTS``' ERROR exactly
+    as before. The two are told apart by whether the cache has ever loaded: a load that
+    found no row is knowledge; a load that never happened is not.
+    """
+    healthy = True
+    try:
+        await _ensure_fresh()
+    except Exception:
+        healthy = False
+
+    stored = _raw("alert_min_level")[1]
+    if stored is not None:
+        return stored
+    if healthy or _loaded_at:
+        return t.cast(str, _DEFAULTS["alert_min_level"][1])
+    return _FAIL_OPEN_LEVEL
 
 
 async def get_disable_bad_channels() -> bool:
