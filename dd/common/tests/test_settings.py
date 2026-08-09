@@ -174,6 +174,22 @@ async def test_image_url_settings_have_no_default_and_resolve_to_empty():
     assert await settings.get_xur_image_url() == ""
 
 
+async def test_alert_colors_fall_back_to_their_former_cfg_constants():
+    # These were plain cfg constants until they became DB rows; an unconfigured install
+    # must render alerts exactly as it did before, so the defaults are those literals.
+    assert await settings.get_embed_warning_color() == h.Color(0xF1C40F)
+    assert await settings.get_embed_critical_color() == h.Color(0x992D22)
+
+
+async def test_alert_colors_reflect_saved_rows():
+    await schemas.AutoPostSettings.set_value("embed_warning_color", "#111111")
+    await schemas.AutoPostSettings.set_value("embed_critical_color", "#222222")
+    settings.reset_cache_for_tests()
+
+    assert await settings.get_embed_warning_color() == h.Color(0x111111)
+    assert await settings.get_embed_critical_color() == h.Color(0x222222)
+
+
 async def test_malformed_stored_color_falls_back_to_black():
     await schemas.AutoPostSettings.set_value("embed_default_color", "not-a-color")
     settings.reset_cache_for_tests()

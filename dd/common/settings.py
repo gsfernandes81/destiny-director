@@ -85,6 +85,12 @@ _TTL = 30.0
 _DEFAULTS: dict[str, tuple[bool | None, str | None]] = {
     "embed_default_color": (None, f"#{int(DEFAULT_COLOR):06X}"),
     "embed_error_color": (None, "#ED4245"),
+    # The two alert-severity accents. Plain cfg constants until now, on the reasoning
+    # that they were never overridden per-deploy — but that made them the only colours
+    # on the alert path a redeploy was needed to change, which is exactly what this
+    # module exists to stop. The literals are the values they held there.
+    "embed_warning_color": (None, "#F1C40F"),
+    "embed_critical_color": (None, "#992D22"),
     "default_url": (None, ""),
     "alert_min_level": (None, "ERROR"),
     "disable_bad_channels": (False, None),
@@ -214,6 +220,14 @@ def _parse_color(raw: str | None) -> h.Color:
 
 async def get_embed_default_color() -> h.Color:
     return _parse_color(await _get_value("embed_default_color"))
+
+
+async def get_embed_warning_color() -> h.Color:
+    return _parse_color(await _get_value("embed_warning_color"))
+
+
+async def get_embed_critical_color() -> h.Color:
+    return _parse_color(await _get_value("embed_critical_color"))
 
 
 async def get_embed_error_color() -> h.Color:

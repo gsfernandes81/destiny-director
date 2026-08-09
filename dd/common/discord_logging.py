@@ -63,12 +63,14 @@ __all__ = ["identity_for_exc", "reference_code"]
 # the handler back into itself.
 _IGNORED_LOGGER_PREFIXES = ("hikari", "lightbulb", "asyncio", "aiosqlite")
 
-# Severity styling: emoji + accent colour per level bucket. Warning/critical are plain
-# cfg constants (never per-deploy overridden); error is a DB-backed setting (see
-# dd.common.settings), so its style is resolved at call time by _style() below instead
-# of being a module-level tuple like the other two.
-_WARNING_STYLE = ("⚠️", cfg.embed_warning_color)
-_CRITICAL_STYLE = ("🚨", cfg.embed_critical_color)
+# Severity styling: emoji per level bucket. The accent colour beside it is a DB-backed
+# setting for all three levels, resolved at call time by _style() below — warning and
+# critical used to be plain cfg constants, which made them the only colours on this path
+# that needed a redeploy to change. Each falls back to the literal it held there when no
+# row is set (see dd.common.settings._DEFAULTS).
+_WARNING_EMOJI = "⚠️"
+_CRITICAL_EMOJI = "🚨"
+_ERROR_EMOJI = "🛑"
 
 # Discord component budgets (kept conservatively under the hard limits).
 _MAX_TRACEBACK_CHARS = 1800
@@ -126,10 +128,10 @@ class _ReferenceFormatter(logging.Formatter):
 
 async def _style(levelno: int) -> tuple[str, h.Color]:
     if levelno >= logging.CRITICAL:
-        return _CRITICAL_STYLE
+        return _CRITICAL_EMOJI, await settings.get_embed_critical_color()
     if levelno >= logging.ERROR:
-        return "🛑", await settings.get_embed_error_color()
-    return _WARNING_STYLE
+        return _ERROR_EMOJI, await settings.get_embed_error_color()
+    return _WARNING_EMOJI, await settings.get_embed_warning_color()
 
 
 def _truncate_tail(text: str, limit: int) -> str:

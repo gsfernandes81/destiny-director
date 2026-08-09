@@ -19,7 +19,6 @@ import sys
 import typing as t
 from os import getenv as __getenv
 
-import hikari as h
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.pool import NullPool, Pool
@@ -324,10 +323,6 @@ mirror_retention_days = 14
 # Seconds an autopost announcer may stall (API offline / edit failing) before a
 # single critical alert fires for that run.
 announcer_offline_alert_after = 900
-# Accent colours for alert severities (hex, like the other embed colours).
-embed_warning_color = h.Color(0xF1C40F)
-embed_critical_color = h.Color(0x992D22)
-
 # Database URLs. DATABASE_PRIVATE_URL wins over DATABASE_URL — Railway injects both
 # and the private one stays on the internal network.
 db_url, db_url_async = _db_urls("DATABASE_PRIVATE_URL", "DATABASE_URL")

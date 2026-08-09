@@ -131,7 +131,7 @@ class _Setting(t.NamedTuple):
     category: str = ""
 
 
-# The seven global/ops rows, hand-written: they are not feeds, the catalog never
+# The eight global/ops rows, hand-written: they are not feeds, the catalog never
 # mentions them, and each piece of their copy exists exactly once.
 _GENERAL_SETTINGS: tuple[_Setting, ...] = (
     # --- Branding: colours + the fallback link, all "how a post looks by default" ----
@@ -148,6 +148,20 @@ _GENERAL_SETTINGS: tuple[_Setting, ...] = (
         "embed_error_color",
         "Error accent colour",
         "Shown on error/failure messages (e.g. a permissions problem).",
+        True,
+        "color",
+    ),
+    _Setting(
+        "embed_warning_color",
+        "Warning accent colour",
+        "Shown on WARNING alerts forwarded to the alerts channel.",
+        True,
+        "color",
+    ),
+    _Setting(
+        "embed_critical_color",
+        "Critical accent colour",
+        "Shown on CRITICAL alerts — the ones that also ping the owners.",
         True,
         "color",
     ),
