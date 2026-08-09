@@ -13,21 +13,23 @@
 # You should have received a copy of the GNU Affero General Public License along with
 # destiny-director. If not, see <https://www.gnu.org/licenses/>.
 
-"""Unit tests for the card-free drain watcher that replaces the progress card.
+"""Unit tests for the card-free drain watcher.
 
 The watcher polls the ledger until a run drains, then runs ``_log_run_summary`` (the
-failure escalation / ALERTS push — the one behaviour that must NOT regress when the card
-goes away) and posts a single never-edited result line. These pin: summary + line on
-drain, no finalisation on an empty ledger, the lifetime cap (no summary), that the
-failure push fires even if the cosmetic line send throws, and that a second event for a
-live source coalesces (one watcher) while a finished watcher is replaced.
+failure escalation / ALERTS push — the one behaviour that must never regress) and
+``_record_operation`` (the durable row ``/mirror-logs`` reads). These pin: both fire on
+drain, no finalisation on an empty ledger, the lifetime cap suppresses both, the
+escalation runs before the best-effort op-log write, and that a second event for a live
+source coalesces into one watcher while a finished watcher is replaced.
+
+The Discord result line these used to assert is gone with the log channel — the
+mirror-logs page is now the only place a run is read back.
 """
 
 import asyncio as aio
 from time import perf_counter
 from unittest.mock import AsyncMock, MagicMock
 
-import hikari as h
 import pytest
 
 from dd.beacon.extensions import mirror
@@ -37,16 +39,6 @@ from dd.common.schemas import DeliveryState
 pytestmark = pytest.mark.asyncio
 
 SRC = 31337
-# The log channel must be explicitly *inert* (no fetch at all) when unconfigured — see
-# dd.common.settings — so every test here that expects a result line configures one.
-_LOG_CHANNEL_ID = 555
-
-
-@pytest.fixture(autouse=True)
-def _log_channel_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        mirror.settings, "get_log_channel_id", AsyncMock(return_value=_LOG_CHANNEL_ID)
-    )
 
 
 def _view() -> RunView:
@@ -60,16 +52,13 @@ def _view() -> RunView:
     return view
 
 
-def _bot_with_log_channel() -> tuple[MagicMock, AsyncMock]:
-    send = AsyncMock()
-    channel = MagicMock(spec=h.TextableGuildChannel)
-    channel.send = send
-    bot = MagicMock()
-    bot.fetch_channel = AsyncMock(return_value=channel)
-    return bot, send
+@pytest.fixture(autouse=True)
+def _quiet_op_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the op-log write; the tests that care about it override this."""
+    monkeypatch.setattr(mirror, "_record_operation", AsyncMock())
 
 
-async def test_summary_and_result_line_on_drain(
+async def test_summarises_and_records_on_drain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -78,15 +67,14 @@ async def test_summary_and_result_line_on_drain(
         AsyncMock(return_value={DeliveryState.DELIVERED.value: 3}),
     )
     summary = MagicMock()
+    record = AsyncMock()
     monkeypatch.setattr(mirror, "_log_run_summary", summary)
-    bot, send = _bot_with_log_channel()
+    monkeypatch.setattr(mirror, "_record_operation", record)
 
-    await mirror._run_drain_watcher(bot, _view())
+    await mirror._run_drain_watcher(_view())
 
-    summary.assert_called_once()  # failure escalation / summary path still fires
-    send.assert_awaited_once()  # one result line posted
-    assert send.await_args is not None
-    assert "✅" in send.await_args.args[0]  # clean run
+    summary.assert_called_once()  # failure escalation / summary path
+    record.assert_awaited_once()  # the row /mirror-logs reads
 
 
 async def test_does_not_finalize_on_empty_ledger(
@@ -102,12 +90,10 @@ async def test_does_not_finalize_on_empty_ledger(
     monkeypatch.setattr(mirror.aio, "sleep", AsyncMock())  # instant poll
     summary = MagicMock()
     monkeypatch.setattr(mirror, "_log_run_summary", summary)
-    bot, send = _bot_with_log_channel()
 
-    await mirror._run_drain_watcher(bot, _view())
+    await mirror._run_drain_watcher(_view())
 
     summary.assert_called_once()  # finalised only after rows appeared
-    send.assert_awaited_once()
 
 
 async def test_lifetime_cap_incomplete_does_not_summarise(
@@ -120,19 +106,23 @@ async def test_lifetime_cap_incomplete_does_not_summarise(
         AsyncMock(return_value={DeliveryState.PENDING.value: 3}),  # never completes
     )
     summary = MagicMock()
+    record = AsyncMock()
     monkeypatch.setattr(mirror, "_log_run_summary", summary)
-    bot, send = _bot_with_log_channel()
+    monkeypatch.setattr(mirror, "_record_operation", record)
 
-    await mirror._run_drain_watcher(bot, _view())
+    await mirror._run_drain_watcher(_view())
 
     summary.assert_not_called()  # a stuck run is not summarised
-    send.assert_not_awaited()  # and no result line
+    record.assert_not_awaited()  # and leaves no settled row
 
 
-async def test_failure_push_survives_a_broken_result_line(
+async def test_failure_escalation_runs_before_the_op_log_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The failure escalation must fire even if posting the cosmetic line throws.
+    # Ordering is the invariant: the escalation must already have fired by the time the
+    # best-effort op-log write is attempted, so nothing about that write can cost us a
+    # page. (_record_operation swallows its own failures internally — see its docstring
+    # — so the watcher itself has no suppression to assert against here.)
     monkeypatch.setattr(
         mirror.MirrorDelivery,
         "state_counts",
@@ -143,50 +133,34 @@ async def test_failure_push_survives_a_broken_result_line(
             }
         ),
     )
-    summary = MagicMock()
-    monkeypatch.setattr(mirror, "_log_run_summary", summary)
-    bot = MagicMock()
-    channel = MagicMock(spec=h.TextableGuildChannel)
-    channel.send = AsyncMock(side_effect=RuntimeError("log channel gone"))
-    bot.fetch_channel = AsyncMock(return_value=channel)
-
-    await mirror._run_drain_watcher(bot, _view())  # must not raise
-
-    summary.assert_called_once()  # push fired before (and despite) the send failure
-
-
-async def test_result_line_flags_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    order: list[str] = []
     monkeypatch.setattr(
-        mirror.MirrorDelivery,
-        "state_counts",
-        AsyncMock(
-            return_value={
-                DeliveryState.DELIVERED.value: 8,
-                DeliveryState.FAILED.value: 2,
-            }
-        ),
+        mirror,
+        "_log_run_summary",
+        MagicMock(side_effect=lambda _v: order.append("push")),
     )
-    monkeypatch.setattr(mirror, "_log_run_summary", MagicMock())
-    bot, send = _bot_with_log_channel()
 
-    await mirror._run_drain_watcher(bot, _view())
+    async def _record(_v: RunView) -> None:
+        order.append("oplog")
 
-    assert send.await_args is not None
-    line = send.await_args.args[0]
-    assert "⚠️" in line and "2 failed" in line
+    monkeypatch.setattr(mirror, "_record_operation", _record)
+
+    await mirror._run_drain_watcher(_view())
+
+    assert order == ["push", "oplog"]
 
 
 async def test_start_coalesces_while_live(monkeypatch: pytest.MonkeyPatch) -> None:
     mirror._watchers.pop(SRC, None)
 
-    async def fake_watcher(_bot: object, _view: RunView, **_kw: object) -> None:
+    async def fake_watcher(_view: RunView) -> None:
         await aio.sleep(3600)
 
     monkeypatch.setattr(mirror, "_run_drain_watcher", fake_watcher)
 
-    mirror.start_drain_watcher(MagicMock(), _view())
+    mirror.start_drain_watcher(_view())
     first = mirror._watchers[SRC]
-    mirror.start_drain_watcher(MagicMock(), _view())  # coalesces — no new task
+    mirror.start_drain_watcher(_view())  # coalesces — no new task
     second = mirror._watchers[SRC]
 
     try:
@@ -200,21 +174,21 @@ async def test_start_coalesces_while_live(monkeypatch: pytest.MonkeyPatch) -> No
 async def test_finished_watcher_is_replaced(monkeypatch: pytest.MonkeyPatch) -> None:
     mirror._watchers.pop(SRC, None)
 
-    async def instant(_bot: object, _view: RunView, **_kw: object) -> None:
+    async def instant(_view: RunView) -> None:
         return
 
     monkeypatch.setattr(mirror, "_run_drain_watcher", instant)
-    mirror.start_drain_watcher(MagicMock(), _view())
+    mirror.start_drain_watcher(_view())
     first = mirror._watchers.get(SRC)
     if first is not None:
         await first
         await aio.sleep(0)  # let the done-callback evict it
 
-    async def long(_bot: object, _view: RunView, **_kw: object) -> None:
+    async def long(_view: RunView) -> None:
         await aio.sleep(3600)
 
     monkeypatch.setattr(mirror, "_run_drain_watcher", long)
-    mirror.start_drain_watcher(MagicMock(), _view())  # spawns fresh
+    mirror.start_drain_watcher(_view())  # spawns fresh
     second = mirror._watchers[SRC]
 
     try:

@@ -91,10 +91,9 @@ async def test_starts_single_update_watcher_once_delivered(
     await _run(bot)
 
     watcher.assert_called_once()
-    view = watcher.call_args.args[1]
+    view = watcher.call_args.args[0]
     assert isinstance(view, RunView)
     assert view.op is MirrorOperationType.UPDATE
-    assert "source_message" in watcher.call_args.kwargs
     worker.nudge.assert_called_once()
 
 

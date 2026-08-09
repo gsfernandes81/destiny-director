@@ -207,8 +207,7 @@ async def test_disable_bad_channels_reflects_a_saved_row():
     assert await settings.get_disable_bad_channels() is True
 
 
-async def test_log_and_alerts_channel_id_default_to_zero():
-    assert await settings.get_log_channel_id() == 0
+async def test_alerts_channel_id_defaults_to_zero():
     assert await settings.get_alerts_channel_id() == 0
 
 

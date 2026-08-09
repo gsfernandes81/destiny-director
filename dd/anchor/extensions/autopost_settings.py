@@ -24,7 +24,7 @@ separate:
   slash commands (plus ``/ls details`` and ``/xur default_image``) duplicated this and
   were removed 2026-08-04.
 - Every setting :mod:`dd.common.settings` resolves — colors, the default link URL, the
-  alert level, the log/alerts channels, ``disable_bad_channels``, and every followable's
+  alert level, the alerts channel, ``disable_bad_channels``, and every followable's
   post channel. These used to be env vars (``EMBED_DEFAULT_COLOR``, ``FOLLOWABLES``,
   ...) that needed a redeploy to change; they are now the same ``auto_post_settings``
   table rows, just not tied to a feed toggle — and this page is their ONLY writer: no
@@ -101,7 +101,7 @@ class _Setting(t.NamedTuple):
       "never set"; a followable's channel cannot be cleared at all, see
       :data:`_UNCLEARABLE_CHANNEL_SLUGS`). ``channel_scope`` picks which guild(s) the
       picker offers: ``"kyber"`` (where every followable posts) or ``"kyber_control"``
-      (log/alerts channels, which could be in either).
+      (the alerts channel, which could be in either).
     """
 
     slug: str
@@ -119,8 +119,8 @@ class _Setting(t.NamedTuple):
     #: every followable's post channel — a channel other servers *follow* (crossposting,
     #: see MirroredChannel) must be an announcement channel, a plain text channel cannot
     #: be followed at all — and the default, since that covers most "channel" settings.
-    #: False for log_channel_id/alerts_channel_id: nothing follows them, the bot only
-    #: sends there directly, so a plain text channel works fine too.
+    #: False for alerts_channel_id: nothing follows it, the bot only sends there
+    #: directly, so a plain text channel works fine too.
     announce_only: bool = True
     #: A group's display title, set on its FIRST setting only (``sub=False``). Rendered
     #: above the group's rows rather than reusing that first setting's own ``label``,
@@ -175,16 +175,6 @@ _GENERAL_SETTINGS: tuple[_Setting, ...] = (
         "Disable a legacy mirror destination once it stays unreachable past the grace "
         "window.",
         True,
-    ),
-    _Setting(
-        "log_channel_id",
-        "Log channel",
-        "Where each mirror run's one-line result summary posts. Inert (nothing is "
-        "sent) while unset.",
-        True,
-        "channel",
-        channel_scope="kyber_control",
-        announce_only=False,
     ),
     _Setting(
         "alerts_channel_id",
@@ -776,7 +766,7 @@ async def _handle_channels(request: aiohttp.web.Request) -> aiohttp.web.Response
     each field's ``data-scope`` (which guild(s)) and ``data-announce-only`` (whether a
     plain text channel is even eligible: a followable's post channel must be an
     announcement channel for Discord's native "Follow Channel" to work at all, unlike
-    log_channel_id/alerts_channel_id, which the bot only ever sends to directly) —
+    alerts_channel_id, which the bot only ever sends to directly) —
     rather than one REST round trip per field. Those two filters keep the picker honest
     for whoever is using it; _channel_problem re-applies both server-side at save time,
     which is where they're actually enforced. Best-effort per guild: a guild the bot

@@ -20,11 +20,11 @@ ledger.
 The Discord fan-out itself lives in :mod:`dd.beacon.mirror_worker`. This module's
 listeners do one transactional enqueue each (send/edit/delete) and start a lightweight
 drain watcher that polls the ledger until the run drains, then escalates any failures
-and posts one never-edited result line. The live, per-destination view of a run lives
-on the anchor web mirror-log page (``/mirror-logs``) — there is no editable Discord
-card. A separate low-load task sweeps destination reachability + send perms and disables
-mirrors that stay unreachable past a grace window — the delivery hot path does no
-perm-probing.
+and records the run in the operation log. Everything a human reads about a run lives on
+the anchor web mirror-log page (``/mirror-logs``) — there is no Discord card and no
+Discord result line. A separate low-load task sweeps destination reachability + send
+perms and disables mirrors that stay unreachable past a grace window — the delivery hot
+path does no perm-probing.
 """
 
 import asyncio as aio
@@ -33,7 +33,6 @@ import contextlib
 import datetime as dt
 import logging
 import math
-import re
 import typing as t
 from random import randint
 from time import perf_counter
@@ -67,44 +66,9 @@ from ..mirror_worker import mirror_worker
 
 loader = lb.Loader()
 
-re_markdown_link = re.compile(r"\[(.*?)\]\(.*?\)")
-
 
 # Bounded transient-retry budget for a gateway handler's single ledger write.
 _HANDLER_DB_MAX_TRIES = 5
-
-
-def _get_message_summary(msg: h.Message, default: str = "Link") -> str:
-    # Prefer the first line of the message content; fall back to the first embed
-    # title/description when the message has no text content.
-    summary = ""
-    if msg.content:
-        summary = msg.content.split("\n")[0]
-
-    if not summary:
-        for embed in msg.embeds:
-            if embed.title:
-                summary = embed.title
-                break
-            if embed.description:
-                summary = embed.description.split("\n")[0]
-                break
-
-    if not summary:
-        return default
-
-    summary = summary.replace("*", "")
-    summary = summary.replace("_", "")
-    summary = summary.replace("#", "")
-    summary = summary.strip("{}")
-    summary = summary.strip("<>")
-    summary = summary.capitalize()
-
-    # Use re_markdown_link to remove links replacing
-    # them with just the text unless the text is empty
-    summary = re_markdown_link.sub(r"\1", summary) or summary
-
-    return summary
 
 
 # Strong reference to the one-shot post-restart backlog-recovery task (same weak-ref
@@ -265,12 +229,7 @@ _WATCHER_POLL_INTERVAL = 5
 _WATCHER_MAX_LIFETIME = 7 * 60 * 60
 
 
-def start_drain_watcher(
-    bot: CachedFetchBot,
-    view: RunView,
-    *,
-    source_message: h.Message | None = None,
-) -> None:
+def start_drain_watcher(view: RunView) -> None:
     """Ensure a single drain watcher runs for this source (coalescing).
 
     One watcher per ``src_msg_id``. A second event while a watcher is still live is a
@@ -282,7 +241,7 @@ def start_drain_watcher(
     existing = _watchers.get(view.src_msg_id)
     if existing is not None and not existing.done():
         return
-    task = aio.create_task(_run_drain_watcher(bot, view, source_message=source_message))
+    task = aio.create_task(_run_drain_watcher(view))
     _watchers[view.src_msg_id] = task
     task.add_done_callback(
         lambda done, sid=view.src_msg_id: (
@@ -291,13 +250,8 @@ def start_drain_watcher(
     )
 
 
-async def _run_drain_watcher(
-    bot: CachedFetchBot,
-    view: RunView,
-    *,
-    source_message: h.Message | None = None,
-) -> None:
-    """Poll the ledger until the run drains, then summarise + post one result line.
+async def _run_drain_watcher(view: RunView) -> None:
+    """Poll the ledger until the run drains, then summarise it.
 
     Progress is read straight from ``state_counts`` (the single source of truth), so a
     run enlarged by a mid-flight edit (re-armed PENDING rows) simply keeps the watcher
@@ -314,49 +268,13 @@ async def _run_drain_watcher(
         complete = view.counts.total > 0 and view.counts.is_complete
         if complete or (perf_counter() - started > _WATCHER_MAX_LIFETIME):
             if complete:
-                # Failure escalation + dedup (unchanged), the durable op-log row, then
-                # the visible result line.
+                # Failure escalation + dedup, then the durable op-log row that
+                # /mirror-logs reads. There is no Discord-side result line any more:
+                # it duplicated the page and was the log channel's last consumer.
                 _log_run_summary(view)
                 await _record_operation(view)
-                await _post_run_summary_line(bot, view, source_message)
             return
         await aio.sleep(_WATCHER_POLL_INTERVAL)
-
-
-async def _post_run_summary_line(
-    bot: CachedFetchBot,
-    view: RunView,
-    source_message: h.Message | None,
-) -> None:
-    """Post one never-edited result line for a drained run to the log channel.
-
-    Best-effort and strictly cosmetic: it runs *after* ``_log_run_summary`` so a failed
-    send can never swallow the failure escalation. Detail lives on the web mirror-log
-    page (``/mirror-logs``); this line is the at-a-glance Discord confirmation.
-    """
-    log_channel_id = await settings.get_log_channel_id()
-    if not log_channel_id:
-        # No log channel configured (Autopost Settings) — inert by design, not by the
-        # suppress(Exception) below happening to swallow a fetch_channel(0) error.
-        return
-
-    counts = view.counts
-    label = (
-        _get_message_summary(source_message)
-        if source_message is not None
-        else str(view.src_msg_id)
-    )
-    elapsed = format_duration(perf_counter() - view.start_time)
-    icon = "⚠️" if counts.failed else "✅"
-    text = (
-        f"{icon} Mirror {view.op.name.lower()} for **{label}** — "
-        f"{counts.delivered} ok, {counts.failed} failed, {counts.cancelled} cancelled "
-        f"in {elapsed}. Detail on the mirror-logs page."
-    )
-    with contextlib.suppress(Exception):
-        log_channel = await bot.fetch_channel(log_channel_id)
-        if isinstance(log_channel, h.TextableGuildChannel):
-            await log_channel.send(text)
 
 
 @loader.task(
@@ -465,7 +383,7 @@ async def _recover_backlog_watchers(bot: CachedFetchBot) -> None:
             start_time=perf_counter(),
         )
         try:
-            start_drain_watcher(bot, view)
+            start_drain_watcher(view)
         except Exception:
             logging.exception(
                 "failed to start recovery drain watcher for %s", src_msg_id
@@ -678,7 +596,7 @@ async def message_create_repeater_impl(
     with contextlib.suppress(Exception):
         msg = await bot.rest.fetch_message(msg.channel_id, msg.id)
 
-    start_drain_watcher(bot, view, source_message=msg)
+    start_drain_watcher(view)
     mirror_worker.nudge()
 
 
@@ -748,7 +666,7 @@ async def message_update_repeater_impl(msg: h.Message, bot: CachedFetchBot):
     with contextlib.suppress(Exception):
         msg = await bot.rest.fetch_message(msg.channel_id, msg.id)
 
-    start_drain_watcher(bot, view, source_message=msg)
+    start_drain_watcher(view)
     mirror_worker.nudge()
 
 
@@ -784,7 +702,7 @@ async def message_delete_repeater_impl(
         src_msg_id=msg_id,
         start_time=perf_counter(),
     )
-    start_drain_watcher(bot, view, source_message=msg)
+    start_drain_watcher(view)
     mirror_worker.nudge()
 
 

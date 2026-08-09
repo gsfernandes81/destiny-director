@@ -88,7 +88,6 @@ _DEFAULTS: dict[str, tuple[bool | None, str | None]] = {
     "default_url": (None, ""),
     "alert_min_level": (None, "ERROR"),
     "disable_bad_channels": (False, None),
-    "log_channel_id": (None, "0"),
     "alerts_channel_id": (None, "0"),
 }
 
@@ -288,10 +287,6 @@ async def get_alert_min_level() -> str:
 
 async def get_disable_bad_channels() -> bool:
     return await _get_enabled("disable_bad_channels")
-
-
-async def get_log_channel_id() -> int:
-    return int(await _get_value("log_channel_id") or 0)
 
 
 async def get_alerts_channel_id() -> int:

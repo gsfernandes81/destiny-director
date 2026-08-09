@@ -109,7 +109,7 @@ async def test_the_page_names_exactly_the_catalog_s_feed_channels() -> None:
     # catalog would render fine while sitting outside FOLLOWABLE_SLUGS, and therefore
     # outside _UNCLEARABLE_CHANNEL_SLUGS: clearable, which no feed channel may be.
     channel_rows = {s.slug for s in aps._SETTINGS if s.kind == "channel"}
-    assert channel_rows - {"log_channel_id", "alerts_channel_id"} == {
+    assert channel_rows - {"alerts_channel_id"} == {
         f.channel_key for f in dd_feeds.FOLLOWABLES
     }
 
@@ -253,7 +253,6 @@ async def test_render_category_rows_are_flat_peers_not_indented() -> None:
         "default_url",
         "alert_min_level",
         "disable_bad_channels",
-        "log_channel_id",
     ):
         assert 'class="row sub' not in _row_start(slug), (
             f"{slug} row is unexpectedly indented"
@@ -284,7 +283,6 @@ async def test_render_category_rows_are_all_dark_under_a_light_header() -> None:
         "default_url",
         "alert_min_level",
         "disable_bad_channels",
-        "log_channel_id",
         "alerts_channel_id",
     ):
         assert 'class="row flat-alt' in _row_start(slug), f"{slug} row is not dark"
@@ -675,11 +673,10 @@ async def test_render_shows_the_saved_row_for_a_followable() -> None:
 
 
 @pytest.mark.integration
-async def test_render_log_and_alerts_channel_scope_kyber_and_control() -> None:
+async def test_render_alerts_channel_scope_is_kyber_control() -> None:
     html_out = await aps._render_html()
 
-    for slug in ("log_channel_id", "alerts_channel_id"):
-        assert f'data-slug="{slug}" data-scope="kyber_control"' in html_out
+    assert 'data-slug="alerts_channel_id" data-scope="kyber_control"' in html_out
 
 
 @pytest.mark.integration
@@ -688,8 +685,8 @@ async def test_render_followable_channels_are_announce_only_log_alerts_are_not()
 ):
     # A followable channel is FOLLOWED by other servers (MirroredChannel), which Discord
     # only allows from an announcement channel — a plain text channel can't be followed
-    # at all. log_channel_id/alerts_channel_id are never followed (the bot just sends
-    # there), so any postable channel is fine for those.
+    # at all. alerts_channel_id is never followed (the bot just sends there), so any
+    # postable channel is fine for it.
     html_out = await aps._render_html()
 
     assert 'data-slug="lost_sector_channel"' in html_out
@@ -697,12 +694,10 @@ async def test_render_followable_channels_are_announce_only_log_alerts_are_not()
         'data-scope="kyber" data-required="true" data-announce-only="true"'
         in html_out.split('data-slug="lost_sector_channel"')[1][:150]
     )
-    for slug in ("log_channel_id", "alerts_channel_id"):
-        assert (
-            'data-scope="kyber_control" data-required="false" '
-            'data-announce-only="false"'
-            in html_out.split(f'data-slug="{slug}"')[1][:150]
-        )
+    assert (
+        'data-scope="kyber_control" data-required="false" data-announce-only="false"'
+        in html_out.split('data-slug="alerts_channel_id"')[1][:150]
+    )
 
 
 async def _allow_channel_permission(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -754,15 +749,15 @@ async def test_handle_save_refreshes_sync_readers_too(
 async def test_handle_save_blank_channel_stores_zero_not_null() -> None:
     # Unlike a url/color row, a cleared channel stores "0" rather than NULL, so a
     # cleared channel reads back as an explicit "dormant" rather than as "no row yet".
-    await schemas.AutoPostSettings.set_value("log_channel_id", "999")
+    await schemas.AutoPostSettings.set_value("alerts_channel_id", "999")
 
     resp = await aps._handle_save(
-        _as_request(_FakeRequest({"settings": {"log_channel_id": ""}}))
+        _as_request(_FakeRequest({"settings": {"alerts_channel_id": ""}}))
     )
 
     assert resp.status == 200
-    assert await schemas.AutoPostSettings.get_value("log_channel_id") == "0"
-    assert await settings.get_log_channel_id() == 0
+    assert await schemas.AutoPostSettings.get_value("alerts_channel_id") == "0"
+    assert await settings.get_alerts_channel_id() == 0
 
 
 @pytest.mark.integration
@@ -843,7 +838,7 @@ async def test_handle_save_rejects_non_numeric_channel() -> None:
 # be an announcement channel, Kyber only) and the log channel (any postable type,
 # either guild).
 _ANNOUNCE_SETTING = aps._CHANNEL_SETTINGS["xur_channel"]
-_LOG_SETTING = aps._CHANNEL_SETTINGS["log_channel_id"]
+_ALERTS_SETTING = aps._CHANNEL_SETTINGS["alerts_channel_id"]
 
 # The two guilds the page's pickers may offer, as the _guild_ids fixture patches them.
 _KYBER_GUILD_ID, _CONTROL_GUILD_ID = 111, 222
@@ -923,12 +918,12 @@ async def test_handle_save_clearing_a_channel_skips_the_permission_check(
     monkeypatch.setattr(aps, "_channel_problem", _record)
 
     resp = await aps._handle_save(
-        _as_request(_FakeRequest({"settings": {"log_channel_id": ""}}))
+        _as_request(_FakeRequest({"settings": {"alerts_channel_id": ""}}))
     )
 
     assert resp.status == 200
     assert calls == []  # clearing to dormant never needs a permission check
-    assert await schemas.AutoPostSettings.get_value("log_channel_id") == "0"
+    assert await schemas.AutoPostSettings.get_value("alerts_channel_id") == "0"
 
 
 async def test_channel_problem_before_bot_ready(
@@ -1080,15 +1075,15 @@ async def test_channel_problem_rejects_a_text_channel_for_a_followable(
     assert "announcement channel" in problem
 
 
-async def test_channel_problem_allows_a_text_channel_for_the_log_channel(
+async def test_channel_problem_allows_a_text_channel_for_the_alerts_channel(
     monkeypatch: pytest.MonkeyPatch, _guild_ids: tuple[int, int]
 ) -> None:
-    # Nothing follows the log channel — the bot only sends to it — so a plain text
+    # Nothing follows the alerts channel — the bot only sends to it — so a plain text
     # channel is fine there, unlike a followable's post channel.
     monkeypatch.setattr(web, "_bot", _fake_channel_bot(kind=h.ChannelType.GUILD_TEXT))
     _permit_everything(monkeypatch)
 
-    assert await aps._channel_problem(_LOG_SETTING, 555) is None
+    assert await aps._channel_problem(_ALERTS_SETTING, 555) is None
 
 
 async def test_channel_problem_rejects_a_channel_outside_the_settings_scope(
@@ -1113,7 +1108,7 @@ async def test_channel_problem_allows_the_control_guild_for_a_control_scoped_set
     monkeypatch.setattr(web, "_bot", _fake_channel_bot(guild_id=control))
     _permit_everything(monkeypatch)
 
-    assert await aps._channel_problem(_LOG_SETTING, 555) is None
+    assert await aps._channel_problem(_ALERTS_SETTING, 555) is None
 
 
 @pytest.mark.integration
