@@ -46,6 +46,21 @@ unavailable_reason: str | None = None
 last_message_channel_id: int = 0
 
 
+def _forget_cached_message() -> None:
+    """Stop serving whatever was cached, because the source is no longer usable.
+
+    Zeroing only ``last_message_channel_id`` was not enough: the command gates solely
+    on ``last_message_in_channel``, so a feed moved to a channel beacon cannot open
+    went on repeating the *old* channel's post while ``unavailable_reason`` said the
+    channel was unreachable — the same "looks right, and is not" failure the moved-to-
+    an-empty-channel branch below exists to prevent, one state along.
+    """
+    global last_message_in_channel, last_message_in_channel_id, last_message_channel_id
+    last_message_in_channel = None
+    last_message_in_channel_id = 0
+    last_message_channel_id = 0
+
+
 async def refresh_message_for_command(bot: CachedFetchBot, *, alert: bool = True):
     global last_message_in_channel_id
     global last_message_in_channel
@@ -60,11 +75,11 @@ async def refresh_message_for_command(bot: CachedFetchBot, *, alert: bool = True
     )
     if channel is None:
         unavailable_reason = reason
-        last_message_channel_id = 0
+        _forget_cached_message()
         return
     if not isinstance(channel, h.TextableChannel):
         unavailable_reason = utils.FEED_UNREACHABLE
-        last_message_channel_id = 0
+        _forget_cached_message()
         if alert:
             logging.critical(
                 "Free Games followable channel %s is not a textable channel — /free "
@@ -156,7 +171,12 @@ async def on_start(event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED):
     await refresh_message_for_command(bot)
 
 
-async def _on_channel_change(_channel_id: int) -> None:
+#: The channel the last open was attempted against; -1 = never. Only used to decide
+#: whether to alert — see _on_channel_change.
+_last_attempt: int = -1
+
+
+async def _on_channel_change(channel_id: int) -> None:
     """Re-read the history when the feed is pointed at a different channel.
 
     The listeners above already watch whichever channel is configured *now*, but they
@@ -164,12 +184,20 @@ async def _on_channel_change(_channel_id: int) -> None:
     already has posts in it left ``/free games`` repeating the old channel's message
     (or answering "unavailable") until somebody restarted the bot.
 
-    ``alert`` goes False once the feed is known broken, so a channel that stays
-    unreachable pages us once rather than once per reconciler tick.
+    Alerting is keyed on the channel, not on whether the feed was previously healthy,
+    which is the rule ``nav.NavPagesHolder.reopen`` follows and the one the reconcile
+    tests pin: a still-broken channel retried on every tick must stay quiet, but moving
+    to a *different* broken channel is new information and has to reach the owners.
+    Keying it on the previous state got the first half right and the second wrong —
+    and the settings page validates a channel with *anchor's* bot, so a channel beacon
+    cannot read passes validation and lands here looking fine.
     """
+    global _last_attempt
     if _bot is None:
         return  # not started yet; on_start does the first read
-    await refresh_message_for_command(_bot, alert=unavailable_reason is None)
+    alert = channel_id != _last_attempt
+    _last_attempt = channel_id
+    await refresh_message_for_command(_bot, alert=alert)
 
 
 utils.watch_feed_channel(

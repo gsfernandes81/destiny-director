@@ -334,17 +334,24 @@ class DiscordLogHandler(logging.Handler):
         # A storm promotes any lower level to CRITICAL; pinging is gated solely on
         # the effective level being CRITICAL (and debounced per signature).
         effective_level = logging.CRITICAL if storm else rec.levelno
+        # Resolved per send, not held from boot: the alerts channel is a setting, and
+        # one you would most plausibly change *because* something is wrong. 0 means no
+        # channel configured — inert, and not worth rendering for.
+        #
+        # Checked BEFORE _ping_allowed, which records the signature's time as a side
+        # effect: an alert that goes nowhere used to spend the 600s debounce slot
+        # anyway, so configuring the channel inside that window and hitting the same
+        # signature sent the alert with the owner ping suppressed. Unreachable before
+        # this path existed — the handler was never installed without a channel.
+        channel_id = await settings.get_alerts_channel_id()
+        if not channel_id:
+            return
+
         ping = (
             effective_level >= logging.CRITICAL
             and bool(self._owner_ids)
             and self._ping_allowed(rec.signature, now)
         )
-        # Resolved per send, not held from boot: the alerts channel is a setting, and
-        # one you would most plausibly change *because* something is wrong. 0 means no
-        # channel configured — inert, and not worth rendering for.
-        channel_id = await settings.get_alerts_channel_id()
-        if not channel_id:
-            return
 
         components = await self._render(rec, effective_level=effective_level, ping=ping)
 
@@ -620,7 +627,10 @@ def install_command_error_reporting(client: lb.Client) -> None:
 # replayed to Discord once the bot is online. This runs before the DB is connected, so
 # it can't read the live alert_min_level setting (dd.common.settings) — ERROR matches
 # that setting's own default, so an unconfigured deploy behaves identically either way.
-# install_discord_logging re-applies the live level to the real handler once it can.
+# Nothing re-applies a level to the real handler either: it is constructed at the
+# fixed _QUEUE_FLOOR and the live minimum is applied per flush, so the buffer's
+# ERROR floor is simply what is captured before the DB exists — buffered records
+# below ERROR are lost, deliberately, rather than corrected later.
 _startup_buffer: "_StartupBufferHandler | None"
 _buffer = _StartupBufferHandler(level=logging.ERROR)
 logging.getLogger().addHandler(_buffer)

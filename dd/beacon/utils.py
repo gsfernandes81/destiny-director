@@ -16,6 +16,7 @@
 import enum
 import inspect
 import logging
+import time
 import typing as t
 
 import hikari as h
@@ -500,8 +501,20 @@ def watch_feed_channel(
     _feed_channel_watchers.append((feed, current, on_change))
 
 
-#: Feeds already paged for being dormant, so the sweep below is edge-triggered.
-_dormant_feeds: set[str] = set()
+#: Feed slug -> when it was last paged for being dormant. Edge-triggered *and* slowly
+#: repeating; see :data:`_DORMANT_REPAGE_INTERVAL`.
+_dormant_feeds: dict[str, float] = {}
+
+#: How long a dormant feed stays quiet after being paged for. Not forever, because
+#: emitting an alert is not the same as delivering one: the sweep's very first run on a
+#: fresh install happens while ``alerts_channel_id`` is still 0, and
+#: ``discord_logging._send_alert`` drops a record it has nowhere to send. At-most-once
+#: emission feeding at-most-once delivery meant configuring the alerts channel five
+#: minutes later delivered nothing, and the only signal that twelve feeds were dormant
+#: was gone until someone restarted the bot. Repeating slowly also covers every other
+#: way an alert can be lost — a full queue, Discord down, a restart mid-flush — without
+#: needing the sweep to know about any of them.
+_DORMANT_REPAGE_INTERVAL = 6 * 60 * 60.0
 
 
 async def sweep_dormant_feeds() -> None:
@@ -523,10 +536,10 @@ async def sweep_dormant_feeds() -> None:
     at import and was never re-evaluated.
 
     Being a sweep instead makes it **edge-triggered**: it pages when a feed becomes
-    dormant and goes quiet after, and it notices a feed leaving that state. Which
-    matters now that a channel can be picked while the bots are running — the old
-    version paged once at boot and then stood as the last word on a feed that might
-    have been configured a minute later.
+    dormant, goes quiet for :data:`_DORMANT_REPAGE_INTERVAL` after, and notices a feed
+    leaving that state. Which matters now that a channel can be picked while the bots
+    are running — the old version paged once at boot and then stood as the last word on
+    a feed that might have been configured a minute later.
 
     Costs nothing to run often: :data:`dd.common.settings` serves all twelve reads out
     of one cached snapshot, so this rides the reconciler's tick.
@@ -536,15 +549,16 @@ async def sweep_dormant_feeds() -> None:
         settings,
     )
 
+    now = time.monotonic()
     for followable in dd_feeds.FOLLOWABLES:
         if await settings.get_followable_channel(followable.slug):
-            if followable.slug in _dormant_feeds:
-                _dormant_feeds.discard(followable.slug)
+            if _dormant_feeds.pop(followable.slug, None) is not None:
                 logger.info("%s is no longer dormant", followable.display_name)
             continue
-        if followable.slug in _dormant_feeds:
-            continue  # already paged for, and nobody has changed it since
-        _dormant_feeds.add(followable.slug)
+        paged_at = _dormant_feeds.get(followable.slug)
+        if paged_at is not None and now - paged_at < _DORMANT_REPAGE_INTERVAL:
+            continue  # paged for recently, and nobody has changed it since
+        _dormant_feeds[followable.slug] = now
         logger.critical(
             "%s has no channel set — it posts nothing and its commands will answer "
             "'unavailable' until one is picked on the Autopost Settings page.",

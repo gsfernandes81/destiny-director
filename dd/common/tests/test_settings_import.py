@@ -360,3 +360,35 @@ async def test_a_channel_cleared_on_the_page_stays_cleared(_prod_env: None) -> N
     await _import()
 
     assert await settings.get_alerts_channel_id() == 0
+
+
+async def test_an_absent_followables_names_every_feed_it_did_not_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The one-shot failure this module cannot afford: FOLLOWABLES defined on another
+    # service, renamed, or deleted early. It used to produce a report with no mention
+    # of the twelve channels at all — "N setting(s) to write … Written.", exit 0 — and
+    # the mapping was then gone with the variable.
+    monkeypatch.delenv("FOLLOWABLES", raising=False)
+    monkeypatch.setenv("ALERTS_CHANNEL_ID", "123")
+    rows = await schemas.AutoPostSettings.get_all_rows()
+
+    changes = await settings_import.collect(rows, overwrite=False)
+
+    reported = {c.slug for c in changes if c.skip.startswith("FOLLOWABLES is not set")}
+    assert reported == {f.channel_key for f in dd_feeds.FOLLOWABLES}
+    assert "FOLLOWABLES" in settings_import.format_report(changes, execute=True)
+
+
+async def test_an_absent_bool_var_is_reported_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DISABLE_BAD_CHANNELS", raising=False)
+    monkeypatch.setenv("ALERTS_CHANNEL_ID", "123")
+    rows = await schemas.AutoPostSettings.get_all_rows()
+
+    changes = await settings_import.collect(rows, overwrite=False)
+
+    row = next(c for c in changes if c.slug == "disable_bad_channels")
+    assert not row.writes
+    assert "not set in the environment" in row.skip

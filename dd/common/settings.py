@@ -52,12 +52,18 @@ guild, right channel type, bot can actually post there — see
 ``dd.anchor.extensions.autopost_settings._channel_problem``). A fresh install therefore
 starts fully dormant and is configured on the page, once.
 
-**Alerting reads never raise.** The alerts channel, the alert level and the three
-severity colours are read through :func:`_get_value_for_alerting`, which swallows a
-failed refresh and serves the cache — or the built-in default — instead. Everything
-else here is free to propagate a DB error to its caller, but an alert is wanted most
-precisely when the database is unreachable, so nothing on that path may depend on it
-answering, answering quickly, or answering sensibly.
+**Alerting reads never raise.** The alerts channel and the three severity colours are
+read through :func:`_get_value_for_alerting`, which swallows a failed refresh and
+serves the cache — or the built-in default — instead. Everything else here is free to
+propagate a DB error to its caller, but an alert is wanted most precisely when the
+database is unreachable, so nothing on that path may depend on it answering, answering
+quickly, or answering sensibly.
+
+The alert *level* is the exception, and goes further: :func:`get_alert_min_level` does
+its own refresh-and-degrade so it can tell "no row saved" from "the database never
+answered", and **fails open** on the second — resolving to DEBUG rather than to the
+configured default, so an outage makes alerting noisier instead of quieter. Its
+docstring has the reasoning.
 """
 
 import asyncio

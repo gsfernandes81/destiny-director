@@ -118,8 +118,8 @@ async def _start(loader: lb.Loader) -> None:
 
 @pytest.fixture(autouse=True)
 def _forget_dormant_feeds(monkeypatch: pytest.MonkeyPatch) -> t.Iterator[None]:
-    """The sweep's "already paged for" set is process-global; give each test its own."""
-    monkeypatch.setattr(utils, "_dormant_feeds", set())
+    """The sweep's "paged at" map is process-global; give each test its own."""
+    monkeypatch.setattr(utils, "_dormant_feeds", {})
     yield
 
 
@@ -471,3 +471,74 @@ async def test_free_games_keeps_its_message_when_the_same_channel_is_refreshed(
 
     assert free_games.last_message_in_channel is cached
     assert free_games.last_message_in_channel_id == 1001
+
+
+async def test_a_still_dormant_feed_is_paged_again_after_the_repage_interval(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Emitting an alert is not delivering one. The sweep's first run on a fresh install
+    # happens while alerts_channel_id is still 0, and discord_logging drops a record it
+    # has nowhere to send — so at-most-once emission meant configuring the channel five
+    # minutes later delivered nothing at all. The suppression is time-bounded for that,
+    # and for every other way an alert can be lost.
+    monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=0))
+    await utils.sweep_dormant_feeds()
+
+    with caplog.at_level(logging.CRITICAL):
+        caplog.clear()  # caplog accumulates for the whole test, not just this block
+        await utils.sweep_dormant_feeds()
+        assert not _criticals(caplog)  # still inside the window
+
+        for slug in utils._dormant_feeds:
+            utils._dormant_feeds[slug] -= utils._DORMANT_REPAGE_INTERVAL + 1
+        await utils.sweep_dormant_feeds()
+
+    assert len(_criticals(caplog)) == len(dd_feeds.FOLLOWABLES)
+
+
+async def test_free_games_stops_serving_a_post_from_a_channel_it_cannot_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The command gates only on last_message_in_channel, so leaving it set while
+    # unavailable_reason said "unreachable" meant /free games kept repeating the OLD
+    # channel's post — looks right, and is not.
+    monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=99))
+    monkeypatch.setattr(free_games, "last_message_in_channel", MagicMock())
+    monkeypatch.setattr(free_games, "last_message_in_channel_id", 1001)
+    monkeypatch.setattr(free_games, "last_message_channel_id", 42)
+    monkeypatch.setattr(free_games, "unavailable_reason", None)
+    bot = MagicMock()
+    bot.fetch_channel = AsyncMock(
+        side_effect=h.NotFoundError(url="", headers={}, raw_body=b"")
+    )
+
+    await free_games.refresh_message_for_command(bot)
+
+    assert free_games.last_message_in_channel is None
+    assert free_games.unavailable_reason == utils.FEED_UNREACHABLE
+
+
+async def test_free_games_pages_again_for_a_different_broken_channel(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Same invariant nav is held to: a retry of the same broken channel stays quiet, but
+    # being moved to a *different* broken one is new information. The settings page
+    # validates with anchor's bot, so a channel beacon cannot read passes validation.
+    monkeypatch.setattr(free_games, "_last_attempt", -1)
+    monkeypatch.setattr(free_games, "last_message_channel_id", 0)
+    monkeypatch.setattr(free_games, "unavailable_reason", None)
+    monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=200))
+    bot = MagicMock()
+    bot.fetch_channel = AsyncMock(
+        side_effect=h.NotFoundError(url="", headers={}, raw_body=b"")
+    )
+    monkeypatch.setattr(free_games, "_bot", bot)
+
+    with caplog.at_level(logging.CRITICAL):
+        await free_games._on_channel_change(200)
+        assert len(_criticals(caplog)) == 1
+        await free_games._on_channel_change(200)  # same channel, retried
+        assert len(_criticals(caplog)) == 1
+        await free_games._on_channel_change(300)  # a different broken channel
+
+    assert len(_criticals(caplog)) == 2

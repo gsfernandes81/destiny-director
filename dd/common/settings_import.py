@@ -179,7 +179,23 @@ def _followable_changes(
     """
     raw = os.environ.get("FOLLOWABLES", "").strip()
     if not raw:
-        return []
+        # One row per feed saying so, rather than an empty list. Returning [] printed a
+        # report with no mention of the twelve channels at all, said "N setting(s) to
+        # write … Written." and exited 0 — so a FOLLOWABLES defined on another service,
+        # renamed, or deleted early read as a clean run, and the channel mapping was
+        # gone with the variable. Absence is a finding, and this module's rule is that
+        # findings are named.
+        return [
+            Change(
+                slug=followable.channel_key,
+                source="FOLLOWABLES",
+                column="value",
+                new="—",
+                current=_render(rows.get(followable.channel_key), "value"),
+                skip="FOLLOWABLES is not set in the environment",
+            )
+            for followable in dd_feeds.FOLLOWABLES
+        ]
     try:
         blob = json.loads(raw)
     except json.JSONDecodeError as e:
@@ -288,7 +304,18 @@ async def collect(
 
     var, slug = _BOOL_VAR
     raw = os.environ.get(var)
-    if raw is not None:
+    if raw is None:
+        changes.append(
+            Change(
+                slug=slug,
+                source=var,
+                column="enabled",
+                new="—",
+                current=_render(rows.get(slug), "enabled"),
+                skip="not set in the environment",
+            )
+        )
+    else:
         changes.append(
             _change(slug=slug, source=var, column="enabled", raw=raw, rows=rows)
         )
