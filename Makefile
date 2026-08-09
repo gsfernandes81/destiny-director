@@ -172,16 +172,24 @@ dump-dev-db:
 # nothing to back up the database you are migrating *away from* — which is the one
 # backup that matters, since mirrored_channel cannot be reconstructed from anything.
 #
-# Takes host/port from the TCP proxy (MYSQLHOST is the internal name and does not
-# resolve off-platform), the password via MYSQL_PWD rather than --password so it stays
-# out of the process list, and --single-transaction so a running bot doesn't have to be
-# stopped for a consistent InnoDB snapshot. --no-tablespaces avoids needing the PROCESS
-# privilege, which a managed MySQL user usually lacks. Needs mysqldump installed locally.
+# Driven off the single MYSQL_URL that `railway run` injects, exactly as the pg targets
+# use DATABASE_URL. The one way these have to differ: mysqldump takes flags rather than
+# a URL, so MYSQL_DUMP below splits it. sed's scripts are double-quoted so the recipe's
+# own single quotes survive, and none of them contain a `$` to be expanded early.
+#
+# The password reaches mysqldump through MYSQL_PWD rather than --password, so it stays
+# out of the local process list. A percent-encoded password would arrive undecoded, but
+# that surfaces as an auth error at connect time, not as a bad dump.
+# --single-transaction gives a consistent InnoDB snapshot without stopping a running
+# bot; --no-tablespaces avoids needing the PROCESS privilege a managed user usually
+# lacks. Runs locally, so it needs mysqldump installed and the service reachable.
+MYSQL_DUMP = n=$$(echo "$$MYSQL_URL" | sed -e "s|^[a-z]*://||"); hp=$$(echo "$$n" | sed -e "s|^.*@||" -e "s|/.*||"); MYSQL_PWD=$$(echo "$$n" | sed -e "s|^[^:]*:||" -e "s|@.*||") mysqldump --host "$$(echo "$$hp" | cut -d: -f1)" --port "$$(echo "$$hp" | cut -d: -f2)" --user "$$(echo "$$n" | cut -d: -f1)" --single-transaction --quick --no-tablespaces "$$(echo "$$n" | sed -e "s|^.*/||" -e "s|?.*||")"
+
 dump-mysql-prod:
-	railway run -e production -s MySQL bash -c 'MYSQL_PWD="$$MYSQLPASSWORD" mysqldump --host "$${RAILWAY_TCP_PROXY_DOMAIN:-$$MYSQLHOST}" --port "$${RAILWAY_TCP_PROXY_PORT:-$$MYSQLPORT}" --user "$$MYSQLUSER" --single-transaction --quick --no-tablespaces "$$MYSQLDATABASE" > "kyber-prod-mysql-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
+	railway run -e production -s MySQL bash -c '$(MYSQL_DUMP) > "kyber-prod-mysql-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
 
 dump-mysql-dev:
-	railway run -e dev -s MySQL bash -c 'MYSQL_PWD="$$MYSQLPASSWORD" mysqldump --host "$${RAILWAY_TCP_PROXY_DOMAIN:-$$MYSQLHOST}" --port "$${RAILWAY_TCP_PROXY_PORT:-$$MYSQLPORT}" --user "$$MYSQLUSER" --single-transaction --quick --no-tablespaces "$$MYSQLDATABASE" > "kyber-dev-mysql-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
+	railway run -e dev -s MySQL bash -c '$(MYSQL_DUMP) > "kyber-dev-mysql-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
 
 # conftest.py is named alongside `dd` in all three: it is the one Python file outside
 # the package tree (repo-root, where pytest's session DB fixture and its non-local-DB
