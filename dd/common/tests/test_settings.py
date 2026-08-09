@@ -157,6 +157,23 @@ async def test_default_for_unknown_slug_is_none():
     assert settings.default_for("not_a_setting") is None
 
 
+async def test_image_url_settings_have_no_default_and_resolve_to_empty():
+    """The three image URLs are default-free, and all three agree on that.
+
+    They used to be asymmetric: lost_sector and xur carried a ``(None, "")`` entry in
+    _DEFAULTS while eververse had none, so ``default_for`` answered "" for two of them
+    and None for the third — a difference with no consequence, since every getter
+    coerces with ``or ""``. Removing the two entries rather than adding a third keeps
+    _DEFAULTS holding only settings that genuinely have a default, and makes the
+    page's "is there a default to show?" question answer honestly for all three.
+    """
+    for slug in ("lost_sector_image_url", "xur_image_url", "eververse_image_url"):
+        assert settings.default_for(slug) is None, slug
+
+    assert await settings.get_lost_sector_image_url() == ""
+    assert await settings.get_xur_image_url() == ""
+
+
 async def test_malformed_stored_color_falls_back_to_black():
     await schemas.AutoPostSettings.set_value("embed_default_color", "not-a-color")
     settings.reset_cache_for_tests()
