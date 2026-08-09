@@ -179,10 +179,9 @@
         Toggle whether anchor produces each feed, which channel each posts to, and
         general bot settings (accent colours, the alerts/log channels, and the rest).
         These are global, bot-wide switches — they don't change which servers follow a
-        feed. Most changes apply on the next scheduled post; a few — mainly a feed's
-        very first channel (going from unconfigured to configured) — only take effect
-        after a bot restart, since that also decides whether the feed's cron/command
-        registers at all.
+        feed. No restart needed: a channel picked or moved here applies to the next
+        scheduled post and to Preview/Send immediately, and beacon's commands pick it
+        up within about a minute.
       </p>
     </header>
     <main class="settings">

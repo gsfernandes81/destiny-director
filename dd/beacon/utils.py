@@ -373,6 +373,10 @@ def ignore_own_user(
 
 FEED_UNCONFIGURED = "no channel has been set for it yet"
 FEED_UNREACHABLE = "its channel has been deleted, or the bot lost access to it"
+# Not a fault, unlike the two above, so nothing pages for it: the channel is set and
+# readable, there is simply nothing in it yet. Reachable in practice only just after a
+# feed is pointed at a fresh channel, and it clears itself on the first post.
+FEED_EMPTY = "nothing has been posted in its channel yet"
 
 
 async def feed_unavailable_embed(display_name: str, reason: str) -> h.Embed:
@@ -393,7 +397,9 @@ async def open_feed_source[T](
     feed: str,
     open_source: t.Callable[[int], t.Awaitable[T]],
     *,
+    channel_id: int | None = None,
     alert_when_unset: bool = True,
+    alert_when_unreachable: bool = True,
 ) -> tuple[T | None, str | None]:
     """Open ``feed``'s source channel for a reader, or report why it can't be.
 
@@ -415,13 +421,25 @@ async def open_feed_source[T](
     events too: the unset state was already paged for once at import by
     ``resolve_followable_channel``, and re-paging for a state nobody has changed
     since adds nothing.
+
+    ``alert_when_unreachable`` is the same idea one state along, and exists for the
+    reconciler in :func:`reconcile_feed_channels`: it retries a still-broken source on
+    every tick, so the *first* attempt after the channel changed pages us and the
+    retries after it stay quiet. Without it a permanently deleted channel would page
+    once a minute forever.
+
+    ``channel_id`` is for a caller that has already resolved it — the reconciler, which
+    read it to decide there was anything to do. Passing it through means the channel
+    this opens is the same one that decision was made about, rather than a second read
+    that could in principle disagree.
     """
     from dd.common import (
         feeds as dd_feeds,
         settings,
     )
 
-    channel_id = await settings.get_followable_channel(feed)
+    if channel_id is None:
+        channel_id = await settings.get_followable_channel(feed)
     if not channel_id:
         if alert_when_unset:
             logger.critical(
@@ -438,11 +456,74 @@ async def open_feed_source[T](
         # as an unhandled exception in a listener (easy to miss; nothing else reports
         # it). A channel vanishing out from under a configured feed is exactly the
         # kind of silent regression nobody watches for on their own, hence CRITICAL.
-        logger.critical(
-            "%s channel %s is configured but no longer reachable (deleted, or the bot "
-            "lost access) — its commands will answer 'unavailable' until it's fixed "
-            "on the Autopost Settings page.",
-            dd_feeds.FEEDS[feed].display_name,
-            channel_id,
-        )
+        if alert_when_unreachable:
+            logger.critical(
+                "%s channel %s is configured but no longer reachable (deleted, or the "
+                "bot lost access) — its commands will answer 'unavailable' until it's "
+                "fixed on the Autopost Settings page.",
+                dd_feeds.FEEDS[feed].display_name,
+                channel_id,
+            )
         return None, FEED_UNREACHABLE
+
+
+# --- reacting to a feed's channel being changed on the settings page -----------------
+#
+# A followable's channel is a DB-backed setting an operator edits on anchor's Autopost
+# Settings page, so it can change while beacon is running. Most readers here already
+# resolve it per use (``follow_control_command_maker``, free games' message listeners),
+# but two hold something *built* from the channel: a ``NavPages`` over its history, and
+# free games' cached last message. Those used to be built once on ``StartedEvent`` and
+# never revisited, so a channel picked or moved on the page did nothing until somebody
+# restarted the bot — and nothing on the page said so.
+#
+# This is the smallest thing that fixes that: a poll, not a push. There is no event
+# from anchor to beacon (the two share only the database), and building a NavPages
+# reads channel history, so it must happen on a *change*, not on a schedule. Hence the
+# ``current`` getter below — the reconciler compares what a reader was last built from
+# against what is configured now, and does nothing at all when they agree. A tick over
+# a steady config is a handful of dict lookups behind one cached settings read.
+
+_feed_channel_watchers: list[
+    tuple[str, t.Callable[[], int], t.Callable[[int], t.Awaitable[None]]]
+] = []
+
+
+def watch_feed_channel(
+    feed: str,
+    current: t.Callable[[], int],
+    on_change: t.Callable[[int], t.Awaitable[None]],
+) -> None:
+    """Have ``on_change`` re-run whenever ``feed``'s configured channel changes.
+
+    ``current`` returns the channel id the caller's state was last built from — read
+    off the caller rather than tracked here, so there is one copy of it and a reader
+    that failed to build can decide for itself whether to be retried (return the id it
+    tried and it won't be; return something else and it will).
+
+    ``on_change`` is handed the newly configured id and is expected to swallow its own
+    failures the way the ``StartedEvent`` build does; the reconciler logs anything that
+    escapes and carries on to the next watcher.
+    """
+    _feed_channel_watchers.append((feed, current, on_change))
+
+
+async def reconcile_feed_channels() -> None:
+    """Re-open every reader whose feed channel no longer matches what it was built from.
+
+    Called on a coarse interval from beacon's entry point. The settings read is the
+    cached one (:data:`dd.common.settings._TTL`), so a tick costs at most one bulk
+    query however many watchers are registered, and nothing at all when the cache is
+    still fresh.
+    """
+    from dd.common import settings
+
+    for feed, current, on_change in _feed_channel_watchers:
+        channel_id = await settings.get_followable_channel(feed)
+        if channel_id == current():
+            continue
+        try:
+            await on_change(channel_id)
+        except Exception:
+            # One broken reader must not stop the others being reconciled.
+            logger.exception("Failed to re-open %s after its channel changed", feed)

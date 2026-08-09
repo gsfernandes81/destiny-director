@@ -41,6 +41,7 @@ from ..common.discord_logging import (
 from ..common.emoji_store import AppEmojiStore
 from ..common.extension_loader import load_extensions_strict
 from ..common.lifecycle import apply_oom_score_adj, consume_exit_code
+from . import utils as beacon_utils
 from .mirror_worker import mirror_worker
 
 # Before anything allocates in earnest, so the preference is in place for the whole
@@ -158,6 +159,30 @@ async def on_start_refresh_relevant_channels(_event: h.StartedEvent):
                 await _refresh_relevant_channel_ids()
             except Exception:
                 logging.exception("Failed to refresh scoped-cache channel set")
+
+    _ = asyncio.create_task(_loop())
+
+
+@bot.listen(h.StartedEvent)
+async def on_start_reconcile_feed_channels(_event: h.StartedEvent):
+    # A followable's channel is a setting edited on anchor's Autopost Settings page, so
+    # it can change while this bot is running. The readers that hold something *built*
+    # from that channel — the nav pages, free games' cached message — used to be built
+    # once here and never revisited, so picking or moving a channel did nothing until
+    # somebody restarted beacon, with nothing on the page to say so.
+    #
+    # Polled rather than pushed: the two bots share only the database, so there is no
+    # event to listen for. A tick over an unchanged config does no work beyond one
+    # cached settings read (see utils.reconcile_feed_channels), and rebuilding reads
+    # channel history, so it only ever happens on an actual change. The interval is the
+    # worst-case delay between saving a channel and beacon serving it.
+    async def _loop(interval: int = 60):
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await beacon_utils.reconcile_feed_channels()
+            except Exception:
+                logging.exception("Failed to reconcile feed source channels")
 
     _ = asyncio.create_task(_loop())
 

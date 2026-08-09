@@ -176,7 +176,7 @@ async def test_follow_control_refuses_an_unconfigured_feed(
 async def test_navigator_command_answers_instead_of_raising(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    holder = nav.NavPagesHolder()
+    holder = nav.NavPagesHolder("xur", nav.NavPages, {})
     holder.unavailable = utils.FEED_UNREACHABLE
     command_cls = nav.make_navigator_command(
         holder, name="xur", description="d", feed="xur"

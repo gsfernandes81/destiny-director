@@ -44,35 +44,66 @@ HELP_STRING = "See the current free games on The Epic Store, etc"
 last_message_in_channel: h.PartialMessage | None = None
 last_message_in_channel_id: int = 0
 unavailable_reason: str | None = None
+#: The channel ``last_message_in_channel`` was read out of, 0 when there is none. What
+#: the reconciler compares against the configured id — see ``utils.watch_feed_channel``.
+last_message_channel_id: int = 0
 
 
-async def refresh_message_for_command(bot: CachedFetchBot):
+async def refresh_message_for_command(bot: CachedFetchBot, *, alert: bool = True):
     global last_message_in_channel_id
     global last_message_in_channel
+    global last_message_channel_id
     global unavailable_reason
 
     # alert_when_unset=False: this runs again whenever the repeated message is
     # deleted, and resolve_followable_channel already paged once at import for the
-    # unset state — see open_feed_source. An unreachable channel does still alert.
+    # unset state — see open_feed_source. An unreachable channel does still alert,
+    # except on a reconciler retry of a channel already known bad (``alert``).
     channel, reason = await utils.open_feed_source(
-        "free_games", bot.fetch_channel, alert_when_unset=False
+        "free_games",
+        bot.fetch_channel,
+        alert_when_unset=False,
+        alert_when_unreachable=alert,
     )
     if channel is None:
         unavailable_reason = reason
+        last_message_channel_id = 0
         return
     if not isinstance(channel, h.TextableChannel):
         unavailable_reason = utils.FEED_UNREACHABLE
-        logging.critical(
-            "Free Games followable channel %s is not a textable channel — /free games "
-            "will answer 'unavailable' until it's fixed on the Autopost Settings page.",
-            channel.id,
-        )
+        last_message_channel_id = 0
+        if alert:
+            logging.critical(
+                "Free Games followable channel %s is not a textable channel — /free "
+                "games will answer 'unavailable' until it's fixed on the Autopost "
+                "Settings page.",
+                channel.id,
+            )
         return
+    moved = bool(last_message_channel_id) and int(channel.id) != last_message_channel_id
+    # Recorded whether or not the history read below yields anything: it is what the
+    # reconciler compares against, and an empty (but perfectly reachable) channel must
+    # not have its history re-read on every tick.
+    last_message_channel_id = int(channel.id)
+
+    newest: h.PartialMessage | None = None
     async for message in channel.fetch_history():
-        last_message_in_channel = message
-        last_message_in_channel_id = message.id
-        unavailable_reason = None
+        newest = message
         break
+
+    if newest is not None:
+        last_message_in_channel = newest
+        last_message_in_channel_id = newest.id
+        unavailable_reason = None
+    elif moved:
+        # An empty channel we have just been pointed at. Drop what was cached from the
+        # old one, or /free games would go on repeating a post out of a channel it no
+        # longer reads — worse than saying it has nothing, because it looks right.
+        # Only on a move: a same-channel refresh (the repeated message was deleted)
+        # keeps what it had, which is how that path has always behaved.
+        last_message_in_channel = None
+        last_message_in_channel_id = 0
+        unavailable_reason = utils.FEED_EMPTY
 
 
 def _followable_channel() -> int:
@@ -121,9 +152,36 @@ async def on_message_delete(
         await refresh_message_for_command(bot)
 
 
+#: Set on StartedEvent, so the reconciler below has something to fetch with.
+_bot: CachedFetchBot | None = None
+
+
 @loader.listener(h.StartedEvent)
 async def on_start(event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED):
+    global _bot
+    _bot = bot
     await refresh_message_for_command(bot)
+
+
+async def _on_channel_change(_channel_id: int) -> None:
+    """Re-read the history when the feed is pointed at a different channel.
+
+    The listeners above already watch whichever channel is configured *now*, but they
+    only ever bring news of a *new* message — so moving the feed to a channel that
+    already has posts in it left ``/free games`` repeating the old channel's message
+    (or answering "unavailable") until somebody restarted the bot.
+
+    ``alert`` goes False once the feed is known broken, so a channel that stays
+    unreachable pages us once rather than once per reconciler tick.
+    """
+    if _bot is None:
+        return  # not started yet; on_start does the first read
+    await refresh_message_for_command(_bot, alert=unavailable_reason is None)
+
+
+utils.watch_feed_channel(
+    "free_games", lambda: last_message_channel_id, _on_channel_change
+)
 
 
 slash_command_group = lb.Group(

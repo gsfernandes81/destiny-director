@@ -20,7 +20,7 @@ import logging
 import re
 import typing as t
 import uuid
-from asyncio import Task, create_task, sleep
+from asyncio import Lock, Task, create_task, sleep
 from random import randint
 from typing import override
 
@@ -39,6 +39,8 @@ from ..common.bot import CachedFetchBot
 from ..common.cfg import navigator_timeout, url_regex
 from ..common.utils import accumulate, discord_error_logger, get_ordinal_suffix
 from . import utils
+
+logger = logging.getLogger(__name__)
 
 # A stable sentinel compared by equality elsewhere (e.g. ada.py checks
 # `page.embeds[0] == NO_DATA_HERE_EMBED`), so it is built once at import time rather
@@ -519,14 +521,13 @@ class NavPages(DateRangeDict):
 
     # Strong reference to the lookahead auto-update task, set in _setup_autoupdate
     # when lookahead_len > 0. Held only to keep the task from being garbage
-    # collected; NavPages instances are process-lifetime singletons so the task is
-    # not cancelled in normal operation (see teardown()).
+    # collected, and cancelled by teardown() when the instance is replaced.
     _lookahead_task: "Task[None] | None" = None
 
     # Auto-update teardown handles: the registered history-updater listener and a
-    # double-setup guard. NavPages are process-lifetime singletons today, so these
-    # are dormant; they let a future recreation/hot-reload path release the per-
-    # instance listener + lookahead task instead of leaking them (memory-leak N4).
+    # double-setup guard. Used by teardown() to release the per-instance listener +
+    # lookahead task when NavPagesHolder rebuilds a feed against a new channel,
+    # instead of leaking one of each per rebuild (memory-leak N4).
     _history_updater: "t.Callable[..., t.Coroutine[t.Any, t.Any, None]] | None" = None
     _autoupdate_set_up: bool = False
 
@@ -819,9 +820,10 @@ class NavPages(DateRangeDict):
         """Release the auto-update listener + lookahead task.
 
         Unsubscribes the history-updater from all three message events and cancels
-        the lookahead task. NavPages are created once per followable at startup, so
-        nothing accumulates in normal operation; this exists so a future
-        recreation/hot-reload path can avoid leaking them (memory-leak N4).
+        the lookahead task. Called by :meth:`NavPagesHolder.reopen` once the
+        replacement instance is live, so a feed whose channel is changed on the
+        Autopost Settings page does not leak a listener + task per change
+        (memory-leak N4). Idempotent: a second call is a no-op.
         """
         if self._history_updater is not None:
             for event_type in (
@@ -894,14 +896,97 @@ class NavPagesHolder:
     channel history), but command callbacks need it at invoke time. The holder
     lets a shared ``StartedEvent`` listener populate ``.pages`` while commands
     close over the holder and read ``.pages`` lazily.
+
+    It is also what re-opens the feed when its channel is changed on the Autopost
+    Settings page — see :meth:`reopen` and ``utils.reconcile_feed_channels``.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        feed: str,
+        pages_cls: type[NavPages],
+        from_channel_kwargs: dict[str, t.Any],
+    ) -> None:
         self.pages: NavPages | None = None
         #: Why ``pages`` is None, phrased for a user (one of ``utils.FEED_*``). Set
         #: when the source channel turns out to be unusable at startup, so the command
         #: can say what is wrong instead of raising — see make_navigator_command.
         self.unavailable: str | None = None
+        #: The channel ``pages`` was built from, 0 when there are none — so it doubles
+        #: as what the reconciler compares against the configured id. A feed left
+        #: unavailable reads as 0 and is therefore retried on each tick (quietly), and
+        #: self-heals if the channel comes back; an *unconfigured* feed reads 0 against
+        #: a configured 0 and so costs nothing.
+        self.channel_id: int = 0
+        self._feed = feed
+        self._pages_cls = pages_cls
+        self._kwargs = from_channel_kwargs
+        self._bot: h.RESTAware | None = None
+        #: The channel the last open was attempted against; -1 = never opened. Only
+        #: used to decide whether to alert, so each distinct channel pages us once
+        #: rather than once per retry.
+        self._last_attempt: int = -1
+        # Serialises opens. The StartedEvent build and a reconciler tick are separate
+        # tasks, and building reads channel history — long enough for the two to
+        # overlap on a slow start and leave two NavPages listening on one channel.
+        self._lock = Lock()
+
+    async def reopen(self, channel_id: int) -> None:
+        """(Re)build the pages from whatever channel the feed is configured with now.
+
+        Build-then-swap-then-tear-down: the old pages keep answering commands until the
+        new ones are ready, so a rebuild never leaves a working feed briefly
+        unavailable, and the old instance's history listener + lookahead task are
+        released only once it has been replaced (a swap without the teardown would leak
+        a listener per rebuild — memory-leak N4).
+
+        ``channel_id`` is the configured id as the caller read it — the reconciler read
+        it to decide there was anything to do here, so it is passed straight through
+        rather than resolved a second time.
+        """
+        bot = self._bot
+        if bot is None:
+            return  # not started yet; the StartedEvent build will do the first open
+        async with self._lock:
+            # Page us on the first attempt against a given channel and stay quiet on
+            # the retries after it — a permanently deleted channel would otherwise
+            # alert once per reconciler tick, forever.
+            alert = channel_id != self._last_attempt
+            rebuild = self._last_attempt != -1
+            self._last_attempt = channel_id
+
+            # "Open" here is building the pages themselves: from_channel reads the
+            # channel's history, so it is where an unreachable channel actually shows
+            # up. It is never called at all when the feed is unconfigured.
+            pages, unavailable = await utils.open_feed_source(
+                self._feed,
+                lambda cid: self._pages_cls.from_channel(bot, cid, **self._kwargs),
+                channel_id=channel_id,
+                alert_when_unset=alert,
+                alert_when_unreachable=alert,
+            )
+            old = self.pages
+            self.pages = pages
+            self.unavailable = unavailable
+            # 0 for anything but a live set of pages, so a feed left unavailable is
+            # retried on the next tick rather than mistaken for one that is up to date.
+            self.channel_id = channel_id if pages is not None else 0
+            if old is not None and old is not pages:
+                old.teardown()
+            if pages is not None and rebuild:
+                logger.info(
+                    "%s pages rebuilt against channel %s", self._feed, channel_id
+                )
+
+    async def _start(self, bot: h.RESTAware) -> None:
+        """The first open, once the gateway is up and there is a bot to fetch with.
+
+        Resolves the configured channel itself so ``_last_attempt`` records it: a boot
+        open that fails is then a retry of the *same* channel on the next reconciler
+        tick, and pages us once rather than twice.
+        """
+        self._bot = bot
+        await self.reopen(await settings.get_followable_channel(self._feed))
 
 
 def setup_nav_pages(
@@ -915,10 +1000,11 @@ def setup_nav_pages(
 
     ``pages_cls`` is built once the bot starts, from whatever channel ``feed`` is
     configured with *then* — resolved at startup rather than taken as an import-time
-    id, so a channel set on the Autopost Settings page between import and start is
-    still picked up. Extra keyword arguments are forwarded to
-    :meth:`NavPages.from_channel` (``period``, ``reference_date``, ``history_len``,
-    ``lookahead_len``, ``suppress_content_autoembeds``, ``no_data_message`` ...).
+    id — and rebuilt whenever that channel changes afterwards, so picking or moving a
+    feed's channel on the Autopost Settings page takes effect without a restart. Extra
+    keyword arguments are forwarded to :meth:`NavPages.from_channel` (``period``,
+    ``reference_date``, ``history_len``, ``lookahead_len``,
+    ``suppress_content_autoembeds``, ``no_data_message`` ...).
 
     An unusable channel never stops the listener registering, and never raises out of
     it: ``utils.open_feed_source`` records why on the holder (so the command can answer
@@ -926,18 +1012,16 @@ def setup_nav_pages(
     hitting it can do nothing about it. What that page calls the feed comes from
     ``dd.common.feeds``, so ``feed`` is the only identity this takes.
     """
-    holder = NavPagesHolder()
+    holder = NavPagesHolder(feed, pages_cls, from_channel_kwargs)
 
     @loader.listener(h.StartedEvent)
     async def _on_start(event: h.StartedEvent) -> None:
-        # "Open" here is building the pages themselves: from_channel reads the
-        # channel's history, so it is where an unreachable channel actually shows up.
-        holder.pages, holder.unavailable = await utils.open_feed_source(
-            feed,
-            lambda channel_id: pages_cls.from_channel(
-                event.app, channel_id, **from_channel_kwargs
-            ),
-        )
+        await holder._start(event.app)
+
+    # A rebuild reads the whole channel history, so it is driven by a change in the
+    # configured id rather than by the clock: a tick that finds the channel unmoved
+    # does no work at all.
+    utils.watch_feed_channel(feed, lambda: holder.channel_id, holder.reopen)
 
     return holder
 

@@ -73,7 +73,10 @@ include = ["dd/sector_accounting/tests/test_sector_accounting.py"]
 invalid-argument-type = "ignore"
 
 [[overrides]]
-include = ["dd/beacon/tests/test_feed_unavailable.py"]
+include = [
+    "dd/beacon/tests/test_feed_unavailable.py",
+    "dd/beacon/tests/test_feed_channel_reconcile.py",
+]
 
 [overrides.rules]
 # Driving a command callback or a StartedEvent listener without standing up a real
@@ -82,6 +85,6 @@ include = ["dd/beacon/tests/test_feed_unavailable.py"]
 # absent from the public types. The alternative — a live client and a dispatched
 # gateway event — is far more machinery than "call the function" warrants.
 unresolved-attribute = "ignore"
-# A one-method stub stands in for `pages_cls` (it only needs `from_channel` to raise),
-# and CommandBase is what `make_navigator_command` actually returns.
+# A one-method stub stands in for `pages_cls` (it needs only `from_channel` and
+# `teardown`), and CommandBase is what `make_navigator_command` actually returns.
 invalid-argument-type = "ignore"
