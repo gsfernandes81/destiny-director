@@ -421,7 +421,6 @@ async def on_start_schedule_autoposts(
 register_feed(
     Feed(
         name="eververse",
-        channel_id=settings.get_followable_channel_sync("eververse"),
         message_constructor_coro=eververse_message_constructor,
         message_announcer_coro=xur.api_to_discord_announcer,
     )

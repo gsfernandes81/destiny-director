@@ -95,7 +95,6 @@ loader.command(
 register_feed(
     Feed(
         name="lost_sector",
-        channel_id=settings.get_followable_channel_sync("lost_sector"),
         message_constructor_coro=format_post,
         message_announcer_coro=discord_announcer,
     )

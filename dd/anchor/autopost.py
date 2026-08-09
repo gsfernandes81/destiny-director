@@ -33,13 +33,14 @@ class Feed(t.NamedTuple):
     and stats (see ``plans/anchor_web_ia.md`` §1), so a feed page URL lines up with
     every other surface.
 
-    ``channel_id`` is ``None`` for a *dormant* feed: one whose followable channel has
-    not been set on the Autopost Settings page yet. Such a feed still
-    registers and still previews — construction needs no channel — but cannot be sent.
+    The feed's post channel is deliberately **not** here. It used to be, snapshotted
+    from ``settings.get_followable_channel_sync`` at import — which meant a channel set
+    or changed on the Autopost Settings page did not reach Send/Preview until the bot
+    restarted, silently. It is resolved at request time instead; see
+    ``feed_actions.resolve_channel``.
     """
 
     name: str
-    channel_id: int | None
     message_constructor_coro: t.Callable[..., t.Awaitable[HMessage]]
     message_announcer_coro: t.Callable[..., t.Awaitable[t.Any]] | None = None
     cv2: bool = True
@@ -55,22 +56,10 @@ def register_feed(feed: Feed) -> None:
     """Contribute a feed's producer wiring for the web feed page.
 
     Call at import time from the producer module, next to its cron listener.
-    Registration is unconditional — a dormant feed (no configured channel) registers
-    too, so its page exists and explains itself rather than 404-ing behind a link the
-    settings page shows regardless.
-
-    **Dormancy is normalised here.** Producers pass
-    ``settings.get_followable_channel_sync(name)``, and a followable that is
-    present-but-unset — which is how portal_ops and iron_banner ship by default — yields
-    the integer ``0``, not ``None``.
-    The producers' own gates are falsy checks so they were right either way; the web
-    handler's was ``is None``, so Send answered "started" and announced into channel 0,
-    failing where only the log could see it. Collapsing the two spellings at the single
-    place feeds are constructed is what makes ``channel_id: int | None`` mean what it
-    says everywhere downstream.
+    Registration is unconditional and carries no channel: a feed is dormant or not
+    according to what the settings page says *now*, which is a question only the
+    request-time reader can answer.
     """
-    if not feed.channel_id:
-        feed = feed._replace(channel_id=None)
     _feeds[feed.name] = feed
 
 

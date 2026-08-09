@@ -332,7 +332,7 @@ def _registered_feed(monkeypatch: pytest.MonkeyPatch) -> t.Iterator[None]:
         "_feeds",
         {
             "lost_sector": autopost.Feed(
-                name="lost_sector", channel_id=7, message_constructor_coro=_noop
+                name="lost_sector", message_constructor_coro=_noop
             )
         },
     )

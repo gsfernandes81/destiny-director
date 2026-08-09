@@ -66,16 +66,32 @@ def _post() -> HMessage:
 
 
 @pytest.fixture(autouse=True)
-def _isolated_registry(monkeypatch: pytest.MonkeyPatch) -> t.Iterator[None]:
+def _isolated_registry(monkeypatch: pytest.MonkeyPatch) -> t.Iterator[dict[str, t.Any]]:
     """Swap the import-time feed registry for a controlled one, and stub the bot.
 
     The real registry is populated by the producer modules at import; tests need
     predictable feeds (including a dormant one) without touching them.
+
+    Also stubs the settings read the send handler now does per request, so a test can
+    say what a feed's channel is — and change it mid-test — without a database. The
+    yielded dict is that answer, keyed by feed name; the fixture is requested by name
+    where a test needs to write to it.
     """
     monkeypatch.setattr(autopost, "_feeds", {})
     monkeypatch.setattr(web, "_bot", object())
     monkeypatch.setattr(feed_actions, "_sending", set())
-    yield
+
+    channels: dict[str, t.Any] = {"xur": 123}
+
+    async def _get_followable_channel(feed: str) -> t.Any:
+        # Deliberately `t.Any` rather than the production `int`: the handler's guard is
+        # falsy-based, and a couple of tests below feed it None to pin that.
+        return channels.get(feed, 0)
+
+    monkeypatch.setattr(
+        feed_actions.dd_settings, "get_followable_channel", _get_followable_channel
+    )
+    yield channels
 
 
 async def _constructor(**_kwargs: object) -> HMessage:
@@ -89,14 +105,12 @@ async def _failing_constructor(**_kwargs: object) -> HMessage:
 def _register(
     name: str = "xur",
     *,
-    channel_id: int | None = 123,
     constructor: t.Callable[..., t.Awaitable[HMessage]] | None = None,
     announcer: t.Callable[..., t.Awaitable[t.Any]] | None = None,
 ) -> None:
     autopost.register_feed(
         autopost.Feed(
             name=name,
-            channel_id=channel_id,
             message_constructor_coro=constructor or _constructor,
             message_announcer_coro=announcer,
         )
@@ -133,9 +147,12 @@ async def test_preview_reports_a_build_failure_as_data() -> None:
     assert "no event scheduled" in json.loads(_text(res))["error"]
 
 
-async def test_preview_works_while_dormant() -> None:
+async def test_preview_works_while_dormant(
+    _isolated_registry: dict[str, t.Any],
+) -> None:
     # Construction needs no channel, so a dormant feed still previews.
-    _register(channel_id=None)
+    _isolated_registry["xur"] = 0
+    _register()
     res = await feed_actions._handle_preview(_as_request(_FakeRequest("xur")))
     assert "Hello from the feed" in json.dumps(json.loads(_text(res))["payload"])
 
@@ -179,28 +196,51 @@ async def test_send_honours_publish_false() -> None:
 
 
 @pytest.mark.parametrize("dormant_channel", [None, 0])
-async def test_send_refuses_a_dormant_feed(dormant_channel: int | None) -> None:
+async def test_send_refuses_a_dormant_feed(
+    dormant_channel: int | None, _isolated_registry: dict[str, t.Any]
+) -> None:
     # 0 is the shape production actually produces: a followable with no DB row reads
     # back as 0 from settings.get_followable_channel, not None. A guard written as
     # `is None` let Send answer "started" and announce into channel 0 — failing where
-    # only the log could see it. register_feed normalises the two, and this covers both
-    # spellings arriving at the handler.
+    # only the log could see it. Both spellings are fed in, so the guard stays falsy-
+    # based rather than drifting back to an identity test.
     called = False
 
     async def _announcer(**_kwargs: t.Any) -> None:
         nonlocal called
         called = True
 
-    _register(channel_id=dormant_channel, announcer=_announcer)
+    _isolated_registry["xur"] = dormant_channel
+    _register(announcer=_announcer)
     res = await feed_actions._handle_send(_as_request(_FakeRequest("xur", {})))
     assert res.status == 409
     assert "dormant" in json.loads(_text(res))["error"]
     assert not called
 
 
-async def test_register_feed_normalises_an_unset_channel_to_none() -> None:
-    _register(channel_id=0)
-    assert autopost.registered_feeds()["xur"].channel_id is None
+async def test_send_reads_the_channel_at_request_time(
+    _isolated_registry: dict[str, t.Any],
+) -> None:
+    # The point of dropping Feed.channel_id: the channel came from an import-time
+    # snapshot, so a channel set (or moved) on the Autopost Settings page did nothing
+    # until the bot was restarted. Registration here happens while the feed is dormant,
+    # and the send still lands in the channel configured afterwards.
+    seen: dict[str, t.Any] = {}
+    started = asyncio.Event()
+
+    async def _announcer(**kwargs: t.Any) -> None:
+        seen.update(kwargs)
+        started.set()
+
+    _isolated_registry["xur"] = 0
+    _register(announcer=_announcer)
+
+    _isolated_registry["xur"] = 456
+    res = await feed_actions._handle_send(_as_request(_FakeRequest("xur", {})))
+    assert res.status == 200
+
+    await asyncio.wait_for(started.wait(), timeout=1)
+    assert seen["channel_id"] == 456
 
 
 async def test_send_refuses_without_an_announcer() -> None:

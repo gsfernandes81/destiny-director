@@ -482,10 +482,9 @@ def _next_daily_reset_unix() -> int:
 
 # ── Autopost wiring (guarded: dormant until the followable channel is configured) ─
 
-_PORTAL_OPS_CHANNEL = settings.get_followable_channel_sync("portal_ops")
 
 
-# The cron registers unconditionally now — NOT gated on _PORTAL_OPS_CHANNEL, unlike
+# The cron registers unconditionally — it is never gated on a boot-time channel, unlike
 # before. That import-time snapshot only ever reflected whatever the channel was at
 # boot; gating registration on it meant setting a channel on the Autopost Settings
 # page while the bot was already running had no effect until a manual restart. Each
@@ -516,15 +515,11 @@ async def on_start_schedule_autoposts(
 
 
 # Contribute this feed's producer wiring to the web feed page (Preview / Send now).
-# channel_id is still the import-time snapshot (Feed is a plain NamedTuple, not a live
-# lookup) — a settings-page channel change is picked up here on the next restart, same
-# as before. Lower-stakes than the cron above: an operator using this page notices a
-# stale/missing "Send now" button immediately, rather than a scheduled post silently
-# not happening.
+# No channel here: the send handler resolves it per request, so a settings-page channel
+# change takes effect on the next click. Preview needs no channel at all.
 register_feed(
     Feed(
         name="portal_ops",
-        channel_id=_PORTAL_OPS_CHANNEL,
         message_constructor_coro=portal_ops_message_constructor,
         message_announcer_coro=xur.api_to_discord_announcer,
     )

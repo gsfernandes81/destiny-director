@@ -54,7 +54,10 @@ import lightbulb as lb
 from dd.hmessage import HMessage
 from dd.hmessage.snapshot import cv2_payload
 
-from ...common import feeds as dd_feeds
+from ...common import (
+    feeds as dd_feeds,
+    settings as dd_settings,
+)
 from .. import web
 from ..autopost import Feed, registered_feeds
 
@@ -114,12 +117,12 @@ async def _handle_preview(request: aiohttp.web.Request) -> aiohttp.web.Response:
     )
 
 
-def _announce(feed: Feed, publish: bool) -> t.Awaitable[t.Any]:
+def _announce(feed: Feed, channel_id: int, publish: bool) -> t.Awaitable[t.Any]:
     """The announcer call for this feed, as an un-awaited awaitable."""
     assert feed.message_announcer_coro is not None  # guarded by the caller
     return feed.message_announcer_coro(
         bot=web.require_bot(),
-        channel_id=feed.channel_id,
+        channel_id=channel_id,
         check_enabled=False,
         construct_message_coro=feed.message_constructor_coro,
         publish_message=publish,
@@ -127,10 +130,10 @@ def _announce(feed: Feed, publish: bool) -> t.Awaitable[t.Any]:
     )
 
 
-async def _run_send(feed: Feed, publish: bool) -> None:
+async def _run_send(feed: Feed, channel_id: int, publish: bool) -> None:
     """Await the announcer, then release the feed's in-flight slot."""
     try:
-        await _announce(feed, publish)
+        await _announce(feed, channel_id, publish)
         logger.info("Manual send of %s finished", feed.name)
     except Exception:
         logger.exception("Manual send of %s failed", feed.name)
@@ -145,9 +148,15 @@ async def _handle_send(request: aiohttp.web.Request) -> aiohttp.web.Response:
     post builds cleanly and the announcer is running — see the module docstring.
     """
     feed = _feed_or_404(request)
-    # Falsy, not `is None`: `register_feed` normalises 0 to None, and this is the guard
-    # standing between a dormant feed and a post announced into channel 0.
-    if not feed.channel_id:
+    # Resolved here, not held from boot: a channel set or changed on the Autopost
+    # Settings page takes effect on the operator's very next click. A cached read (30s
+    # TTL), and this handler is human-driven, so it costs nothing worth counting.
+    #
+    # Falsy, not `is None`: an unset followable reads as the integer 0, and this is the
+    # guard standing between a dormant feed and a post announced into channel 0 — which
+    # is what used to happen when the check was `is None`.
+    channel_id = await dd_settings.get_followable_channel(feed.name)
+    if not channel_id:
         return aiohttp.web.json_response(
             {
                 "error": f"{dd_feeds.FEEDS[feed.name].display_name} is dormant"
@@ -193,7 +202,7 @@ async def _handle_send(request: aiohttp.web.Request) -> aiohttp.web.Response:
         )
 
     # From here the task owns the slot and releases it in `_run_send`.
-    task = asyncio.create_task(_run_send(feed, publish))
+    task = asyncio.create_task(_run_send(feed, channel_id, publish))
     _send_tasks.add(task)
     task.add_done_callback(_send_tasks.discard)
     logger.info("Manual send of %s started (publish=%s)", feed.name, publish)

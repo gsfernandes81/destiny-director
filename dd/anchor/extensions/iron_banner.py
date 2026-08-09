@@ -60,9 +60,6 @@ loader = lb.Loader()
 
 #: RotationData row holding the posted-guard (so the daily cron posts an event once).
 META_SLUG = "iron_banner_meta"
-#: The followable channel this post publishes to (None if not configured — the cron and
-#: owner command are then skipped, mirroring the Trials gate).
-_CHANNEL_ID: int | None = settings.get_followable_channel_sync("iron_banner")
 
 
 async def format_post(bot: CachedFetchBot) -> HMessage:
@@ -139,7 +136,7 @@ async def _save_last_posted_reset(period: int) -> None:
 async def _schedule_iron_banner(
     event: h.StartedEvent, bot: CachedFetchBot = lb.di.INJECTED
 ) -> None:
-    # Registers the cron unconditionally now — NOT gated on _CHANNEL_ID, unlike before.
+    # Registers the cron unconditionally — never gated on a boot-time channel.
     # That import-time snapshot only ever reflected whatever the channel was at boot;
     # returning here early meant setting a channel on the Autopost Settings page while
     # the bot was already running had no effect on the schedule until a manual restart.
@@ -185,15 +182,11 @@ async def _schedule_iron_banner(
 
 
 # Contribute this feed's producer wiring to the web feed page (Preview / Send now).
-# channel_id is still the import-time snapshot (Feed is a plain NamedTuple, not a live
-# lookup) — a settings-page channel change is picked up here on the next restart, same
-# as before. Lower-stakes than the cron above: an operator using this page notices a
-# stale/missing "Send now" button immediately, rather than a scheduled post silently
-# not happening. Preview still works either way — it needs no channel.
+# No channel here: the send handler resolves it per request, so a settings-page channel
+# change takes effect on the next click. Preview needs no channel at all.
 register_feed(
     Feed(
         name="iron_banner",
-        channel_id=_CHANNEL_ID,
         message_constructor_coro=format_post,
         message_announcer_coro=discord_announcer,
     )

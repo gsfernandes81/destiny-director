@@ -184,7 +184,6 @@ async def on_start_schedule_autoposts(
 register_feed(
     Feed(
         name="ada",
-        channel_id=settings.get_followable_channel_sync("ada"),
         message_constructor_coro=ada_message_constructor,
         message_announcer_coro=xur.api_to_discord_announcer,
     )
