@@ -107,7 +107,11 @@ class _Setting(t.NamedTuple):
     slug: str
     label: str
     desc: str
-    sub: bool
+    #: Whether this row hangs off the one above it rather than heading its own group.
+    #: Defaulted because the feed rows no longer set it by hand — ``_as_group`` stamps
+    #: it, so a group cannot be built that opens with a sub. The general rows below
+    #: still pass it explicitly.
+    sub: bool = False
     kind: str = "toggle"
     options: tuple[str, ...] = ()
     channel_scope: str = "kyber"
@@ -118,11 +122,12 @@ class _Setting(t.NamedTuple):
     #: False for log_channel_id/alerts_channel_id: nothing follows them, the bot only
     #: sends there directly, so a plain text channel works fine too.
     announce_only: bool = True
-    #: A general (non-feed) group's display title, set on the group's FIRST setting only
-    #: (``sub=False``) — a feed group's own toggle row already names it, so a feed
-    #: setting leaves this blank. Rendered above the group's rows rather than reusing
-    #: that first setting's own ``label``, since the header names the *category*
-    #: ("Branding"), not that one row ("Default accent colour").
+    #: A group's display title, set on its FIRST setting only (``sub=False``). Rendered
+    #: above the group's rows rather than reusing that first setting's own ``label``,
+    #: since the header names the *category* ("Branding"), not that one row ("Default
+    #: accent colour"). Blank whenever a row already names the group for itself — a
+    #: feed's produce toggle does, and so does the lone channel row of a feed that has
+    #: only that; see :func:`_feed_rows` for when a feed earns a header instead.
     category: str = ""
 
 
@@ -261,29 +266,77 @@ _DORMANT_NOTE = (
 )
 
 
+def _as_group(rows: tuple[_Setting, ...], category: str = "") -> tuple[_Setting, ...]:
+    """Stamp a group: the first row heads it, everything after hangs off it.
+
+    ``_render_html`` groups in a single pass on ``sub``, so "a parent precedes its subs"
+    has to hold or a row lands silently in the group above. Stamping it here makes that
+    structural — no caller writes a ``sub`` flag, so no caller can write a group that
+    opens with one.
+    """
+    head, *rest = rows
+    return (
+        head._replace(sub=False, category=category),
+        *(row._replace(sub=True) for row in rest),
+    )
+
+
 def _feed_rows(feed: dd_feeds.Followable) -> tuple[_Setting, ...]:
     """One feed's settings rows, in display order.
 
-    Shape follows from the feed's kind rather than from per-feed data: a feed anchor
-    produces on a schedule leads with its produce toggle and hangs everything else off
-    it; one whose content arrives another way is a single channel row carrying the
-    feed's own name. Ordering is a rule — toggle, sub-toggles, channel, image URL — so
-    _render_html's "a parent precedes its subs" precondition holds by construction
-    rather than by careful hand-maintenance of a 218-line literal.
+    One sequence, not two shapes: the produce toggle is simply the first row when the
+    feed has one. There is no early return to forget a row in — the previous version
+    had one, and it silently dropped any extras belonging to a feed without a toggle.
+
+    What heads the group follows from what the group contains:
+
+    * a feed anchor produces on a schedule leads with its produce toggle, which names
+      it, and everything else indents beneath;
+    * a feed with no toggle and nothing but a channel *is* that one row, which wears the
+      feed's name — a header above a single row would only be a label above a label;
+    * a feed with no toggle and more than one row earns a header, the same way Branding
+      and Logging & Alerts do. Without it the channel row would have to be both the
+      feed's name and a control, which demotes every sibling row beneath a heading that
+      is really a peer.
+
+    Ordering is a rule — toggle, sub-toggles, channel, image URL — rather than per-feed
+    data, which is what let the twelve groups be generated from the catalog at all.
     """
     subs, urls = _FEED_EXTRA_ROWS.get(feed.slug, ((), ()))
-    if not feed.has_toggle:
-        # No produce toggle to lead with, so the channel row IS the group and wears the
-        # feed's name; nothing else about these feeds is configurable here.
-        return (
-            _Setting(feed.channel_key, feed.display_name, feed.desc, False, "channel"),
+
+    if feed.has_toggle:
+        channel_desc = _CHANNEL_DESC + (
+            _DORMANT_NOTE if feed.slug in _DORMANT_NOTE_SLUGS else ""
         )
-    desc = _CHANNEL_DESC + (_DORMANT_NOTE if feed.slug in _DORMANT_NOTE_SLUGS else "")
-    return (
-        _Setting(feed.slug, feed.display_name, feed.desc, False),
-        *subs,
-        _Setting(feed.channel_key, "Post to channel", desc, True, "channel"),
-        *urls,
+        return _as_group(
+            (
+                _Setting(feed.slug, feed.display_name, feed.desc),
+                *subs,
+                _Setting(
+                    feed.channel_key, "Post to channel", channel_desc, kind="channel"
+                ),
+                *urls,
+            )
+        )
+
+    if subs or urls:
+        # The feed's name heads the group, so the channel row is an ordinary setting
+        # again — and keeps the feed's own description, which the header cannot carry.
+        return _as_group(
+            (
+                _Setting(
+                    feed.channel_key, "Post to channel", feed.desc, kind="channel"
+                ),
+                *subs,
+                *urls,
+            ),
+            category=feed.display_name,
+        )
+
+    # Nothing but a channel — reached only when subs and urls are both empty, so there
+    # is nothing here to forget. The row is the group and wears the feed's name.
+    return _as_group(
+        (_Setting(feed.channel_key, feed.display_name, feed.desc, kind="channel"),)
     )
 
 

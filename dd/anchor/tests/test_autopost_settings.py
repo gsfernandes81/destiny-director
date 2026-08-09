@@ -102,9 +102,16 @@ async def test_page_side_feed_dicts_name_only_real_feeds() -> None:
     assert set(dd_feeds.FEEDS) >= aps._DORMANT_NOTE_SLUGS
 
 
-async def test_every_feed_contributes_a_channel_row() -> None:
+async def test_the_page_names_exactly_the_catalog_s_feed_channels() -> None:
+    # Equality, not containment, in both directions. Generation covers one of them —
+    # every feed gets a row because _feed_rows emits one — but _GENERAL_SETTINGS is
+    # still hand-written, so a "<slug>_channel" row added there rather than to the
+    # catalog would render fine while sitting outside FOLLOWABLE_SLUGS, and therefore
+    # outside _UNCLEARABLE_CHANNEL_SLUGS: clearable, which no feed channel may be.
     channel_rows = {s.slug for s in aps._SETTINGS if s.kind == "channel"}
-    assert {f.channel_key for f in dd_feeds.FOLLOWABLES} <= channel_rows
+    assert channel_rows - {"log_channel_id", "alerts_channel_id"} == {
+        f.channel_key for f in dd_feeds.FOLLOWABLES
+    }
 
 
 async def test_a_parent_row_always_precedes_its_subs() -> None:
@@ -134,11 +141,53 @@ async def test_only_cron_feeds_render_a_produce_toggle() -> None:
 async def test_feed_rows_are_ordered_channel_before_image_url() -> None:
     # Normalised on purpose: Eververse used to render its image URL above its channel
     # while the other eleven did the reverse. Ordering is now a rule in _feed_rows, not
-    # per-feed data, and this pins the rule rather than the eleven feeds it applies to.
-    for feed in dd_feeds.FOLLOWABLES:
+    # per-feed data, and this pins the rule rather than the feeds it applies to. The URL
+    # rows are read out of _FEED_EXTRA_ROWS rather than rebuilt from the slug — a
+    # hand-built "<slug>_image_url" would be a second naming convention of exactly the
+    # kind the catalog exists to remove, and it silently skipped every feed without one.
+    for slug, (_subs, urls) in aps._FEED_EXTRA_ROWS.items():
+        feed = dd_feeds.FEEDS[slug]
         rows = [s.slug for s in aps._feed_rows(feed)]
-        if feed.channel_key in rows and f"{feed.slug}_image_url" in rows:
-            assert rows.index(feed.channel_key) < rows.index(f"{feed.slug}_image_url")
+        for url_row in urls:
+            assert rows.index(feed.channel_key) < rows.index(url_row.slug), slug
+
+
+async def test_a_toggle_less_feed_keeps_its_extra_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The regression the generator was reshaped for.
+
+    It used to unpack a feed's extra rows and then return early for a feed with no
+    produce toggle, dropping them. Invisibly, and unsaveably too: _URL_SLUGS and
+    _CHANNEL_SETTINGS are derived from the rows that survive, so a dropped setting is
+    also filtered out of a save as an unknown key.
+    """
+    feed = dd_feeds.FEEDS["trials"]
+    assert not feed.has_toggle, "this test needs a feed with no produce toggle"
+    extra = aps._Setting("trials_image_url", "Default image URL", "Banner.", kind="url")
+    monkeypatch.setitem(aps._FEED_EXTRA_ROWS, "trials", ((), (extra,)))
+
+    rows = aps._feed_rows(feed)
+
+    assert [r.slug for r in rows] == ["trials_channel", "trials_image_url"]
+    # With a second row there is more than one peer and nothing naming them, so the
+    # feed's name becomes the group header and the channel row goes back to being an
+    # ordinary labelled setting — keeping the feed's own description, which the header
+    # has nowhere to put.
+    assert rows[0].category == feed.display_name
+    assert rows[0].label == "Post to channel"
+    assert rows[0].desc == feed.desc
+    assert not rows[0].sub and rows[1].sub
+
+
+async def test_a_toggle_less_feed_with_only_a_channel_gets_no_header() -> None:
+    # A header over a single row is a label above a label. Leaving it off is what keeps
+    # the six beacon-only feeds scanning as six feed names rather than six identical
+    # "Post to channel" labels with the difference demoted to faint uppercase.
+    feed = dd_feeds.FEEDS["trials"]
+    (row,) = aps._feed_rows(feed)
+    assert row.category == ""
+    assert row.label == feed.display_name
 
 
 # --- rendering --------------------------------------------------------------------
