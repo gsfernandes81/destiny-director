@@ -15,11 +15,15 @@
 
 """Forward Python ``logging`` records to the Discord alerts channel.
 
-A single :class:`DiscordLogHandler` is attached to the root logger (at the
-``alert_min_level`` Autopost Setting, see :mod:`dd.common.settings`) per process. Its
+A single :class:`DiscordLogHandler` is attached to the root logger per process. Its
 ``emit`` is synchronous and only enqueues a lightweight snapshot; a background coroutine
 batches records over a short window, collapses duplicates by *signature*, renders each
 group as a Components V2 container, and posts it to the ``alerts_channel_id`` setting.
+
+Both Autopost Settings this reads — ``alerts_channel_id`` and ``alert_min_level`` — are
+resolved **per flush**, never held from boot, so either can be changed on the settings
+page and take effect within one flush window. Neither read can fail: see
+``dd.common.settings``' note on the alerting path.
 
 High-priority flagging:
     - Repeated errors at high frequency: a per-signature rolling window counts
@@ -71,6 +75,14 @@ _IGNORED_LOGGER_PREFIXES = ("hikari", "lightbulb", "asyncio", "aiosqlite")
 _WARNING_EMOJI = "⚠️"
 _CRITICAL_EMOJI = "🚨"
 _ERROR_EMOJI = "🛑"
+
+# The lowest level this system can forward. It is the handler's own floor: emit()
+# enqueues anything at or above it, and _flush applies the *configured* minimum
+# (`alert_min_level`) afterwards. WARNING because _style has no bucket below it. The
+# extra queue traffic when the configured minimum is higher is bounded by
+# cfg.alert_queue_maxsize and the flush window, and the app's own WARNING rate is low
+# (the noisy libraries are excluded by _IGNORED_LOGGER_PREFIXES).
+_QUEUE_FLOOR = logging.WARNING
 
 # Discord component budgets (kept conservatively under the hard limits).
 _MAX_TRACEBACK_CHARS = 1800
@@ -174,14 +186,16 @@ class DiscordLogHandler(logging.Handler):
         self,
         bot: CachedFetchBot,
         *,
-        channel_id: int,
         bot_name: str,
         owner_ids: t.Sequence[int],
-        level: int = logging.ERROR,
     ) -> None:
-        super().__init__(level=level)
+        # The handler floor is the lowest level this system ever forwards, NOT the
+        # configured minimum: `alert_min_level` is resolved per flush instead (see
+        # _flush), so changing it on the settings page takes effect without a restart.
+        # logging.Handler.level is set once at construction and nothing ever calls
+        # setLevel again, which is exactly how it used to freeze at boot.
+        super().__init__(level=_QUEUE_FLOOR)
         self._bot = bot
-        self._channel_id = channel_id
         self._bot_name = bot_name
         self._owner_ids = list(owner_ids)
         self._queue: aio.Queue[_AlertRecord] = aio.Queue(
@@ -251,6 +265,16 @@ class DiscordLogHandler(logging.Handler):
                 self._stderr(f"failed to flush alert batch: {exc!r}")
 
     async def _flush(self, batch: list[_AlertRecord]) -> None:
+        # Apply the configured minimum here rather than at emit(), so an edit on the
+        # settings page is honoured within one flush window instead of at next restart.
+        # Filtering *before* storm accounting preserves the old semantics exactly: a
+        # sub-threshold record used never to reach the handler at all, so it must not
+        # contribute to a signature's storm count now either.
+        minimum = _resolve_level(await settings.get_alert_min_level())
+        batch = [rec for rec in batch if rec.levelno >= minimum]
+        if not batch:
+            return
+
         # Collapse duplicates: first occurrence represents the group, count sums.
         grouped: dict[str, _AlertRecord] = {}
         for rec in batch:
@@ -315,12 +339,19 @@ class DiscordLogHandler(logging.Handler):
             and bool(self._owner_ids)
             and self._ping_allowed(rec.signature, now)
         )
+        # Resolved per send, not held from boot: the alerts channel is a setting, and
+        # one you would most plausibly change *because* something is wrong. 0 means no
+        # channel configured — inert, and not worth rendering for.
+        channel_id = await settings.get_alerts_channel_id()
+        if not channel_id:
+            return
+
         components = await self._render(rec, effective_level=effective_level, ping=ping)
 
         try:
             channel = self._bot.cache.get_guild_channel(
-                self._channel_id
-            ) or await self._bot.rest.fetch_channel(self._channel_id)
+                channel_id
+            ) or await self._bot.rest.fetch_channel(channel_id)
             channel = t.cast(h.TextableChannel, channel)
             await channel.send(
                 components=components,
@@ -468,35 +499,32 @@ def _install_reference_formatter() -> None:
 
 async def install_discord_logging(
     bot: CachedFetchBot, *, bot_name: str
-) -> "DiscordLogHandler | None":
+) -> "DiscordLogHandler":
     """Attach a :class:`DiscordLogHandler` to the root logger.
 
-    Must be called with the event loop running (e.g. from ``StartedEvent``) so
-    the alerts channel can be fetched and owner ids cached. No-ops (returns the
-    existing handler) if called twice, or returns ``None`` if no alerts channel
-    is configured.
+    Must be called with the event loop running (e.g. from ``StartedEvent``) so owner
+    ids can be cached. No-ops (returns the existing handler) if called twice.
+
+    Always installs, even with no alerts channel configured: both the channel and the
+    minimum level are read per flush rather than held from boot, so either can be
+    changed on the settings page without restarting the bot.
     """
     global _installed_handler
     if _installed_handler is not None:
         return _installed_handler
 
-    alerts_channel = await settings.get_alerts_channel_id()
-    if not alerts_channel:
+    if not await settings.get_alerts_channel_id():
+        # Installed anyway. The channel is resolved per send, so configuring one on the
+        # settings page starts alerting immediately — this used to return None and never
+        # retry, leaving a process that booted unconfigured with no alerting for its
+        # entire life, however correct the database became afterwards.
         DiscordLogHandler._stderr(
-            "Alerts channel unset (Autopost Settings); Discord logging disabled"
+            "Alerts channel unset (Autopost Settings); alerts inert until one is set"
         )
-        _detach_startup_buffer(replay_into=None)
-        return None
 
     owner_ids = [int(owner_id) for owner_id in await bot.fetch_owner_ids()]
 
-    handler = DiscordLogHandler(
-        bot,
-        channel_id=alerts_channel,
-        bot_name=bot_name,
-        owner_ids=owner_ids,
-        level=_resolve_level(await settings.get_alert_min_level()),
-    )
+    handler = DiscordLogHandler(bot, bot_name=bot_name, owner_ids=owner_ids)
     handler._task = aio.create_task(handler._consumer())
     logging.getLogger().addHandler(handler)
     _installed_handler = handler

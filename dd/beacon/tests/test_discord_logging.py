@@ -187,8 +187,15 @@ def test_is_storm_promotes_only_past_the_frequency_threshold():
 
 
 @pytest.mark.asyncio
-async def test_send_alert_storm_pings_owner_once_then_debounces():
+async def test_send_alert_storm_pings_owner_once_then_debounces(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A storm promotes to CRITICAL and pings owners, debounced per signature."""
+    # The alerts channel is read per send now rather than held from boot, so it has to
+    # come from settings instead of being poked onto the handler.
+    monkeypatch.setattr(
+        dl.settings, "get_alerts_channel_id", AsyncMock(return_value=999)
+    )
     handler = dl.DiscordLogHandler.__new__(dl.DiscordLogHandler)
     logging.Handler.__init__(handler, level=logging.ERROR)
 
@@ -198,7 +205,6 @@ async def test_send_alert_storm_pings_owner_once_then_debounces():
     bot.cache.get_guild_channel = MagicMock(return_value=channel)
 
     handler._bot = bot
-    handler._channel_id = 999
     handler._bot_name = "beacon"
     handler._owner_ids = [123]
     handler._last_escalation = {}
@@ -235,3 +241,98 @@ def test_emit_swallows_queue_full_and_latches_overflow_warning():
 
     assert handler._overflow_warned is True
     handler._stderr.assert_called_once()
+
+
+# --- both settings are read live, not held from boot -------------------------------
+#
+# alerts_channel_id and alert_min_level used to be captured in the handler's ctor (the
+# channel on the instance, the level as logging.Handler.level, which nothing ever
+# re-set). Editing either on the settings page did nothing until the process restarted,
+# silently — the page saved, redisplayed the new value, and the handler ignored it.
+
+
+def _pipeline_handler() -> tuple[dl.DiscordLogHandler, MagicMock]:
+    """A handler wired enough to run _flush/_send_alert, plus its stub channel."""
+    handler = dl.DiscordLogHandler.__new__(dl.DiscordLogHandler)
+    logging.Handler.__init__(handler, level=dl._QUEUE_FLOOR)
+    channel = MagicMock()
+    channel.send = AsyncMock()
+    bot = MagicMock()
+    bot.cache.get_guild_channel = MagicMock(return_value=channel)
+    handler._bot = bot
+    handler._bot_name = "beacon"
+    handler._owner_ids = []
+    handler._last_escalation = {}
+    handler._sig_times = defaultdict(deque)
+    return handler, channel
+
+
+@pytest.mark.asyncio
+async def test_a_channel_configured_after_boot_starts_being_used(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler, channel = _pipeline_handler()
+    monkeypatch.setattr(
+        dl.settings, "get_alert_min_level", AsyncMock(return_value="ERROR")
+    )
+    channel_id = 0
+
+    async def _channel() -> int:
+        return channel_id
+
+    monkeypatch.setattr(dl.settings, "get_alerts_channel_id", _channel)
+
+    await handler._flush([_alert(signature="a")])
+    assert channel.send.await_count == 0  # inert while unset
+
+    channel_id = 999  # operator sets one on the settings page — no restart
+    await handler._flush([_alert(signature="b")])
+    assert channel.send.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_raising_the_minimum_level_takes_effect_without_a_restart(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler, channel = _pipeline_handler()
+    monkeypatch.setattr(
+        dl.settings, "get_alerts_channel_id", AsyncMock(return_value=999)
+    )
+    level = "ERROR"
+
+    async def _level() -> str:
+        return level
+
+    monkeypatch.setattr(dl.settings, "get_alert_min_level", _level)
+
+    await handler._flush([_alert(signature="e", levelno=logging.ERROR)])
+    assert channel.send.await_count == 1
+
+    level = "CRITICAL"  # raised on the settings page
+    await handler._flush([_alert(signature="e2", levelno=logging.ERROR)])
+    assert channel.send.await_count == 1  # ERROR now filtered out
+
+    await handler._flush([_alert(signature="c", levelno=logging.CRITICAL)])
+    assert channel.send.await_count == 2  # CRITICAL still gets through
+
+
+@pytest.mark.asyncio
+async def test_a_sub_threshold_record_does_not_feed_storm_accounting(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Filtering happens before _is_storm, matching the old behaviour exactly: a record
+    # below the minimum never reached the handler at all, so it must not count towards
+    # a signature's storm window now either.
+    handler, channel = _pipeline_handler()
+    monkeypatch.setattr(
+        dl.settings, "get_alerts_channel_id", AsyncMock(return_value=999)
+    )
+    monkeypatch.setattr(
+        dl.settings, "get_alert_min_level", AsyncMock(return_value="CRITICAL")
+    )
+
+    for _ in range(int(cfg.alert_freq_threshold) + 2):
+        await handler._flush([_alert(signature="noisy", levelno=logging.ERROR)])
+
+    assert channel.send.await_count == 0
+    assert not handler._sig_times["noisy"]
