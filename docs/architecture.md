@@ -148,6 +148,25 @@ Two consequences worth knowing before touching any of it:
 The structural diff stays in Python (`cv2_render.py`) because it needs `difflib`; what
 ships is its verdict, as annotations the shared renderer draws.
 
+## The feed catalog — `dd/common/feeds.py`
+
+Every followable feed is declared once, here: its slug, display name, description, and
+whether anchor produces it on a schedule. **A new feed starts as a `Followable` entry in
+this module**, and only then gets its wiring — an anchor producer, a beacon navigator, or
+neither.
+
+The catalog holds identity, not wiring. `channel_key` (`"<slug>_channel"`, the
+`auto_post_settings` row holding the feed's channel) and `has_toggle` are derived, and
+`FEEDS[slug]` is how both bots resolve a feed's name — the settings page generates its
+twelve groups from it, beacon's `/autopost` subcommands and navigators take their user-
+facing names from it, and anchor's CV2 overflow alerts do too. Nothing branches on an
+unknown slug: a slug that names no feed raises, at the point it is written.
+
+Cron schedules, producer coros and navigator wiring stay with their single consumer —
+holding the coros would force `dd.common` to import `dd.anchor`. Enumeration has to be
+total in every process (anchor renders all twelve feeds but has producers for eight), so
+it is a static catalog rather than an import-time registry.
+
 ## Paged messages — `dd/beacon/nav.py`
 
 For multi-page / navigable responses use the nav system rather than rolling your own:
@@ -200,9 +219,13 @@ rewrite on `mirror-v2`.
 
 ## Configuration — `dd/common/cfg.py`
 
-`cfg.py` is the single config source. It reads env vars and **validates required ones at
-import time** (raises `ValueError` if a required var is missing). It exposes
-`cfg.followables`, tokens, colors, alert thresholds, DB URLs, Bungie creds, etc. Because
+`cfg.py` is the single config source for anything that must be known before the database
+is reachable. It reads env vars and **validates required ones at import time** (raises
+`ValueError` if a required var is missing). It exposes tokens, DB URLs, Bungie creds,
+etc. Operational settings that used to live here — followable channels, embed colours,
+the log/alerts channels — are now DB-backed and read through `dd.common.settings`, whose
+sole writer is the Autopost Settings page; the feeds themselves are declared in
+`dd/common/feeds.py`. Because
 validation happens at import, running anything that imports `cfg` without a populated
 environment (e.g. bare `pytest` without `--env-file .env`) fails fast — this is why tests
 go through `make test`.
