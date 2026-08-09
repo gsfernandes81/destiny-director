@@ -42,6 +42,7 @@ loader.command(
     make_navigator_command(
         _pages,
         name="trials",
+        feed="trials",
         description="Find out about this weeks Trials weapon and map",
         allow_start_on_blank_page=True,
         display_date_offset=dt.timedelta(days=3),

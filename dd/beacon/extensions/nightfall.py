@@ -85,6 +85,7 @@ loader.command(
     make_navigator_command(
         _pages,
         name="nightfall",
+        feed="weekly_nightfall",
         description="Find out about this weeks nightfall",
     )
 )

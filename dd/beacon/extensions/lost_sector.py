@@ -87,14 +87,20 @@ _pages = setup_nav_pages(
 ls_group = lb.Group("ls", "Find out about today's lost sector")
 ls_group.register(
     make_navigator_command(
-        _pages, name="today", description="Find out about today's lost sector"
+        _pages,
+        name="today",
+        feed="lost_sector",
+        description="Find out about today's lost sector",
     )
 )
 
 ls_group_2 = lb.Group("lost", "Find out about today's lost sector")
 ls_group_2.register(
     make_navigator_command(
-        _pages, name="sector", description="Find out about today's lost sector"
+        _pages,
+        name="sector",
+        feed="lost_sector",
+        description="Find out about today's lost sector",
     )
 )
 

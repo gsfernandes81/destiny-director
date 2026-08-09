@@ -179,7 +179,7 @@ async def test_navigator_command_answers_instead_of_raising(
     holder = nav.NavPagesHolder()
     holder.unavailable = utils.FEED_UNREACHABLE
     command_cls = nav.make_navigator_command(
-        holder, name="xur", description="d", display_name="Xûr"
+        holder, name="xur", description="d", feed="xur"
     )
     ctx = _ctx()
 

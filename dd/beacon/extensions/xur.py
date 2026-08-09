@@ -52,6 +52,7 @@ loader.command(
     make_navigator_command(
         _pages,
         name="xur",
+        feed="xur",
         description="Find out what Xur has and where Xur is",
     )
 )

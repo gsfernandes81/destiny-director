@@ -101,10 +101,14 @@ _pages = setup_nav_pages(
 _TWID_DESCRIPTION = "Find out about This Week In Destiny (formerly the TWAB)"
 
 loader.command(
-    make_navigator_command(_pages, name="twid", description=_TWID_DESCRIPTION)
+    make_navigator_command(
+        _pages, name="twid", feed="twab", description=_TWID_DESCRIPTION
+    )
 )
 loader.command(
-    make_navigator_command(_pages, name="twab", description=_TWID_DESCRIPTION)
+    make_navigator_command(
+        _pages, name="twab", feed="twab", description=_TWID_DESCRIPTION
+    )
 )
 
 follow_control_command_maker("twab", "This Week In Destiny weekly auto posts")

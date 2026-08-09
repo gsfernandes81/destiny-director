@@ -40,6 +40,7 @@ weekly_reset_command_group.register(
     make_navigator_command(
         _pages,
         name="reset",
+        feed="weekly_reset",
         description="Find out about this weeks reset",
     )
 )

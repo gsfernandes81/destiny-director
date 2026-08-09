@@ -41,6 +41,7 @@ loader.command(
     make_navigator_command(
         _pages,
         name="eververse",
+        feed="eververse",
         description="Find out about the eververse items",
     )
 )
