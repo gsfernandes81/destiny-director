@@ -199,9 +199,7 @@ def _db_urls(var_name: str, var_name_alternative: str) -> tuple[str, str]:
     )
 
 
-def _db_config(
-    db_url_async: str,
-) -> tuple[
+def _db_config(db_url_async: str) -> tuple[
     t.Mapping[str, bool | type[AsyncSession]],
     t.Mapping[str, bool],
     t.Mapping[str, t.Any],
