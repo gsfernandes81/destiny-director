@@ -32,7 +32,12 @@ from sqlalchemy import delete
 
 from dd.anchor import autopost, web
 from dd.anchor.extensions import autopost_settings as aps
-from dd.common import cfg, schemas, settings
+from dd.common import (
+    cfg,
+    feeds as dd_feeds,
+    schemas,
+    settings,
+)
 from dd.hmessage import HMessage
 
 pytestmark = pytest.mark.asyncio
@@ -79,21 +84,61 @@ def _as_request(req: _FakeRequest) -> aiohttp.web.Request:
     return t.cast(aiohttp.web.Request, req)
 
 
-# --- structural: keep _SETTINGS and dd.common.settings.FOLLOWABLE_SLUGS in sync ----
+# --- structural: the page's rows follow from the catalog ----------------------------
+#
+# What used to live here was a watchdog: _SETTINGS and FOLLOWABLE_SLUGS were two
+# hand-maintained lists of the same twelve feeds, and a test compared them so drift
+# failed loudly. Both now derive from dd.common.feeds, so that comparison has become a
+# tautology and is gone. What can still be got wrong is the page-side data that names
+# feeds, and the ordering invariant _render_html depends on — so those are asserted
+# instead.
 
 
-async def test_every_followable_slug_has_a_channel_row_on_the_page() -> None:
-    # dd.common.settings.FOLLOWABLE_SLUGS (the feed -> DB column map) and this page's
-    # per-feed "channel" rows are two independently hand-maintained lists of the same
-    # feeds. A followable added to one without the other fails silently (see this
-    # test's counterpart below for the reverse direction) — this asserts both actually
-    # name the same set of feeds, so drift fails loudly here instead.
-    page_channel_slugs = {s.slug for s in aps._SETTINGS if s.kind == "channel"}
-    non_followable_channel_slugs = {"log_channel_id", "alerts_channel_id"}
+async def test_page_side_feed_dicts_name_only_real_feeds() -> None:
+    # _FEED_EXTRA_ROWS and _DORMANT_NOTE_SLUGS are keyed by catalog slug. A typo, or a
+    # feed renamed in the catalog without updating them, would silently drop a row (or
+    # a sentence) rather than raising anywhere.
+    assert set(aps._FEED_EXTRA_ROWS) <= set(dd_feeds.FEEDS)
+    assert set(dd_feeds.FEEDS) >= aps._DORMANT_NOTE_SLUGS
 
-    assert page_channel_slugs - non_followable_channel_slugs == set(
-        settings.FOLLOWABLE_SLUGS.values()
-    )
+
+async def test_every_feed_contributes_a_channel_row() -> None:
+    channel_rows = {s.slug for s in aps._SETTINGS if s.kind == "channel"}
+    assert {f.channel_key for f in dd_feeds.FOLLOWABLES} <= channel_rows
+
+
+async def test_a_parent_row_always_precedes_its_subs() -> None:
+    """_render_html groups in a single pass, so the order is load-bearing.
+
+    It starts a new group at each ``sub=False`` row and appends every ``sub=True`` row
+    to the group in progress — meaning a sub that appears before any parent would be
+    silently dropped into the previous feed's box. Generation makes this structural
+    (``_feed_rows`` emits the parent first), and this is the assertion that it stays so.
+    """
+    assert aps._SETTINGS, "the page would render empty"
+    assert not aps._SETTINGS[0].sub
+    # Per feed, too: a group whose first row were a sub would not go ungrouped, it
+    # would land in the *previous* feed's box — which renders fine and reads wrong.
+    for feed in dd_feeds.FOLLOWABLES:
+        assert not aps._feed_rows(feed)[0].sub, feed.slug
+
+
+async def test_only_cron_feeds_render_a_produce_toggle() -> None:
+    # The toggle switches a schedule off, so only ANCHOR_CRON feeds have one. A form or
+    # external feed growing a toggle would offer an operator a switch wired to nothing.
+    toggles = {s.slug for s in aps._SETTINGS if s.kind == "toggle"}
+    for feed in dd_feeds.FOLLOWABLES:
+        assert (feed.slug in toggles) is feed.has_toggle, feed.slug
+
+
+async def test_feed_rows_are_ordered_channel_before_image_url() -> None:
+    # Normalised on purpose: Eververse used to render its image URL above its channel
+    # while the other eleven did the reverse. Ordering is now a rule in _feed_rows, not
+    # per-feed data, and this pins the rule rather than the eleven feeds it applies to.
+    for feed in dd_feeds.FOLLOWABLES:
+        rows = [s.slug for s in aps._feed_rows(feed)]
+        if feed.channel_key in rows and f"{feed.slug}_image_url" in rows:
+            assert rows.index(feed.channel_key) < rows.index(f"{feed.slug}_image_url")
 
 
 # --- rendering --------------------------------------------------------------------
