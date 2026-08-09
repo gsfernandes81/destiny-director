@@ -483,7 +483,6 @@ def _next_daily_reset_unix() -> int:
 # ── Autopost wiring (guarded: dormant until the followable channel is configured) ─
 
 
-
 # The cron registers unconditionally — it is never gated on a boot-time channel, unlike
 # before. That import-time snapshot only ever reflected whatever the channel was at
 # boot; gating registration on it meant setting a channel on the Autopost Settings
