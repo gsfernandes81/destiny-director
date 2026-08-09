@@ -34,7 +34,7 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 20, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = resolve_followable_channel("lost_sector", "Lost Sector")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("lost_sector")
 
 
 class SectorMessages(NavPages):
@@ -77,7 +77,6 @@ _pages = setup_nav_pages(
     loader,
     pages_cls=SectorMessages,
     feed="lost_sector",
-    display_name="Lost Sector",
     history_len=14,
     lookahead_len=7,
     period=dt.timedelta(days=1),
@@ -88,20 +87,24 @@ _pages = setup_nav_pages(
 ls_group = lb.Group("ls", "Find out about today's lost sector")
 ls_group.register(
     make_navigator_command(
-        _pages, name="today", description="Find out about today's lost sector"
+        _pages,
+        name="today",
+        feed="lost_sector",
+        description="Find out about today's lost sector",
     )
 )
 
 ls_group_2 = lb.Group("lost", "Find out about today's lost sector")
 ls_group_2.register(
     make_navigator_command(
-        _pages, name="sector", description="Find out about today's lost sector"
+        _pages,
+        name="sector",
+        feed="lost_sector",
+        description="Find out about today's lost sector",
     )
 )
 
 loader.command(ls_group)
 loader.command(ls_group_2)
 
-follow_control_command_maker(
-    "lost_sector", "lost_sector", "Lost sector", "Lost sector auto posts"
-)
+follow_control_command_maker("lost_sector", "Lost Sector auto posts")

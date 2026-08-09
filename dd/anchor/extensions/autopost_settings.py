@@ -45,6 +45,7 @@ needs no auth code).
 
 import asyncio
 import html
+import itertools
 import logging
 import re
 import typing as t
@@ -58,6 +59,7 @@ from toolbox.members import calculate_permissions
 
 from ...common import (
     cfg,
+    feeds as dd_feeds,
     schemas,
     settings as dd_settings,
 )
@@ -105,7 +107,11 @@ class _Setting(t.NamedTuple):
     slug: str
     label: str
     desc: str
-    sub: bool
+    #: Whether this row hangs off the one above it rather than heading its own group.
+    #: Defaulted because the feed rows no longer set it by hand — ``_as_group`` stamps
+    #: it, so a group cannot be built that opens with a sub. The general rows below
+    #: still pass it explicitly.
+    sub: bool = False
     kind: str = "toggle"
     options: tuple[str, ...] = ()
     channel_scope: str = "kyber"
@@ -116,20 +122,18 @@ class _Setting(t.NamedTuple):
     #: False for log_channel_id/alerts_channel_id: nothing follows them, the bot only
     #: sends there directly, so a plain text channel works fine too.
     announce_only: bool = True
-    #: A general (non-feed) group's display title, set on the group's FIRST setting only
-    #: (``sub=False``) — a feed group's own toggle row already names it, so a feed
-    #: setting leaves this blank. Rendered above the group's rows rather than reusing
-    #: that first setting's own ``label``, since the header names the *category*
-    #: ("Branding"), not that one row ("Default accent colour").
+    #: A group's display title, set on its FIRST setting only (``sub=False``). Rendered
+    #: above the group's rows rather than reusing that first setting's own ``label``,
+    #: since the header names the *category* ("Branding"), not that one row ("Default
+    #: accent colour"). Blank whenever a row already names the group for itself — a
+    #: feed's produce toggle does, and so does the lone channel row of a feed that has
+    #: only that; see :func:`_feed_rows` for when a feed earns a header instead.
     category: str = ""
 
 
-# Ordered for display: each sub-row immediately follows its parent, and a parent always
-# precedes its subs (required by _render_html's single-pass grouping). The first block
-# (no feed toggle) is the general/ops settings; the rest mirror the feed-toggle rows
-# that already existed, each gaining its followable channel (and, for two feeds, an
-# image URL that used to be a separate env var).
-_SETTINGS: tuple[_Setting, ...] = (
+# The seven global/ops rows, hand-written: they are not feeds, the catalog never
+# mentions them, and each piece of their copy exists exactly once.
+_GENERAL_SETTINGS: tuple[_Setting, ...] = (
     # --- Branding: colours + the fallback link, all "how a post looks by default" ----
     _Setting(
         "embed_default_color",
@@ -192,160 +196,155 @@ _SETTINGS: tuple[_Setting, ...] = (
         channel_scope="kyber_control",
         announce_only=False,
     ),
-    # --- Lost Sector ------------------------------------------------------------------
-    _Setting(
-        "lost_sector",
-        "Lost Sector",
-        "Today's Lost Sector — location, champions, and shields.",
-        False,
+)
+
+# Per-feed page extras: the producer sub-options and image URLs that only some feeds
+# have. Page-only copy with one consumer each, so it stays here rather than in the
+# catalog — (sub-toggles, image-url rows), rendered around the channel row.
+_FEED_EXTRA_ROWS: dict[str, tuple[tuple[_Setting, ...], tuple[_Setting, ...]]] = {
+    "lost_sector": (
+        (
+            _Setting(
+                "lost_sector_details",
+                "Legendary weapon details",
+                "Also list the featured legendary weapon rewards.",
+                True,
+            ),
+        ),
+        (
+            _Setting(
+                "lost_sector_image_url",
+                "Default image URL",
+                "Image shown at the bottom of each Lost Sector post. Leave blank for "
+                "none.",
+                True,
+                "url",
+            ),
+        ),
     ),
-    _Setting(
-        "lost_sector_details",
-        "Legendary weapon details",
-        "Also list the featured legendary weapon rewards.",
-        True,
+    "xur": (
+        (
+            _Setting(
+                "xur_default_image",
+                "Use default image",
+                "Fall back to a saved banner when no fresh image is available.",
+                True,
+            ),
+        ),
+        (
+            _Setting(
+                "xur_image_url",
+                "Default image URL",
+                "The saved banner used when 'Use default image' is on. Leave blank for "
+                "none.",
+                True,
+                "url",
+            ),
+        ),
     ),
-    _Setting(
-        "lost_sector_channel",
-        "Post to channel",
-        "The Kyber channel this feed posts to.",
-        True,
-        "channel",
+    "eververse": (
+        (),
+        (
+            _Setting(
+                "eververse_image_url",
+                "Default image URL",
+                "Banner shown at the bottom of each Eververse post. Leave blank for "
+                "none.",
+                True,
+                "url",
+            ),
+        ),
     ),
-    _Setting(
-        "lost_sector_image_url",
-        "Default image URL",
-        "Image shown at the bottom of each Lost Sector post. Leave blank for none.",
-        True,
-        "url",
-    ),
-    # --- Xûr ----------------------------------------------------------------------
-    _Setting("xur", "Xûr", "Xûr's weekend location and inventory.", False),
-    _Setting(
-        "xur_default_image",
-        "Use default image",
-        "Fall back to a saved banner when no fresh image is available.",
-        True,
-    ),
-    _Setting(
-        "xur_channel",
-        "Post to channel",
-        "The Kyber channel this feed posts to.",
-        True,
-        "channel",
-    ),
-    _Setting(
-        "xur_image_url",
-        "Default image URL",
-        "The saved banner used when 'Use default image' is on. Leave blank for none.",
-        True,
-        "url",
-    ),
-    # --- Eververse ----------------------------------------------------------------
-    _Setting(
-        "eververse",
-        "Eververse",
-        "This week's Eververse featured items and Bright Dust.",
-        False,
-    ),
-    _Setting(
-        "eververse_image_url",
-        "Default image URL",
-        "Banner shown at the bottom of each Eververse post. Leave blank for none.",
-        True,
-        "url",
-    ),
-    _Setting(
-        "eververse_channel",
-        "Post to channel",
-        "The Kyber channel this feed posts to.",
-        True,
-        "channel",
-    ),
-    # --- Ada-1 ----------------------------------------------------------------------
-    _Setting("ada", "Ada-1", "Ada-1's weekly rotating shaders.", False),
-    _Setting(
-        "ada_channel",
-        "Post to channel",
-        "The Kyber channel this feed posts to.",
-        True,
-        "channel",
-    ),
-    # --- Portal Ops -------------------------------------------------------------------
-    _Setting(
-        "portal_ops",
-        "Portal Ops",
-        "Today's featured Portal Ops and their guaranteed rewards.",
-        False,
-    ),
-    _Setting(
-        "portal_ops_channel",
-        "Post to channel",
-        "The Kyber channel this feed posts to. Dormant until one is set; switch the "
-        "feed off above to stop it after that.",
-        True,
-        "channel",
-    ),
-    # --- Iron Banner --------------------------------------------------------------
-    _Setting(
-        "iron_banner",
-        "Iron Banner",
-        "Iron Banner weeks — dates, game modes, bonus focus pool, and guide link.",
-        False,
-    ),
-    _Setting(
-        "iron_banner_channel",
-        "Post to channel",
-        "The Kyber channel this feed posts to. Dormant until one is set; switch the "
-        "feed off above to stop it after that.",
-        True,
-        "channel",
-    ),
-    # --- Beacon-only feeds: no enable/disable toggle exists for these, so each is a
-    # single-row group of just its channel (gated purely on whether one is set). -------
-    _Setting(
-        "twab_channel",
-        "This Week At Bungie",
-        "The Kyber channel TWAB posts follow from.",
-        False,
-        "channel",
-    ),
-    _Setting(
-        "trials_channel",
-        "Trials of Osiris",
-        "The Kyber channel this feed posts to. Content is edited on the Trials form.",
-        False,
-        "channel",
-    ),
-    _Setting(
-        "weekly_reset_channel",
-        "Weekly Reset",
-        "The Kyber channel this feed posts to. Content is edited on the Weekly Reset "
-        "form.",
-        False,
-        "channel",
-    ),
-    _Setting(
-        "weekly_nightfall_channel",
-        "Weekly Nightfall",
-        "The Kyber channel weekly nightfall posts follow from.",
-        False,
-        "channel",
-    ),
-    _Setting(
-        "free_games_channel",
-        "Free Games",
-        "The Kyber channel free-games posts follow from.",
-        False,
-        "channel",
-    ),
-    _Setting(
-        "emblems_and_cosmetics_channel",
-        "Emblems & Cosmetics",
-        "The Kyber channel emblems/cosmetics posts follow from.",
-        False,
-        "channel",
-    ),
+}
+
+# The two feeds that ship unconfigured, whose channel row says so. Page copy, two
+# entries, pinned to catalog slugs by a test.
+_DORMANT_NOTE_SLUGS = frozenset({"portal_ops", "iron_banner"})
+_CHANNEL_DESC = "The Kyber channel this feed posts to."
+_DORMANT_NOTE = (
+    " Dormant until one is set; switch the feed off above to stop it after that."
+)
+
+
+def _as_group(rows: tuple[_Setting, ...], category: str = "") -> tuple[_Setting, ...]:
+    """Stamp a group: the first row heads it, everything after hangs off it.
+
+    ``_render_html`` groups in a single pass on ``sub``, so "a parent precedes its subs"
+    has to hold or a row lands silently in the group above. Stamping it here makes that
+    structural — no caller writes a ``sub`` flag, so no caller can write a group that
+    opens with one.
+    """
+    head, *rest = rows
+    return (
+        head._replace(sub=False, category=category),
+        *(row._replace(sub=True) for row in rest),
+    )
+
+
+def _feed_rows(feed: dd_feeds.Followable) -> tuple[_Setting, ...]:
+    """One feed's settings rows, in display order.
+
+    One sequence, not two shapes: the produce toggle is simply the first row when the
+    feed has one. There is no early return to forget a row in — the previous version
+    had one, and it silently dropped any extras belonging to a feed without a toggle.
+
+    What heads the group follows from what the group contains:
+
+    * a feed anchor produces on a schedule leads with its produce toggle, which names
+      it, and everything else indents beneath;
+    * a feed with no toggle and nothing but a channel *is* that one row, which wears the
+      feed's name — a header above a single row would only be a label above a label;
+    * a feed with no toggle and more than one row earns a header, the same way Branding
+      and Logging & Alerts do. Without it the channel row would have to be both the
+      feed's name and a control, which demotes every sibling row beneath a heading that
+      is really a peer.
+
+    Ordering is a rule — toggle, sub-toggles, channel, image URL — rather than per-feed
+    data, which is what let the twelve groups be generated from the catalog at all.
+    """
+    subs, urls = _FEED_EXTRA_ROWS.get(feed.slug, ((), ()))
+
+    if feed.has_toggle:
+        channel_desc = _CHANNEL_DESC + (
+            _DORMANT_NOTE if feed.slug in _DORMANT_NOTE_SLUGS else ""
+        )
+        return _as_group(
+            (
+                _Setting(feed.slug, feed.display_name, feed.desc),
+                *subs,
+                _Setting(
+                    feed.channel_key, "Post to channel", channel_desc, kind="channel"
+                ),
+                *urls,
+            )
+        )
+
+    if subs or urls:
+        # The feed's name heads the group, so the channel row is an ordinary setting
+        # again — and keeps the feed's own description, which the header cannot carry.
+        return _as_group(
+            (
+                _Setting(
+                    feed.channel_key, "Post to channel", feed.desc, kind="channel"
+                ),
+                *subs,
+                *urls,
+            ),
+            category=feed.display_name,
+        )
+
+    # Nothing but a channel — reached only when subs and urls are both empty, so there
+    # is nothing here to forget. The row is the group and wears the feed's name.
+    return _as_group(
+        (_Setting(feed.channel_key, feed.display_name, feed.desc, kind="channel"),)
+    )
+
+
+# Ordered for display: the global rows, then each feed's group. Generated rather than
+# written out, so the page cannot disagree with the catalog about which feeds exist or
+# what they are called — the job the old hand-sync test used to do by watching.
+_SETTINGS: tuple[_Setting, ...] = _GENERAL_SETTINGS + tuple(
+    itertools.chain.from_iterable(_feed_rows(f) for f in dd_feeds.FOLLOWABLES)
 )
 
 # The slugs this page is allowed to write — a save request's keys are filtered against

@@ -87,7 +87,7 @@ async def test_open_feed_source_returns_what_it_opened(
     opened = object()
     open_source = AsyncMock(return_value=opened)
 
-    assert await utils.open_feed_source("xur", "Xûr", open_source) == (opened, None)
+    assert await utils.open_feed_source("xur", open_source) == (opened, None)
     open_source.assert_awaited_once_with(42)
 
 
@@ -98,7 +98,7 @@ async def test_open_feed_source_alerts_on_an_unset_channel(
     open_source = AsyncMock()
 
     with caplog.at_level(logging.CRITICAL):
-        result = await utils.open_feed_source("xur", "Xûr", open_source)
+        result = await utils.open_feed_source("xur", open_source)
 
     assert result == (None, utils.FEED_UNCONFIGURED)
     open_source.assert_not_awaited()  # never "open" channel 0
@@ -115,7 +115,7 @@ async def test_open_feed_source_can_stay_quiet_about_an_unset_channel(
 
     with caplog.at_level(logging.CRITICAL):
         result = await utils.open_feed_source(
-            "free_games", "Free Games", AsyncMock(), alert_when_unset=False
+            "free_games", AsyncMock(), alert_when_unset=False
         )
 
     assert result == (None, utils.FEED_UNCONFIGURED)
@@ -136,7 +136,6 @@ async def test_open_feed_source_alerts_on_an_unreachable_channel(
     with caplog.at_level(logging.CRITICAL):
         result = await utils.open_feed_source(
             "free_games",
-            "Free Games",
             AsyncMock(side_effect=error),
             alert_when_unset=False,
         )
@@ -157,9 +156,7 @@ async def test_follow_control_refuses_an_unconfigured_feed(
     enable = AsyncMock()
     monkeypatch.setattr(autoposts, "_enable_autopost", enable)
 
-    command_cls = autoposts.follow_control_command_maker(
-        "xur", "xur_test", "Xur", "Xur auto posts"
-    )
+    command_cls = autoposts.follow_control_command_maker("xur", "Xur auto posts")
     command = command_cls()
     command.option = 1
     command.ping_role = None
@@ -182,7 +179,7 @@ async def test_navigator_command_answers_instead_of_raising(
     holder = nav.NavPagesHolder()
     holder.unavailable = utils.FEED_UNREACHABLE
     command_cls = nav.make_navigator_command(
-        holder, name="xur", description="d", display_name="Xûr"
+        holder, name="xur", description="d", feed="xur"
     )
     ctx = _ctx()
 
@@ -198,7 +195,7 @@ async def test_setup_nav_pages_records_an_unconfigured_feed(
 ) -> None:
     monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=0))
     loader = lb.Loader()
-    holder = nav.setup_nav_pages(loader, feed="xur", display_name="Xûr")
+    holder = nav.setup_nav_pages(loader, feed="xur")
 
     with caplog.at_level(logging.CRITICAL):
         await _started_listener(loader)(MagicMock())
@@ -222,7 +219,6 @@ async def test_setup_nav_pages_records_an_unreachable_channel(
     holder = nav.setup_nav_pages(
         loader,
         feed="xur",
-        display_name="Xûr",
         pages_cls=_Pages,
     )
     with caplog.at_level(logging.CRITICAL):

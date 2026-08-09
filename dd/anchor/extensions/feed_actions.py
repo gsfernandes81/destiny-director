@@ -54,6 +54,7 @@ import lightbulb as lb
 from dd.hmessage import HMessage
 from dd.hmessage.snapshot import cv2_payload
 
+from ...common import feeds as dd_feeds
 from .. import web
 from ..autopost import Feed, registered_feeds
 
@@ -78,11 +79,6 @@ def _feed_or_404(request: aiohttp.web.Request) -> Feed:
     if feed is None:
         raise aiohttp.web.HTTPNotFound(text="No such feed.")
     return feed
-
-
-def _title(name: str) -> str:
-    """``lost_sector`` → ``Lost Sector`` — display copy for a followable name."""
-    return name.replace("_", " ").title()
 
 
 async def _build(feed: Feed) -> HMessage:
@@ -153,7 +149,10 @@ async def _handle_send(request: aiohttp.web.Request) -> aiohttp.web.Response:
     # standing between a dormant feed and a post announced into channel 0.
     if not feed.channel_id:
         return aiohttp.web.json_response(
-            {"error": f"{_title(feed.name)} is dormant — no channel configured."},
+            {
+                "error": f"{dd_feeds.FEEDS[feed.name].display_name} is dormant"
+                " — no channel configured."
+            },
             status=409,
         )
     if feed.message_announcer_coro is None:

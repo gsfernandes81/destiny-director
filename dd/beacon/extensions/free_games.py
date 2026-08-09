@@ -21,7 +21,10 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import settings
+from ...common import (
+    feeds as dd_feeds,
+    settings,
+)
 from ...common.bot import CachedFetchBot
 from .. import utils
 from .autoposts import follow_control_command_maker, resolve_followable_channel
@@ -30,7 +33,7 @@ loader = lb.Loader()
 
 # Read once at import purely for the boot-time alert on an unconfigured feed; the
 # listeners and the command below resolve the channel live (see _followable_channel).
-FOLLOWABLE_CHANNEL = resolve_followable_channel("free_games", "Free Games")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("free_games")
 
 HELP_STRING = "See the current free games on The Epic Store, etc"
 
@@ -52,7 +55,7 @@ async def refresh_message_for_command(bot: CachedFetchBot):
     # deleted, and resolve_followable_channel already paged once at import for the
     # unset state — see open_feed_source. An unreachable channel does still alert.
     channel, reason = await utils.open_feed_source(
-        "free_games", "Free Games", bot.fetch_channel, alert_when_unset=False
+        "free_games", bot.fetch_channel, alert_when_unset=False
     )
     if channel is None:
         unavailable_reason = reason
@@ -135,7 +138,7 @@ class FreeGames(lb.SlashCommand, name="games", description=HELP_STRING):
         if last_message_in_channel is None:
             await ctx.respond(
                 await utils.feed_unavailable_embed(
-                    "Free Games",
+                    dd_feeds.FEEDS["free_games"].display_name,
                     unavailable_reason or "the bot is still starting up",
                 )
             )
@@ -147,4 +150,4 @@ class FreeGames(lb.SlashCommand, name="games", description=HELP_STRING):
 
 loader.command(slash_command_group)
 
-follow_control_command_maker("free_games", "free_games", "Free Games", HELP_STRING)
+follow_control_command_maker("free_games", HELP_STRING)

@@ -17,6 +17,7 @@ import datetime as dt
 
 import lightbulb as lb
 
+from ...common import feeds as dd_feeds
 from .. import utils
 from ..nav import NO_DATA_HERE_EMBED, NavigatorView, setup_nav_pages
 from .autoposts import follow_control_command_maker, resolve_followable_channel
@@ -25,14 +26,13 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 14, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = resolve_followable_channel("ada", "Ada")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("ada")
 
 SINGLE_PAGE_MODE = True
 
 _pages = setup_nav_pages(
     loader,
     feed="ada",
-    display_name="Ada",
     history_len=12,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,
@@ -41,7 +41,7 @@ _pages = setup_nav_pages(
 
 
 class AdaCommand(
-    lb.SlashCommand, name="ada", description="Find out about ada's weekly items"
+    lb.SlashCommand, name="ada", description="Find out about Ada-1's weekly items"
 ):
     @lb.invoke
     async def invoke(self, ctx: lb.Context):
@@ -52,7 +52,8 @@ class AdaCommand(
             # raising at the user. Same answer make_navigator_command gives.
             await ctx.respond(
                 await utils.feed_unavailable_embed(
-                    "Ada-1", _pages.unavailable or "the bot is still starting up"
+                    dd_feeds.FEEDS["ada"].display_name,
+                    _pages.unavailable or "the bot is still starting up",
                 )
             )
             return
@@ -82,4 +83,4 @@ class AdaCommand(
 
 loader.command(AdaCommand)
 
-follow_control_command_maker("ada", "ada", "Ada", "Ada's weekly item auto posts")
+follow_control_command_maker("ada", "Ada-1's weekly item auto posts")

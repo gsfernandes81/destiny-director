@@ -22,7 +22,10 @@ import hikari as h
 import lightbulb as lb
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...common import settings
+from ...common import (
+    feeds as dd_feeds,
+    settings,
+)
 from ...common.auth import check_invoker_is_owner
 from ...common.bot import CachedFetchBot
 from ...common.schemas import MirroredChannel, db_session
@@ -49,7 +52,7 @@ autopost_command_group = lb.Group(
 )
 
 
-def resolve_followable_channel(feed: str, display_name: str) -> int:
+def resolve_followable_channel(feed: str) -> int:
     """The configured channel id for ``feed`` at import time, alerting — not crashing —
     if it isn't set.
 
@@ -69,7 +72,7 @@ def resolve_followable_channel(feed: str, display_name: str) -> int:
         logger.critical(
             "%s autopost channel is not configured — dormant until a channel is "
             "picked on the Autopost Settings page.",
-            display_name,
+            dd_feeds.FEEDS[feed].display_name,
         )
     return channel_id
 
@@ -530,12 +533,7 @@ async def _enable_autopost(
         await enable_legacy_mirror(bot, followable_channel, ctx, ping_role, session)
 
 
-def follow_control_command_maker(
-    feed: str,
-    autoposts_name: str,
-    autoposts_friendly_name: str,
-    autoposts_desc: str,
-):
+def follow_control_command_maker(feed: str, autoposts_desc: str):
     """Create a follow control command for a given followable feed
 
     The command registers unconditionally and resolves ``feed``'s channel when it is
@@ -544,14 +542,17 @@ def follow_control_command_maker(
     happily record a mirror against channel 0 — a subscription that can never deliver.
     An unset channel answers with the standard "unavailable" embed and pages us.
 
+    The subcommand's name and the name shown to users both come from ``dd.common.feeds``
+    — they used to be passed in beside the slug at all twelve call sites, and disagreed
+    with the rest of the codebase at seven of them (``Xur``, ``Ada``, ``Lost sector``…).
+
     Args:
-        feed (str): The followable feed slug (``dd.common.settings.FOLLOWABLE_SLUGS``)
-        autoposts_name (str): The name of the autoposts command
-        autoposts_friendly_name (str): The friendly name to show users for
-            the autoposts command. Must be singular and correctly capitalized
-            ie first letter capitalized, rest lower case
+        feed (str): The followable feed slug (``dd.common.feeds``)
         autoposts_desc (str): The description for the autoposts command
     """
+    catalog_entry = dd_feeds.FEEDS[feed]
+    autoposts_name = catalog_entry.effective_command_name
+    autoposts_friendly_name = catalog_entry.confirmation_name
 
     @autopost_command_group.register
     class FollowControl(

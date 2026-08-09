@@ -62,7 +62,7 @@ import hikari as h
 
 from dd.hmessage.constants import DEFAULT_COLOR
 
-from . import schemas
+from . import feeds, schemas
 
 logger = logging.getLogger(__name__)
 
@@ -90,28 +90,14 @@ _DEFAULTS: dict[str, tuple[bool | None, str | None]] = {
     "disable_bad_channels": (False, None),
     "log_channel_id": (None, "0"),
     "alerts_channel_id": (None, "0"),
-    "lost_sector_image_url": (None, ""),
-    "xur_image_url": (None, ""),
 }
 
-# feed slug (as used by the AutoPostSettings toggle rows) -> the
-# AutoPostSettings.name this module stores its channel id under. "_channel" is appended
-# rather than reusing the feed's own toggle slug so a toggle's `enabled` column (on/off)
-# and its channel id (where) stay independently readable/writable.
-FOLLOWABLE_SLUGS: dict[str, str] = {
-    "lost_sector": "lost_sector_channel",
-    "xur": "xur_channel",
-    "eververse": "eververse_channel",
-    "ada": "ada_channel",
-    "portal_ops": "portal_ops_channel",
-    "iron_banner": "iron_banner_channel",
-    "twab": "twab_channel",
-    "trials": "trials_channel",
-    "weekly_reset": "weekly_reset_channel",
-    "weekly_nightfall": "weekly_nightfall_channel",
-    "free_games": "free_games_channel",
-    "emblems_and_cosmetics": "emblems_and_cosmetics_channel",
-}
+# feed slug -> the AutoPostSettings.name this module stores its channel id under.
+# Derived from the catalog rather than written out: the "_channel" convention now lives
+# in exactly one place (feeds.Followable.channel_key), instead of being a pattern you
+# had to notice across twelve hand-maintained pairs. Kept under this name and shape
+# because every consumer here and on the settings page reads it directly.
+FOLLOWABLE_SLUGS: dict[str, str] = {f.slug: f.channel_key for f in feeds.FOLLOWABLES}
 
 _cache: dict[str, tuple[bool | None, str | None]] = {}
 _loaded_at: float = 0.0
@@ -353,11 +339,6 @@ def get_followables_sync() -> dict[str, int]:
     call site is (or can be) async.
     """
     return {feed: get_followable_channel_sync(feed) for feed in FOLLOWABLE_SLUGS}
-
-
-def followable_slugs() -> t.Iterable[str]:
-    """Every feed slug this module resolves a channel id for."""
-    return FOLLOWABLE_SLUGS.keys()
 
 
 def followable_name(*, id: int, followables: dict[str, int] | None = None) -> str | int:

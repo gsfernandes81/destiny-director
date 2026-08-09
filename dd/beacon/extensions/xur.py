@@ -27,12 +27,11 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 14, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = resolve_followable_channel("xur", "Xûr")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("xur")
 
 _pages = setup_nav_pages(
     loader,
     feed="xur",
-    display_name="Xûr",
     history_len=12,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,
@@ -53,8 +52,9 @@ loader.command(
     make_navigator_command(
         _pages,
         name="xur",
+        feed="xur",
         description="Find out what Xur has and where Xur is",
     )
 )
 
-follow_control_command_maker("xur", "xur", "Xur", "Xur auto posts")
+follow_control_command_maker("xur", "Xûr auto posts")

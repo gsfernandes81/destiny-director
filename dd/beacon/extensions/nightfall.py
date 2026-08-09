@@ -32,7 +32,7 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 18, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = resolve_followable_channel("weekly_nightfall", "Weekly Nightfall")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("weekly_nightfall")
 
 
 class NightfallPages(NavPages):
@@ -76,7 +76,6 @@ _pages = setup_nav_pages(
     loader,
     pages_cls=NightfallPages,
     feed="weekly_nightfall",
-    display_name="Weekly Nightfall",
     history_len=12,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,
@@ -86,13 +85,9 @@ loader.command(
     make_navigator_command(
         _pages,
         name="nightfall",
+        feed="weekly_nightfall",
         description="Find out about this weeks nightfall",
     )
 )
 
-follow_control_command_maker(
-    "weekly_nightfall",
-    "nightfall",
-    "Nightfall",
-    "Nightfall weekly auto posts",
-)
+follow_control_command_maker("weekly_nightfall", "Nightfall weekly auto posts")

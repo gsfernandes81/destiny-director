@@ -26,12 +26,11 @@ loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2024, 1, 9, 17, tzinfo=dt.UTC)
 
-FOLLOWABLE_CHANNEL = resolve_followable_channel("trials", "Trials")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("trials")
 
 _pages = setup_nav_pages(
     loader,
     feed="trials",
-    display_name="Trials",
     history_len=12,
     period=dt.timedelta(days=7),
     reference_date=REFERENCE_DATE,
@@ -43,10 +42,11 @@ loader.command(
     make_navigator_command(
         _pages,
         name="trials",
+        feed="trials",
         description="Find out about this weeks Trials weapon and map",
         allow_start_on_blank_page=True,
         display_date_offset=dt.timedelta(days=3),
     )
 )
 
-follow_control_command_maker("trials", "trials", "Trials", "Trials weekly auto posts")
+follow_control_command_maker("trials", "Trials of Osiris weekly auto posts")

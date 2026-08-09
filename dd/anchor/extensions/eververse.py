@@ -10,7 +10,12 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import components, schemas, settings
+from ...common import (
+    components,
+    feeds as dd_feeds,
+    schemas,
+    settings,
+)
 from ...common.bot import CachedFetchBot
 from ...common.utils import fetch_emoji_dict
 from ..autopost import Feed, register_feed
@@ -387,7 +392,9 @@ async def format_eververse_vendor(
     # Resolve :emoji: then cap CV2 text (naive front-to-back truncate + CRITICAL alert
     # on overflow — an oversized day trims Silver first, then drops the tail).
     return await components.finalize_cv2_post(
-        HMessage(components=[container]), emoji_dict, post_name="Eververse"
+        HMessage(components=[container]),
+        emoji_dict,
+        post_name=dd_feeds.FEEDS["eververse"].display_name,
     )
 
 

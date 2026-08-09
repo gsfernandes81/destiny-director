@@ -32,6 +32,7 @@ from dd.hmessage import HMessage
 
 from ..common import (
     components as dd_components,
+    feeds as dd_feeds,
     settings,
 )
 from ..common.bot import CachedFetchBot
@@ -907,7 +908,6 @@ def setup_nav_pages(
     loader: lb.Loader,
     *,
     feed: str,
-    display_name: str,
     pages_cls: type[NavPages] = NavPages,
     **from_channel_kwargs: t.Any,
 ) -> NavPagesHolder:
@@ -923,7 +923,8 @@ def setup_nav_pages(
     An unusable channel never stops the listener registering, and never raises out of
     it: ``utils.open_feed_source`` records why on the holder (so the command can answer
     for itself) and pages the bot owner(s) — a source channel is ours to fix, and a user
-    hitting it can do nothing about it.
+    hitting it can do nothing about it. What that page calls the feed comes from
+    ``dd.common.feeds``, so ``feed`` is the only identity this takes.
     """
     holder = NavPagesHolder()
 
@@ -933,7 +934,6 @@ def setup_nav_pages(
         # channel's history, so it is where an unreachable channel actually shows up.
         holder.pages, holder.unavailable = await utils.open_feed_source(
             feed,
-            display_name,
             lambda channel_id: pages_cls.from_channel(
                 event.app, channel_id, **from_channel_kwargs
             ),
@@ -947,7 +947,7 @@ def make_navigator_command(
     *,
     name: str,
     description: str,
-    display_name: str = "",
+    feed: str = "",
     allow_start_on_blank_page: bool = False,
     display_date_offset: dt.timedelta = dt.timedelta(days=0),
 ) -> type[lb.SlashCommand]:
@@ -956,9 +956,15 @@ def make_navigator_command(
     The returned class is *not* registered; the caller registers it with
     ``loader.command(...)`` or ``group.register(...)`` as appropriate.
 
-    ``display_name`` (defaulting to ``name``) names the feed in the "unavailable"
-    answer this gives when its source channel turned out to be unusable at startup.
+    ``feed`` is the catalog slug of the feed being paged. It names the feed in the
+    "unavailable" answer this gives when the source channel turned out to be unusable
+    at startup — and it is taken as a slug rather than a display name because a
+    navigator's command name is routinely *not* the feed's (``/ls today``, ``/weekly
+    reset``, ``/portal ops``), so falling back to ``name`` told a user their Lost Sector
+    command was called "today". Left blank only where no feed backs the command, and
+    then ``name`` is all there is to say.
     """
+    display_name = dd_feeds.FEEDS[feed].display_name if feed else name
 
     class _NavCommand(lb.SlashCommand, name=name, description=description):
         @lb.invoke

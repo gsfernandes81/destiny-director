@@ -45,7 +45,12 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import components, schemas, settings
+from ...common import (
+    components,
+    feeds as dd_feeds,
+    schemas,
+    settings,
+)
 from ...common.bot import CachedFetchBot
 from ...common.utils import fetch_emoji_dict
 from ..autopost import Feed, register_feed
@@ -460,7 +465,9 @@ async def portal_ops_message_constructor(bot: CachedFetchBot) -> HMessage:
     # Resolve :emoji: then cap CV2 text (naive front-to-back truncate + CRITICAL alert
     # on overflow).
     return await components.finalize_cv2_post(
-        HMessage(components=[container]), emoji_dict, post_name="Portal Ops"
+        HMessage(components=[container]),
+        emoji_dict,
+        post_name=dd_feeds.FEEDS["portal_ops"].display_name,
     )
 
 

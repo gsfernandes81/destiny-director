@@ -39,13 +39,12 @@ REFERENCE_DATE = dt.datetime(2025, 7, 15, 17, tzinfo=dt.UTC)
 
 # Import-time read purely for the boot-time alert on an unconfigured feed; every
 # command below resolves the channel live when it runs.
-FOLLOWABLE_CHANNEL = resolve_followable_channel("portal_ops", "Portal Ops")
+FOLLOWABLE_CHANNEL = resolve_followable_channel("portal_ops")
 
 _pages = setup_nav_pages(
     loader,
     pages_cls=ResetPages,
     feed="portal_ops",
-    display_name="Portal Ops",
     history_len=14,
     period=dt.timedelta(days=1),
     reference_date=REFERENCE_DATE,
@@ -57,16 +56,11 @@ portal_command_group.register(
     make_navigator_command(
         _pages,
         name="ops",
-        display_name="Portal Ops",
+        feed="portal_ops",
         description="Find out about today's featured Portal ops",
     )
 )
 
 loader.command(portal_command_group)
 
-follow_control_command_maker(
-    "portal_ops",
-    "portal_ops",
-    "Portal ops",
-    "Portal ops auto posts",
-)
+follow_control_command_maker("portal_ops", "Portal Ops auto posts")

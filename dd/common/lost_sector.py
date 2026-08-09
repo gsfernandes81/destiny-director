@@ -8,7 +8,12 @@ import hikari as h
 
 from dd.hmessage import HMessage
 
-from ..common import components, schemas, settings
+from ..common import (
+    components,
+    feeds as dd_feeds,
+    schemas,
+    settings,
+)
 from ..common.utils import fetch_emoji_dict
 from ..sector_accounting import sector_accounting
 from .utils import follow_link_single_step, space
@@ -197,7 +202,9 @@ async def format_post(
     # Resolve :emoji: then cap CV2 text (naive front-to-back truncate + CRITICAL alert
     # on overflow, measured on the final rendered length).
     return await components.finalize_cv2_post(
-        HMessage(components=[container]), emoji_dict, post_name="Lost Sector"
+        HMessage(components=[container]),
+        emoji_dict,
+        post_name=dd_feeds.FEEDS["lost_sector"].display_name,
     )
 
 

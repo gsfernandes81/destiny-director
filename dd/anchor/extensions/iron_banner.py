@@ -45,6 +45,7 @@ from dd.hmessage import HMessage
 
 from ...common import (
     components,
+    feeds as dd_feeds,
     iron_banner as ib,
     schemas,
     settings,
@@ -95,7 +96,9 @@ async def format_post(bot: CachedFetchBot) -> HMessage:
     container.add_component(components.footer_buttons_row(guides=ib.GUIDES))
 
     return await components.finalize_cv2_post(
-        HMessage(components=[container]), emoji_dict, post_name="Iron Banner"
+        HMessage(components=[container]),
+        emoji_dict,
+        post_name=dd_feeds.FEEDS["iron_banner"].display_name,
     )
 
 
