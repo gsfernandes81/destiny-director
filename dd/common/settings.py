@@ -51,9 +51,17 @@ value can come from and no way to write one that skipped the page's validation (
 guild, right channel type, bot can actually post there — see
 ``dd.anchor.extensions.autopost_settings._channel_problem``). A fresh install therefore
 starts fully dormant and is configured on the page, once.
+
+**Alerting reads never raise.** The alerts channel, the alert level and the three
+severity colours are read through :func:`_get_value_for_alerting`, which swallows a
+failed refresh and serves the cache — or the built-in default — instead. Everything
+else here is free to propagate a DB error to its caller, but an alert is wanted most
+precisely when the database is unreachable, so nothing on that path may depend on it
+answering, answering quickly, or answering sensibly.
 """
 
 import asyncio
+import contextlib
 import logging
 import time
 import typing as t
@@ -198,6 +206,25 @@ async def _get_value(slug: str) -> str | None:
     return _get_value_sync(slug)
 
 
+async def _get_value_for_alerting(slug: str) -> str | None:
+    """:func:`_get_value` that degrades instead of raising when the DB is unhappy.
+
+    **For the alerting path only.** An alert is most needed exactly when the database
+    is unreachable, slow, or returning nonsense — so a settings read on that path must
+    never be the thing that loses it. A failed refresh falls through to the last good
+    cache, and to the built-in default when the cache is cold, which is the same value
+    the setting had before it was a row at all.
+
+    Deliberately silent, and deliberately not marking the cache fresh: logging here
+    would re-enter the very handler that is mid-emit, and stamping ``_loaded_at`` on a
+    failure would keep serving stale values after the database came back. Alerts are
+    low-rate, so retrying the refresh per alert costs nothing worth saving.
+    """
+    with contextlib.suppress(Exception):
+        await _ensure_fresh()
+    return _get_value_sync(slug)
+
+
 async def _get_enabled(slug: str) -> bool:
     """The live ``enabled`` column for ``slug`` (refreshing the cache first), or its
     default."""
@@ -222,16 +249,30 @@ async def get_embed_default_color() -> h.Color:
     return _parse_color(await _get_value("embed_default_color"))
 
 
+async def _alert_color(slug: str) -> h.Color:
+    """An alert accent that resolves no matter what the DB says, or whether it answers.
+
+    Unlike :func:`_parse_color`, a malformed row falls back to *this setting's own*
+    default rather than to black: black on a CRITICAL alert reads as a deliberate
+    choice, and the point of these three is that severity is legible at a glance.
+    """
+    raw = await _get_value_for_alerting(slug)
+    try:
+        return h.Color(int(str(raw).lstrip("#"), 16))
+    except (TypeError, ValueError):
+        return _parse_color(_DEFAULTS[slug][1])
+
+
 async def get_embed_warning_color() -> h.Color:
-    return _parse_color(await _get_value("embed_warning_color"))
+    return await _alert_color("embed_warning_color")
 
 
 async def get_embed_critical_color() -> h.Color:
-    return _parse_color(await _get_value("embed_critical_color"))
+    return await _alert_color("embed_critical_color")
 
 
 async def get_embed_error_color() -> h.Color:
-    return _parse_color(await _get_value("embed_error_color"))
+    return await _alert_color("embed_error_color")
 
 
 def _get_value_sync(slug: str) -> str | None:
@@ -293,10 +334,11 @@ async def get_xur_image_url() -> str:
 
 
 async def get_alert_min_level() -> str:
-    # No `or "ERROR"` fallback needed: _get_value already resolves through _DEFAULTS
-    # ("ERROR"), and a saved row's value is always one of _ALERT_LEVELS (never falsy) —
-    # see autopost_settings.py's _handle_save, the only writer.
-    return t.cast(str, await _get_value("alert_min_level"))
+    # Alerting path: reads through _get_value_for_alerting so an unreachable DB resolves
+    # to the cached value, or to _DEFAULTS' "ERROR", instead of raising. A saved row's
+    # value is always one of _ALERT_LEVELS (see autopost_settings.py's _handle_save, the
+    # only writer), and _resolve_level treats anything unrecognised as ERROR anyway.
+    return t.cast(str, await _get_value_for_alerting("alert_min_level"))
 
 
 async def get_disable_bad_channels() -> bool:
@@ -304,7 +346,14 @@ async def get_disable_bad_channels() -> bool:
 
 
 async def get_alerts_channel_id() -> int:
-    return int(await _get_value("alerts_channel_id") or 0)
+    # Alerting path — never raises. 0 means "no alerts channel", which every caller
+    # already treats as "Discord logging off" rather than as an error, so a DB outage
+    # or a nonsense row degrades to the same inert state as never having configured one.
+    raw = await _get_value_for_alerting("alerts_channel_id")
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 async def get_followable_channel(feed: str) -> int:

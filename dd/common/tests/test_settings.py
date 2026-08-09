@@ -190,6 +190,87 @@ async def test_alert_colors_reflect_saved_rows():
     assert await settings.get_embed_critical_color() == h.Color(0x222222)
 
 
+# --- the alerting path must not depend on the DB ----------------------------------
+#
+# An alert is wanted most precisely when the database is unreachable, slow, or holding
+# nonsense, so every read on that path degrades instead of raising. These cover the
+# three ways it can go wrong: no answer, a bad answer, and a cold cache behind both.
+
+
+def _break_the_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _boom(*_a: object, **_kw: object):
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(schemas.AutoPostSettings, "get_all_rows", _boom)
+
+
+@pytest.mark.parametrize(
+    ("getter", "expected"),
+    [
+        ("get_embed_warning_color", h.Color(0xF1C40F)),
+        ("get_embed_critical_color", h.Color(0x992D22)),
+        ("get_embed_error_color", h.Color(0xED4245)),
+    ],
+)
+async def test_alert_colors_survive_an_unreachable_db(
+    monkeypatch: pytest.MonkeyPatch, getter: str, expected: h.Color
+):
+    settings.reset_cache_for_tests()  # cold cache, so the refresh is forced
+    _break_the_db(monkeypatch)
+
+    assert await getattr(settings, getter)() == expected
+
+
+async def test_alerts_channel_and_level_survive_an_unreachable_db(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    settings.reset_cache_for_tests()
+    _break_the_db(monkeypatch)
+
+    # 0 is the inert state every caller already handles ("Discord logging disabled"),
+    # not an error — so an outage degrades exactly like an unconfigured install.
+    assert await settings.get_alerts_channel_id() == 0
+    assert await settings.get_alert_min_level() == "ERROR"
+
+
+async def test_alerting_reads_serve_the_last_good_cache_when_the_db_dies(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # A warm cache is better than the default: the operator's configured values keep
+    # being used right through the outage.
+    await schemas.AutoPostSettings.set_value("alerts_channel_id", "424242")
+    await schemas.AutoPostSettings.set_value("embed_critical_color", "#ABCDEF")
+    await settings.preload()
+    settings._loaded_at = 0.0  # force the next read to attempt a refresh
+    _break_the_db(monkeypatch)
+
+    assert await settings.get_alerts_channel_id() == 424242
+    assert await settings.get_embed_critical_color() == h.Color(0xABCDEF)
+
+
+# Only genuinely non-hex input reaches the fallback. Anything Python's int(_, 16) will
+# take is honoured whatever its shape — "12" is 0x000012, "#12345" is 0x012345, even
+# "0xFFF" parses. The page's #RRGGBB validator is what stops those being saved; this
+# getter's only job is to never fail on whatever is already stored.
+@pytest.mark.parametrize("junk", ["not-a-colour", "", "#GGGGGG", "  ", "rgb(1,2,3)"])
+async def test_a_malformed_alert_colour_falls_back_to_its_own_default(
+    junk: str,
+):
+    # Deliberately NOT black (which is what _parse_color does elsewhere): black on a
+    # CRITICAL alert reads as a deliberate choice, and severity has to stay legible.
+    await schemas.AutoPostSettings.set_value("embed_critical_color", junk)
+    settings.reset_cache_for_tests()
+
+    assert await settings.get_embed_critical_color() == h.Color(0x992D22)
+
+
+async def test_a_malformed_alerts_channel_id_reads_as_inert():
+    await schemas.AutoPostSettings.set_value("alerts_channel_id", "not-a-snowflake")
+    settings.reset_cache_for_tests()
+
+    assert await settings.get_alerts_channel_id() == 0
+
+
 async def test_malformed_stored_color_falls_back_to_black():
     await schemas.AutoPostSettings.set_value("embed_default_color", "not-a-color")
     settings.reset_cache_for_tests()
