@@ -35,7 +35,10 @@ import pytest
 
 from dd.beacon import nav, utils
 from dd.beacon.extensions import free_games
-from dd.common import settings
+from dd.common import (
+    feeds as dd_feeds,
+    settings,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -102,6 +105,85 @@ class _Configured:
 
 async def _start(loader: lb.Loader) -> None:
     await _started_listener(loader)(MagicMock())
+
+
+# --- the dormancy sweep --------------------------------------------------------------
+#
+# Replaces twelve `FOLLOWABLE_CHANNEL = resolve_followable_channel(<slug>)` lines, one
+# per followable extension module, whose assigned names nothing ever read: the alert was
+# the whole point and the constant was the fossil of an earlier design. Being a sweep
+# makes it edge-triggered and re-runnable, which is what a state (rather than an event)
+# needs now that a channel can be picked while the bots are up.
+
+
+@pytest.fixture(autouse=True)
+def _forget_dormant_feeds(monkeypatch: pytest.MonkeyPatch) -> t.Iterator[None]:
+    """The sweep's "already paged for" set is process-global; give each test its own."""
+    monkeypatch.setattr(utils, "_dormant_feeds", set())
+    yield
+
+
+async def test_the_sweep_pages_once_per_dormant_feed(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=0))
+
+    with caplog.at_level(logging.CRITICAL):
+        await utils.sweep_dormant_feeds()
+
+    # One per catalog entry, naming the feed the way the settings page does.
+    assert len(_criticals(caplog)) == len(dd_feeds.FOLLOWABLES)
+    assert any("Xûr" in r.getMessage() for r in _criticals(caplog))
+
+
+async def test_the_sweep_does_not_re_page_an_unchanged_feed(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # It rides a 60s tick. Without edge-triggering that is a page per dormant feed per
+    # minute, forever — which is how a real alert channel becomes one nobody reads.
+    monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=0))
+
+    with caplog.at_level(logging.CRITICAL):
+        await utils.sweep_dormant_feeds()
+        caplog.clear()  # caplog accumulates for the whole test, not just this block
+        await utils.sweep_dormant_feeds()
+        await utils.sweep_dormant_feeds()
+
+    assert not _criticals(caplog)
+
+
+async def test_the_sweep_is_quiet_for_a_configured_feed(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=42))
+
+    with caplog.at_level(logging.CRITICAL):
+        await utils.sweep_dormant_feeds()
+
+    assert not _criticals(caplog)
+
+
+async def test_the_sweep_notices_a_feed_leaving_and_re_entering_dormancy(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The behaviour the import-time version could not have: a feed configured after
+    # boot stops being dormant, and a feed that later loses its channel pages again
+    # rather than being suppressed forever by the first page.
+    configured = _Configured(0)
+    monkeypatch.setattr(settings, "get_followable_channel", configured)
+    await utils.sweep_dormant_feeds()
+    assert utils._dormant_feeds
+
+    configured.value = 42
+    await utils.sweep_dormant_feeds()
+    assert not utils._dormant_feeds
+
+    configured.value = 0
+    caplog.clear()  # drop the first sweep's pages; only the re-entry matters here
+    with caplog.at_level(logging.CRITICAL):
+        await utils.sweep_dormant_feeds()
+
+    assert len(_criticals(caplog)) == len(dd_feeds.FOLLOWABLES)
 
 
 # --- the registry --------------------------------------------------------------------

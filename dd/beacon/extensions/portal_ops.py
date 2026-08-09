@@ -30,16 +30,13 @@ import datetime as dt
 import lightbulb as lb
 
 from ..nav import ResetPages, make_navigator_command, setup_nav_pages
-from .autoposts import follow_control_command_maker, resolve_followable_channel
+from .autoposts import follow_control_command_maker
 
 loader = lb.Loader()
 
 # Daily reset anchor (Tue/any day 17:00 UTC); the period is one day.
 REFERENCE_DATE = dt.datetime(2025, 7, 15, 17, tzinfo=dt.UTC)
 
-# Import-time read purely for the boot-time alert on an unconfigured feed; every
-# command below resolves the channel live when it runs.
-FOLLOWABLE_CHANNEL = resolve_followable_channel("portal_ops")
 
 _pages = setup_nav_pages(
     loader,

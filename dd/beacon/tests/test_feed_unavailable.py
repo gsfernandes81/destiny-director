@@ -91,9 +91,14 @@ async def test_open_feed_source_returns_what_it_opened(
     open_source.assert_awaited_once_with(42)
 
 
-async def test_open_feed_source_alerts_on_an_unset_channel(
+async def test_open_feed_source_reports_an_unset_channel_without_alerting(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    # "No channel set" is a fact about the configuration — the same fact for every
+    # reader of the feed, whether or not one tried to open it — so sweep_dormant_feeds
+    # pages for it once and this stays quiet. Alerting here as well is what made an
+    # unconfigured feed page twice at boot. The *reason* is still recorded: the
+    # command must still be able to answer for itself.
     monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=0))
     open_source = AsyncMock()
 
@@ -102,23 +107,6 @@ async def test_open_feed_source_alerts_on_an_unset_channel(
 
     assert result == (None, utils.FEED_UNCONFIGURED)
     open_source.assert_not_awaited()  # never "open" channel 0
-    assert _criticals(caplog)
-
-
-async def test_open_feed_source_can_stay_quiet_about_an_unset_channel(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    # A reader that re-opens its source on later events passes alert_when_unset=False:
-    # the state was already paged for at import, and re-paging for an unchanged state
-    # adds nothing. The *reason* is still recorded — the command must still answer.
-    monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=0))
-
-    with caplog.at_level(logging.CRITICAL):
-        result = await utils.open_feed_source(
-            "free_games", AsyncMock(), alert_when_unset=False
-        )
-
-    assert result == (None, utils.FEED_UNCONFIGURED)
     assert not _criticals(caplog)
 
 
@@ -129,15 +117,14 @@ async def test_open_feed_source_alerts_on_an_unreachable_channel(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     # Deleted (404) and no-longer-visible (403) are the same story to a reader, and
-    # both are alerted even when the unset state isn't: this one is new information.
+    # unlike the unset state this one *does* alert from here: nothing but an attempt
+    # to open the channel can discover it, so no sweep could have said it first.
     monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=42))
     error = error_cls(url="", headers={}, raw_body=b"")
 
     with caplog.at_level(logging.CRITICAL):
         result = await utils.open_feed_source(
-            "free_games",
-            AsyncMock(side_effect=error),
-            alert_when_unset=False,
+            "free_games", AsyncMock(side_effect=error)
         )
 
     assert result == (None, utils.FEED_UNREACHABLE)
@@ -193,6 +180,8 @@ async def test_navigator_command_answers_instead_of_raising(
 async def test_setup_nav_pages_records_an_unconfigured_feed(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    # Records the reason (so the command can answer) but does not page: dormancy is
+    # sweep_dormant_feeds' to report, once per feed, not once per reader of it.
     monkeypatch.setattr(settings, "get_followable_channel", AsyncMock(return_value=0))
     loader = lb.Loader()
     holder = nav.setup_nav_pages(loader, feed="xur")
@@ -202,7 +191,7 @@ async def test_setup_nav_pages_records_an_unconfigured_feed(
 
     assert holder.pages is None
     assert holder.unavailable == utils.FEED_UNCONFIGURED
-    assert any(r.levelno >= logging.CRITICAL for r in caplog.records)
+    assert not _criticals(caplog)
 
 
 async def test_setup_nav_pages_records_an_unreachable_channel(
@@ -255,8 +244,9 @@ async def test_free_games_records_an_unset_channel_quietly(
         await free_games.refresh_message_for_command(MagicMock())
 
     assert free_games.unavailable_reason == utils.FEED_UNCONFIGURED
-    # Refreshing happens repeatedly (every delete of the repeated message), so this
-    # path must not re-page for a state resolve_followable_channel already alerted on.
+    # Refreshing happens repeatedly (every delete of the repeated message, every
+    # channel change), so this path must not page for a state the dormancy sweep
+    # already owns.
     assert not _criticals(caplog)
 
 
@@ -289,5 +279,5 @@ async def test_portal_ops_registers_its_commands_with_no_channel_configured() ->
     # rest of the file is about.
     from dd.beacon.extensions import portal_ops
 
-    assert portal_ops.FOLLOWABLE_CHANNEL == 0
+    assert await settings.get_followable_channel("portal_ops") == 0
     assert set(portal_ops.portal_command_group.subcommands) == {"ops"}

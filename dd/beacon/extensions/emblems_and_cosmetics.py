@@ -15,12 +15,10 @@
 
 import lightbulb as lb
 
-from .autoposts import follow_control_command_maker, resolve_followable_channel
+from .autoposts import follow_control_command_maker
 
 loader = lb.Loader()
 
-# Followable channel from which to pull messages for the command and autoposts
-FOLLOWABLE_CHANNEL = resolve_followable_channel("emblems_and_cosmetics")
 
 follow_control_command_maker(
     "emblems_and_cosmetics", "D2 Emblems & Cosmetics auto posts"

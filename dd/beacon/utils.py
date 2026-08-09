@@ -398,7 +398,6 @@ async def open_feed_source[T](
     open_source: t.Callable[[int], t.Awaitable[T]],
     *,
     channel_id: int | None = None,
-    alert_when_unset: bool = True,
     alert_when_unreachable: bool = True,
 ) -> tuple[T | None, str | None]:
     """Open ``feed``'s source channel for a reader, or report why it can't be.
@@ -412,21 +411,20 @@ async def open_feed_source[T](
     Returns ``(opened, None)`` on success and ``(None, reason)`` otherwise, where
     ``reason`` is a ``FEED_*`` string the caller records for its command to answer
     with. Nothing raises: the callers are ``StartedEvent``/message listeners, where an
-    exception is reported nowhere and simply loses the feed silently. Instead this
-    logs CRITICAL, which forwards to the alerts channel AND pings the bot owner(s) —
-    same rationale as ``autoposts.resolve_followable_channel``, whose docstring has
-    the long version.
+    exception is reported nowhere and simply loses the feed silently.
 
-    ``alert_when_unset`` is False for a reader that re-opens its source on later
-    events too: the unset state was already paged for once at import by
-    ``resolve_followable_channel``, and re-paging for a state nobody has changed
-    since adds nothing.
+    **Only the unreachable case alerts from here.** A feed with no channel set is a
+    fact about the configuration — the same fact for every reader of that feed, and
+    true whether or not anyone tried to open it — so it is paged for exactly once, by
+    :func:`sweep_dormant_feeds`. Alerting here as well is what made an unconfigured
+    feed page twice at boot (once at import, once when its navigator opened), which is
+    why ``free_games`` used to opt out of it by hand. An *unreachable* channel is the
+    opposite: nothing but an attempt to open it can discover it, so it belongs here.
 
-    ``alert_when_unreachable`` is the same idea one state along, and exists for the
-    reconciler in :func:`reconcile_feed_channels`: it retries a still-broken source on
-    every tick, so the *first* attempt after the channel changed pages us and the
-    retries after it stay quiet. Without it a permanently deleted channel would page
-    once a minute forever.
+    ``alert_when_unreachable`` is False for the reconciler in
+    :func:`reconcile_feed_channels`, which retries a still-broken source on every tick:
+    the first attempt after the channel changed pages us and the retries after it stay
+    quiet. Without it a permanently deleted channel would page once a minute forever.
 
     ``channel_id`` is for a caller that has already resolved it — the reconciler, which
     read it to decide there was anything to do. Passing it through means the channel
@@ -441,12 +439,6 @@ async def open_feed_source[T](
     if channel_id is None:
         channel_id = await settings.get_followable_channel(feed)
     if not channel_id:
-        if alert_when_unset:
-            logger.critical(
-                "%s has no channel set — its commands will answer 'unavailable' until "
-                "one is picked on the Autopost Settings page.",
-                dd_feeds.FEEDS[feed].display_name,
-            )
         return None, FEED_UNCONFIGURED
 
     try:
@@ -506,6 +498,58 @@ def watch_feed_channel(
     escapes and carries on to the next watcher.
     """
     _feed_channel_watchers.append((feed, current, on_change))
+
+
+#: Feeds already paged for being dormant, so the sweep below is edge-triggered.
+_dormant_feeds: set[str] = set()
+
+
+async def sweep_dormant_feeds() -> None:
+    """Page the bot owner(s) for each feed that has no channel set.
+
+    A dormant feed is not an error — it is the normal state of a followable nobody has
+    finished setting up, and both bots handle it by simply doing nothing. But "doing
+    nothing" is invisible: a feed that silently never posts and whose command always
+    answers "unavailable" is a real gap in coverage that nobody notices on their own.
+    So this logs CRITICAL, which forwards to the alerts channel *and* pings the owners
+    (per ``dd.common.discord_logging``'s "owners are pinged only for CRITICAL" rule,
+    debounced by ``cfg.alert_escalation_debounce`` so it cannot page-storm).
+
+    This used to be twelve ``FOLLOWABLE_CHANNEL = resolve_followable_channel(<slug>)``
+    lines, one at the top of each followable's extension module. That shape came from
+    when each module really did need the channel id at import; once the readers moved
+    to resolving it per use, nothing read the name any more and the assignment survived
+    only for this side effect — an alert disguised as a constant, and one that fired
+    at import and was never re-evaluated.
+
+    Being a sweep instead makes it **edge-triggered**: it pages when a feed becomes
+    dormant and goes quiet after, and it notices a feed leaving that state. Which
+    matters now that a channel can be picked while the bots are running — the old
+    version paged once at boot and then stood as the last word on a feed that might
+    have been configured a minute later.
+
+    Costs nothing to run often: :data:`dd.common.settings` serves all twelve reads out
+    of one cached snapshot, so this rides the reconciler's tick.
+    """
+    from dd.common import (
+        feeds as dd_feeds,
+        settings,
+    )
+
+    for followable in dd_feeds.FOLLOWABLES:
+        if await settings.get_followable_channel(followable.slug):
+            if followable.slug in _dormant_feeds:
+                _dormant_feeds.discard(followable.slug)
+                logger.info("%s is no longer dormant", followable.display_name)
+            continue
+        if followable.slug in _dormant_feeds:
+            continue  # already paged for, and nobody has changed it since
+        _dormant_feeds.add(followable.slug)
+        logger.critical(
+            "%s has no channel set — it posts nothing and its commands will answer "
+            "'unavailable' until one is picked on the Autopost Settings page.",
+            followable.display_name,
+        )
 
 
 async def reconcile_feed_channels() -> None:

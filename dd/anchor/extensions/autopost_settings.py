@@ -371,8 +371,8 @@ _CHANNEL_SETTINGS: dict[str, _Setting] = {
 # log/alerts channels are NOT in this set: "unset" is a defined, useful state for them
 # (the log is simply inert; alerts fall back to discovery), so they stay clearable.
 # Note this bounds what can be *written*, not what can be read: a slug with no row at
-# all still reads as 0/dormant on a fresh install, which resolve_followable_channel
-# alerts on at boot.
+# all still reads as 0/dormant on a fresh install, which beacon's dormancy sweep
+# (``dd.beacon.utils.sweep_dormant_feeds``) pages for until one is picked here.
 _UNCLEARABLE_CHANNEL_SLUGS = frozenset(dd_settings.FOLLOWABLE_SLUGS.values())
 _NO_CHANNEL_OPTION = '<option value="">— none configured —</option>'
 
@@ -722,8 +722,8 @@ async def _channel_problem(setting: _Setting, channel_id: int) -> str | None:
     (retry once the bot's finished starting, or once its permission cache is warm)
     rather than risk accepting one silently unusable — this is the primary safety net,
     not just a courtesy check (a channel that goes bad *after* being saved still alerts
-    rather than failing silently — see resolve_followable_channel/nav.py — but this is
-    what stops a bad one going in to begin with).
+    rather than failing silently — see ``dd.beacon.utils.open_feed_source`` — but this
+    is what stops a bad one going in to begin with).
     """
     # get_bot(), not require_bot(): this function owes its caller a REASON, and a
     # BotNotReady would leave the save's error path with no sentence to show. Fail

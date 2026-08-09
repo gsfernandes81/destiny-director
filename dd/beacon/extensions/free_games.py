@@ -27,13 +27,10 @@ from ...common import (
 )
 from ...common.bot import CachedFetchBot
 from .. import utils
-from .autoposts import follow_control_command_maker, resolve_followable_channel
+from .autoposts import follow_control_command_maker
 
 loader = lb.Loader()
 
-# Read once at import purely for the boot-time alert on an unconfigured feed; the
-# listeners and the command below resolve the channel live (see _followable_channel).
-FOLLOWABLE_CHANNEL = resolve_followable_channel("free_games")
 
 HELP_STRING = "See the current free games on The Epic Store, etc"
 
@@ -55,15 +52,11 @@ async def refresh_message_for_command(bot: CachedFetchBot, *, alert: bool = True
     global last_message_channel_id
     global unavailable_reason
 
-    # alert_when_unset=False: this runs again whenever the repeated message is
-    # deleted, and resolve_followable_channel already paged once at import for the
-    # unset state — see open_feed_source. An unreachable channel does still alert,
-    # except on a reconciler retry of a channel already known bad (``alert``).
+    # An unreachable channel alerts, except on a reconciler retry of one already known
+    # bad (``alert``). An *unset* one no longer alerts from here at all — that is
+    # sweep_dormant_feeds' to report, once, for every reader of the feed at a time.
     channel, reason = await utils.open_feed_source(
-        "free_games",
-        bot.fetch_channel,
-        alert_when_unset=False,
-        alert_when_unreachable=alert,
+        "free_games", bot.fetch_channel, alert_when_unreachable=alert
     )
     if channel is None:
         unavailable_reason = reason

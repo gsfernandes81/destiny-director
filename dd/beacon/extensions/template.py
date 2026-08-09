@@ -13,6 +13,19 @@
 # You should have received a copy of the GNU Affero General Public License along with
 # destiny-director. If not, see <https://www.gnu.org/licenses/>.
 
+"""Starting point for a new followable's beacon (reader) module.
+
+**A feed's channel is never a module-level constant here.** It is a DB-backed setting
+an operator edits on anchor's Autopost Settings page, so it can change while the bot is
+running; a copy taken at import is stale from the moment it is taken.
+``setup_nav_pages`` below is what resolves it — on ``StartedEvent``, and again whenever
+it changes (see ``utils.reconcile_feed_channels``) — so nothing here names a channel.
+The feed's ``slug`` is the only identity a module like this passes around; its display
+name, ``/autopost`` subcommand name and channel key all come from its entry in
+``dd.common.feeds``, which is where a new followable is declared before it gets a module
+like this one.
+"""
+
 import datetime as dt
 from typing import override
 
@@ -24,7 +37,7 @@ from dd.hmessage import HMessage
 from ...common import settings
 from ...common.utils import accumulate
 from .. import utils
-from ..nav import NavigatorView, NavPages
+from ..nav import NavPages, make_navigator_command, setup_nav_pages
 from .autoposts import follow_control_command_maker
 
 loader = lb.Loader()
@@ -32,18 +45,14 @@ loader = lb.Loader()
 # Set IGNORE to False to enable the module
 IGNORE = True
 
-# Followable channel from which to pull messages for the command and autoposts
-FOLLOWABLE_CHANNEL = (
-    123456789  # settings.get_followable_channel_sync(<"something-here">)
-)
+# The feed's catalog slug — its key in dd.common.feeds.FOLLOWABLES.
+FEED = "xur"
 
 # CODE FOR PAGES BELOW. CAN BE SAFELY REMOVED IF ONLY AUTOPOSTS ARE NEEDED
 
 # Reference date and update period for the pages
 REFERENCE_DATE = dt.datetime(2023, 7, 14, 17, tzinfo=dt.UTC)
 UPDATE_PERIOD = dt.timedelta(days=7)
-
-pages: NavPages
 
 
 class Pages(NavPages):
@@ -65,32 +74,30 @@ class Pages(NavPages):
 
 
 if not IGNORE:
-
-    @loader.listener(h.StartedEvent)
-    async def on_start(event: h.StartedEvent):
-        global pages
-        pages = await Pages.from_channel(
-            event.app,
-            FOLLOWABLE_CHANNEL,
-            reference_date=REFERENCE_DATE,
-            period=UPDATE_PERIOD,
-        )
+    # Registers the StartedEvent listener that builds the pages, and subscribes the
+    # holder to channel changes. Never resolves a channel here: an unset or since-
+    # deleted one is recorded on the holder (and paged for) rather than raised, so the
+    # command below can answer for itself instead of exploding at whoever ran it.
+    _pages = setup_nav_pages(
+        loader,
+        feed=FEED,
+        pages_cls=Pages,
+        reference_date=REFERENCE_DATE,
+        period=UPDATE_PERIOD,
+    )
 
     # CODE FOR PAGES ABOVE. CAN BE SAFELY REMOVED IF ONLY AUTOPOSTS ARE NEEDED
 
-    class SlashCommand(
-        lb.SlashCommand,
-        name="xur",
-        description="Find out what Xur has and where Xur is",
-    ):
-        @lb.invoke
-        async def invoke(self, ctx: lb.Context):
-            navigator = NavigatorView(pages=pages)
-            await navigator.send(ctx)
+    # Reads _pages.pages at invoke time (never a captured copy) and gives the
+    # "unavailable" answer when there are none. `feed` is the slug, not the command
+    # name — a navigator's command is routinely not named after its feed.
+    loader.command(
+        make_navigator_command(
+            _pages,
+            name="xur",
+            description="Find out what Xur has and where Xur is",
+            feed=FEED,
+        )
+    )
 
-    loader.command(SlashCommand)
-
-    # The slug is the only feed identity passed in: the /autopost subcommand name and
-    # the name shown to users both come from that feed's entry in ``dd.common.feeds``,
-    # which is where a new followable is declared before it gets a module like this one.
-    follow_control_command_maker("xur", "Xûr auto posts")
+    follow_control_command_maker(FEED, "Xûr auto posts")

@@ -176,9 +176,24 @@ async def on_start_reconcile_feed_channels(_event: h.StartedEvent):
     # cached settings read (see utils.reconcile_feed_channels), and rebuilding reads
     # channel history, so it only ever happens on an actual change. The interval is the
     # worst-case delay between saving a channel and beacon serving it.
+    #
+    # The dormancy sweep rides the same tick — it reads the same cached settings, and
+    # being periodic rather than one-shot is what lets it notice a feed *leaving* the
+    # dormant state now that a channel can be picked while the bots are up.
+    async def _sweep():
+        try:
+            await beacon_utils.sweep_dormant_feeds()
+        except Exception:
+            logging.exception("Failed to sweep for dormant feeds")
+
     async def _loop(interval: int = 60):
+        # Swept before the first sleep, so a bot that boots with a feed unconfigured
+        # says so now rather than a tick later. The reconciler is not: the readers it
+        # compares against are still being built by their own StartedEvent listeners.
+        await _sweep()
         while True:
             await asyncio.sleep(interval)
+            await _sweep()
             try:
                 await beacon_utils.reconcile_feed_channels()
             except Exception:

@@ -340,9 +340,8 @@ async def test_followable_channel_sync_matches_async_after_preload():
 
 
 async def test_followable_channel_sync_is_zero_before_preload():
-    # The import-time readers (beacon's extensions) see 0 rather than a stale env
-    # value when preload() hasn't run — dormant, and alerted by
-    # resolve_followable_channel.
+    # A sync reader sees 0 rather than a stale env value when preload() hasn't run —
+    # dormant, which beacon's sweep_dormant_feeds pages for.
     await schemas.AutoPostSettings.set_value("xur_channel", "7")
     settings.reset_cache_for_tests()
     assert settings.get_followable_channel_sync("xur") == 0

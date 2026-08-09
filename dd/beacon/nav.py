@@ -962,7 +962,6 @@ class NavPagesHolder:
                 self._feed,
                 lambda cid: self._pages_cls.from_channel(bot, cid, **self._kwargs),
                 channel_id=channel_id,
-                alert_when_unset=alert,
                 alert_when_unreachable=alert,
             )
             old = self.pages

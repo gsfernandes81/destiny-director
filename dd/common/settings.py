@@ -44,8 +44,8 @@ this is one more, not a new pattern.
 
 **The settings page is the only writer.** There is no env-var fallback and no seeding
 path: a slug with no DB row reads as its :data:`_DEFAULTS` entry, and a followable with
-no row reads as 0 (dormant, alerted at boot — see
-``dd.beacon.extensions.autoposts.resolve_followable_channel``). ``FOLLOWABLES`` and the
+no row reads as 0 (dormant, and paged for — see
+``dd.beacon.utils.sweep_dormant_feeds``). ``FOLLOWABLES`` and the
 other former env vars are gone from ``cfg.py`` entirely, so there is no second place a
 value can come from and no way to write one that skipped the page's validation (right
 guild, right channel type, bot can actually post there — see

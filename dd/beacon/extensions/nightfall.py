@@ -26,13 +26,11 @@ from ...common import settings
 from ...common.utils import accumulate
 from .. import utils
 from ..nav import NavPages, make_navigator_command, setup_nav_pages
-from .autoposts import follow_control_command_maker, resolve_followable_channel
+from .autoposts import follow_control_command_maker
 
 loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 18, 17, tzinfo=dt.UTC)
-
-FOLLOWABLE_CHANNEL = resolve_followable_channel("weekly_nightfall")
 
 
 class NightfallPages(NavPages):

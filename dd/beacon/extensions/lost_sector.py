@@ -28,13 +28,11 @@ from ..nav import (
     make_navigator_command,
     setup_nav_pages,
 )
-from .autoposts import follow_control_command_maker, resolve_followable_channel
+from .autoposts import follow_control_command_maker
 
 loader = lb.Loader()
 
 REFERENCE_DATE = dt.datetime(2023, 7, 20, 17, tzinfo=dt.UTC)
-
-FOLLOWABLE_CHANNEL = resolve_followable_channel("lost_sector")
 
 
 class SectorMessages(NavPages):
