@@ -1,25 +1,61 @@
-deploy-beacon-dev:
-	railway environment dev
-	railway service beacon
-	railway up -d
+# ── Which Railway environment ──────────────────────────────────────────────────────
+# Every railway target below reads RAILWAY_ENV. It defaults to dev; the word `prod`
+# anywhere on the command line switches it to production:
+#
+#     make deploy-anchor          # dev
+#     make prod deploy-anchor     # production
+#     make prod cutover-copy      # production
+#
+# Prod is never the default and never implicit — you type the word, on the line, every
+# time. That is deliberate: pushing to prod is the one action in this file that needs a
+# human to have meant it, and a flag you can forget is not the same as a word you type.
+RAILWAY_ENV ?= dev
+ifneq (,$(filter prod,$(MAKECMDGOALS)))
+  RAILWAY_ENV := production
+endif
 
-deploy-anchor-dev:
-	railway environment dev
-	railway service anchor
-	railway up -d
+# A no-op goal, so `prod` can sit on the command line purely to be seen by the filter
+# above. Silent (@:) because it does nothing and should not look like it did.
+prod:
+	@:
 
-deploy-beacon-prod:
-	railway environment production
-	railway service beacon
-	railway up -d
+# Every railway invocation passes -e/-s explicitly rather than running `railway
+# environment X` / `railway service Y` first. Those two mutate the CLI's *persistent*
+# link, so a later bare `railway ...` in the same checkout would silently inherit
+# whatever the last make target selected — including production. Flags do not leak.
+# The flag goes AFTER the subcommand — `--environment` is a per-subcommand option, not
+# a global one, and `railway --environment production up` is an arg-parse error.
+RAILWAY_ENV_FLAG := --environment $(RAILWAY_ENV)
 
-deploy-anchor-prod:
-	railway environment production
-	railway service anchor
-	railway up -d
+# The service whose variables the cutover targets borrow. anchor because it is the one
+# with both the old MYSQL_URL and the new DATABASE_URL in scope.
+RAILWAY_SERVICE ?= anchor
 
-remove-last-deploy:
-	railway down
+# `railway run` executes LOCALLY with the service's variables injected, so the database
+# it reaches has to be reachable from here — i.e. the public TCP proxy in DATABASE_URL,
+# not the platform-internal host in DATABASE_PRIVATE_URL. cfg.py prefers the private one
+# (cfg.py:328), which does not resolve off-platform, so it is removed for these runs.
+#
+# `env -u`, NOT `env VAR=`: cfg falls back to DATABASE_URL only when the private var is
+# *absent*. Set to the empty string it is still present, so `_getenv` returns "" without
+# raising, the fallback never fires, and cfg lands on its Library-Mode placeholder —
+# yielding a silently unusable "postgresql+psycopg://" rather than an error. Verified.
+RAILWAY_RUN = railway run $(RAILWAY_ENV_FLAG) --service $(RAILWAY_SERVICE) -- \
+	env -u DATABASE_PRIVATE_URL -u MYSQL_PRIVATE_URL
+
+# ── Deploys ────────────────────────────────────────────────────────────────────────
+# One rule for what used to be four near-identical targets. The guard keeps the pattern
+# from swallowing a typo: `make deploy-ancor` should fail, not attempt a deploy.
+deploy-%:
+	@case "$*" in beacon|anchor) ;; *) \
+		echo "No such service '$*'. Use deploy-beacon or deploy-anchor." >&2; exit 1;; esac
+	railway up $(RAILWAY_ENV_FLAG) --detach --service $*
+
+# Removes the most recent deployment of a service. Explicit about both service and
+# environment — it used to be a bare `railway down`, which acted on whatever the CLI
+# happened to be linked to at the time.
+remove-last-deploy-%:
+	railway down $(RAILWAY_ENV_FLAG) --service $*
 
 # Remote Pi dev container (docker-compose.dev.yml). dev-up builds the image with
 # the uid/gid that OWN this clone so the bind-mounted /workspace stays writable,
@@ -158,22 +194,20 @@ migration-dry-run: .env
 migration-check: .env
 	uv run --env-file .env alembic check
 
-# Back up a DB to a timestamped ./kyber-<env>-<UTC>.sql via pg_dump, pulling the Postgres
-# service's connection URL from the given Railway environment. Runs locally, so it needs
-# pg_dump installed and the Postgres service reachable (public TCP proxy).
-dump-prod-db:
-	railway run -e production -s Postgres bash -c 'pg_dump --no-owner --no-privileges "$$DATABASE_URL" > "kyber-prod-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
+# ── Backups ────────────────────────────────────────────────────────────────────────
+# Back up a database to a timestamped ./kyber-<env>-<UTC>.sql, pulling the connection
+# URL from the given Railway environment. Both run locally, so they need pg_dump /
+# mysqldump installed here and the service reachable over its public TCP proxy.
+dump-db:
+	railway run $(RAILWAY_ENV_FLAG) --service Postgres -- bash -c 'pg_dump --no-owner --no-privileges "$$DATABASE_URL" > "kyber-$(RAILWAY_ENV)-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
 
-dump-dev-db:
-	railway run -e dev -s Postgres bash -c 'pg_dump --no-owner --no-privileges "$$DATABASE_URL" > "kyber-dev-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
-
-# The same, for the OLD MySQL database, until it is retired. `dump-prod-db` above cannot
+# The same, for the OLD MySQL database, until it is retired. `dump-db` above cannot
 # stand in for this: it targets the Postgres service, so before the cutover there is
 # nothing to back up the database you are migrating *away from* — which is the one
 # backup that matters, since mirrored_channel cannot be reconstructed from anything.
 #
-# Driven off the single MYSQL_URL that `railway run` injects, exactly as the pg targets
-# use DATABASE_URL. The one way these have to differ: mysqldump takes flags rather than
+# Driven off the single MYSQL_URL that `railway run` injects, exactly as the pg target
+# uses DATABASE_URL. The one way these have to differ: mysqldump takes flags rather than
 # a URL, so MYSQL_DUMP below splits it. sed's scripts are double-quoted so the recipe's
 # own single quotes survive, and none of them contain a `$` to be expanded early.
 #
@@ -182,14 +216,76 @@ dump-dev-db:
 # that surfaces as an auth error at connect time, not as a bad dump.
 # --single-transaction gives a consistent InnoDB snapshot without stopping a running
 # bot; --no-tablespaces avoids needing the PROCESS privilege a managed user usually
-# lacks. Runs locally, so it needs mysqldump installed and the service reachable.
+# lacks.
 MYSQL_DUMP = n=$$(echo "$$MYSQL_URL" | sed -e "s|^[a-z]*://||"); hp=$$(echo "$$n" | sed -e "s|^.*@||" -e "s|/.*||"); MYSQL_PWD=$$(echo "$$n" | sed -e "s|^[^:]*:||" -e "s|@.*||") mysqldump --host "$$(echo "$$hp" | cut -d: -f1)" --port "$$(echo "$$hp" | cut -d: -f2)" --user "$$(echo "$$n" | cut -d: -f1)" --single-transaction --quick --no-tablespaces "$$(echo "$$n" | sed -e "s|^.*/||" -e "s|?.*||")"
 
-dump-mysql-prod:
-	railway run -e production -s MySQL bash -c '$(MYSQL_DUMP) > "kyber-prod-mysql-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
+dump-mysql:
+	railway run $(RAILWAY_ENV_FLAG) --service MySQL -- bash -c '$(MYSQL_DUMP) > "kyber-$(RAILWAY_ENV)-mysql-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
 
-dump-mysql-dev:
-	railway run -e dev -s MySQL bash -c '$(MYSQL_DUMP) > "kyber-dev-mysql-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
+# ── Cutover: MySQL → Postgres, env → database ──────────────────────────────────────
+# The runbook's window, one target per step. Every one runs under `railway run`, so
+# none of them needs a local .env, a hand-pasted URL, or a variable exported into your
+# shell — the deployment's own variables are the only source, which is also what stops
+# you pointing a step at the wrong environment by accident. Say `prod` to aim them at
+# production; without it they act on dev, where you should rehearse first.
+#
+# They are ordered, and each is safe to re-run:
+#
+#     make prod cutover-backup     # 1. dump the old MySQL
+#     make prod cutover-schema     # 2. create the Postgres schema (alembic)
+#     make prod cutover-copy       # 3. copy the rows  (dry run; EXECUTE=1 to write)
+#     make prod cutover-settings   # 4. load the env vars into the settings rows
+#     make prod cutover-verify     # 5. read back what landed
+#
+# or `make prod mysql-to-postgres` for all of them in order.
+
+# EXECUTE=1 is the write gate on the two destructive-ish steps, matching the repo's
+# existing ALLOW_REMOTE_SCHEMA_DESTROY convention: the dangerous thing needs a word.
+EXECUTE ?=
+
+cutover-backup: dump-mysql
+
+# Alembic reads its URL from dd.common.cfg, so the recipe passes no URL — the point of
+# running it under `railway run`. Idempotent: against a database already at head it is
+# a no-op, which is also what each bot does at boot.
+cutover-schema:
+	$(RAILWAY_RUN) uv run alembic upgrade head
+
+# Dry run by default: prints a per-table report of source rows, destination-before,
+# copied and destination-after, and writes nothing. Read it, then EXECUTE=1.
+# --source is the old database, taken from the same injected environment.
+cutover-copy:
+	$(RAILWAY_RUN) sh -c 'uv run python -m dd.common.db_transfer --source "$$MYSQL_URL" $(if $(EXECUTE),--execute,)'
+
+# Loads FOLLOWABLES, the alerts channel and level, the colours, the default URL, the
+# bad-channel switch and the two image URLs into auto_post_settings — the step that
+# used to be "type twelve channels into a web form". Dry run by default, same as above.
+# Never overwrites a row that already holds a value (OVERWRITE=1 if you mean to).
+cutover-settings:
+	$(RAILWAY_RUN) uv run python -m dd.common.settings_import $(if $(EXECUTE),--execute,) $(if $(OVERWRITE),--overwrite,)
+
+# Read the settings back out of the new database, as the bots will see them: the import
+# in dry-run mode, which prints every setting's stored value beside the env's. After a
+# successful cutover-settings every row should read `unchanged` — anything else is a
+# setting that did not land, and it names which.
+cutover-verify:
+	$(RAILWAY_RUN) uv run python -m dd.common.settings_import
+
+# All of it, in order. Without EXECUTE=1 this is a full rehearsal: it takes the backup,
+# creates the schema, then dry-runs the copy and the settings import so you can read
+# both reports before committing to anything.
+#
+# There is no confirmation prompt. The gate is EXECUTE=1 plus the word `prod`, both of
+# which have to be typed on the same line — and a rehearsal against dev is a different
+# command from the real thing by exactly one word, which is the property worth having.
+mysql-to-postgres:
+	@echo "==> environment: $(RAILWAY_ENV)$(if $(EXECUTE), (EXECUTE=1 — this writes), (dry run — set EXECUTE=1 to write))"
+	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) cutover-backup
+	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) cutover-schema
+	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) EXECUTE=$(EXECUTE) cutover-copy
+	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) EXECUTE=$(EXECUTE) cutover-settings
+	@$(if $(EXECUTE),$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) cutover-verify,:)
+	@echo "==> done$(if $(EXECUTE),, — nothing was written. Re-run with EXECUTE=1.)"
 
 # conftest.py is named alongside `dd` in all three: it is the one Python file outside
 # the package tree (repo-root, where pytest's session DB fixture and its non-local-DB
@@ -260,8 +356,14 @@ check: lint format-check typecheck test test-js
 	@echo "are there to show the approximate format of values."
 	@exit 1
 
-install-termux-deps:
-	@echo "If the specific python version for this project is not available"
-	@echo "and cannot be upgraded, then consider using the TUR to find it:"
-	@echo "https://github.com/termux-user-repository/tur"
-	pkg install python uv
+# Every target here names an action, not a file it produces — except `.env`, which IS a
+# real file and is the guard that fails when it is missing. Without this a stray file
+# named `check` or `test` in the repo root would silently make those targets no-ops.
+.PHONY: prod deploy-% remove-last-deploy-% dev dev-up dev-login dev-down \
+	dev-down-volumes run-beacon-local run-anchor-local _require-mem-cap \
+	run-beacon-devbot run-anchor-devbot devbot-up devbot-down devbot-logs \
+	devbot-status destroy-schemas create-schemas migration-plan migration-apply \
+	migration-dry-run migration-check dump-db dump-mysql cutover-backup \
+	cutover-schema cutover-copy cutover-settings cutover-verify mysql-to-postgres \
+	lint format format-check typecheck test test-js test-unit test-browser \
+	coverage test-integration test-mirror-integration test-all check

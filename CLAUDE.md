@@ -55,8 +55,18 @@ DB layer, or building a message/embed, read it.** Quick orientation:
   populated `.env` (copy `.env-example`; **nearly all** vars are required — a few are
   optional, see its inline comments). `dd/common/cfg.py` validates required env **at
   import time**, so a missing var fails fast with `ValueError`.
-- Deploy via `make deploy-beacon-dev` / `deploy-anchor-prod` etc. (Railway) or via
-  Railway's plugin.
+- **Every Railway target takes its environment from `RAILWAY_ENV`, which defaults to
+  `dev`.** The word `prod` on the command line switches it: `make deploy-anchor` is dev,
+  `make prod deploy-anchor` is production. One rule serves both bots (`deploy-%`), and
+  the same `prod` word drives `dump-db`, `dump-mysql` and the `cutover-*` targets, so
+  there is no per-environment target to keep in sync. Deploying is also still possible
+  from Railway's plugin.
+  - The recipes pass `--environment`/`--service` **flags**; they never run `railway
+    environment X` / `railway service Y` first. Those mutate the CLI's persistent link,
+    so a later bare `railway …` in the same checkout would silently inherit whatever
+    the last make target selected — including production. The flag goes *after* the
+    subcommand (`railway up --environment production …`); as a leading global flag it
+    is an arg-parse error.
 - **One image for every deployment.** The repo-root `Dockerfile` builds both the Railway
   (amd64) and Raspberry Pi B+ (`linux/arm/v6`) images — Alpine for both, prod-correct
   defaults, three build args (`BASE_IMAGE`, `UV_SYNC_GROUPS`, `PURE_PYTHON`) for the Pi.
