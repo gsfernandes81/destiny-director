@@ -150,7 +150,7 @@ async def _handle_send(request: aiohttp.web.Request) -> aiohttp.web.Response:
     if not feed.channel_id:
         return aiohttp.web.json_response(
             {
-                "error": f"{dd_feeds.display_name(feed.name)} is dormant"
+                "error": f"{dd_feeds.FEEDS[feed.name].display_name} is dormant"
                 " — no channel configured."
             },
             status=409,

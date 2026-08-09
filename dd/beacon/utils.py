@@ -427,7 +427,7 @@ async def open_feed_source[T](
             logger.critical(
                 "%s has no channel set — its commands will answer 'unavailable' until "
                 "one is picked on the Autopost Settings page.",
-                dd_feeds.display_name(feed),
+                dd_feeds.FEEDS[feed].display_name,
             )
         return None, FEED_UNCONFIGURED
 
@@ -442,7 +442,7 @@ async def open_feed_source[T](
             "%s channel %s is configured but no longer reachable (deleted, or the bot "
             "lost access) — its commands will answer 'unavailable' until it's fixed "
             "on the Autopost Settings page.",
-            dd_feeds.display_name(feed),
+            dd_feeds.FEEDS[feed].display_name,
             channel_id,
         )
         return None, FEED_UNREACHABLE

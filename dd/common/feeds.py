@@ -50,26 +50,29 @@ is no cycle and no import-order constraint.
 
 import dataclasses
 import enum
-import typing as t
 
 
 class FeedKind(enum.Enum):
-    """Who produces a feed's posts — which decides the shape of its settings group.
+    """Whether a feed is produced on a schedule — which decides its settings group.
 
     Only :attr:`ANCHOR_CRON` feeds have an ``enabled`` toggle, because only they have a
     scheduled producer to switch off; see :attr:`Followable.has_toggle`. The toggles are
     anchor's alone — beacon reads no setting to decide whether to mirror, and mirroring
     is unconditional (see ``dd.beacon.extensions.mirror``).
+
+    This started as three members, splitting :attr:`UNSCHEDULED` into "anchor produces
+    it from a web form" and "content arrives some other way". Nothing ever branched on
+    that difference — ``has_toggle`` collapsed both to False — so it was a fact with no
+    consumer in the one module whose purpose is removing facts that drift.
     """
 
     #: anchor produces on a schedule (``@aiocron.crontab`` in the producer module).
+    #: The only kind with a produce toggle: a toggle switches a schedule off.
     ANCHOR_CRON = enum.auto()
-    #: anchor produces from a web form (``HybridPostSpec``); a human presses publish, so
-    #: there is no schedule to gate and no toggle.
-    ANCHOR_FORM = enum.auto()
-    #: content arrives in the channel some other way (a human, another bot). Beacon
-    #: follows and mirrors it; anchor has no module for these at all.
-    EXTERNAL = enum.auto()
+    #: everything else — a web form a human presses publish on (``HybridPostSpec``), or
+    #: content that arrives in the channel by other means (a human, another bot). Either
+    #: way there is no schedule to gate, and beacon follows and mirrors it the same.
+    UNSCHEDULED = enum.auto()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -170,7 +173,7 @@ FOLLOWABLES: tuple[Followable, ...] = (
     # Week In Destiny", while the feed slug and the channel row kept the older name.
     Followable(
         "twab",
-        FeedKind.EXTERNAL,
+        FeedKind.UNSCHEDULED,
         "This Week At Bungie",
         "The Kyber channel TWAB posts follow from.",
         command_name="twid",
@@ -178,20 +181,20 @@ FOLLOWABLES: tuple[Followable, ...] = (
     ),
     Followable(
         "trials",
-        FeedKind.ANCHOR_FORM,
+        FeedKind.UNSCHEDULED,
         "Trials of Osiris",
         "The Kyber channel this feed posts to. Content is edited on the Trials form.",
     ),
     Followable(
         "weekly_reset",
-        FeedKind.ANCHOR_FORM,
+        FeedKind.UNSCHEDULED,
         "Weekly Reset",
         "The Kyber channel this feed posts to. Content is edited on the Weekly Reset "
         "form.",
     ),
     Followable(
         "weekly_nightfall",
-        FeedKind.EXTERNAL,
+        FeedKind.UNSCHEDULED,
         "Weekly Nightfall",
         "The Kyber channel weekly nightfall posts follow from.",
         command_name="nightfall",
@@ -199,13 +202,13 @@ FOLLOWABLES: tuple[Followable, ...] = (
     ),
     Followable(
         "free_games",
-        FeedKind.EXTERNAL,
+        FeedKind.UNSCHEDULED,
         "Free Games",
         "The Kyber channel free-games posts follow from.",
     ),
     Followable(
         "emblems_and_cosmetics",
-        FeedKind.EXTERNAL,
+        FeedKind.UNSCHEDULED,
         "Emblems & Cosmetics",
         "The Kyber channel emblems/cosmetics posts follow from.",
     ),
@@ -213,18 +216,3 @@ FOLLOWABLES: tuple[Followable, ...] = (
 
 #: :data:`FOLLOWABLES` keyed by slug, for the lookup every consumer actually wants.
 FEEDS: dict[str, Followable] = {f.slug: f for f in FOLLOWABLES}
-
-
-def display_name(slug: str) -> str:
-    """``slug``'s display name, or the slug itself if it names no known feed.
-
-    The fallback matters for historical data: the mirror log resolves names for rows
-    captured long ago, whose source channel may belong to a feed that no longer exists.
-    """
-    feed = FEEDS.get(slug)
-    return feed.display_name if feed else slug
-
-
-def slugs() -> t.KeysView[str]:
-    """Every followable slug."""
-    return FEEDS.keys()

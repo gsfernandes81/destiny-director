@@ -97,17 +97,10 @@ def test_a_confirmation_override_exists_only_where_the_command_diverges() -> Non
 
 
 def test_only_cron_feeds_have_a_produce_toggle() -> None:
-    # A toggle switches a *schedule* off. A form feed is published by a human pressing a
-    # button, and an external feed has no anchor producer at all, so neither has one.
+    # A toggle switches a *schedule* off. Anything unscheduled is published by a human
+    # pressing a button or arrives in the channel by other means, so it has none.
     for feed in feeds.FOLLOWABLES:
         assert feed.has_toggle is (feed.kind is feeds.FeedKind.ANCHOR_CRON)
-
-
-def test_display_name_falls_back_to_the_slug() -> None:
-    # Historical mirror-log rows can name a feed that no longer exists; they must render
-    # as something rather than raising.
-    assert feeds.display_name("xur") == "Xûr"
-    assert feeds.display_name("a_feed_that_was_removed") == "a_feed_that_was_removed"
 
 
 def test_every_feed_has_display_copy() -> None:

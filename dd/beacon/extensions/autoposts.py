@@ -72,7 +72,7 @@ def resolve_followable_channel(feed: str) -> int:
         logger.critical(
             "%s autopost channel is not configured — dormant until a channel is "
             "picked on the Autopost Settings page.",
-            dd_feeds.display_name(feed),
+            dd_feeds.FEEDS[feed].display_name,
         )
     return channel_id
 
