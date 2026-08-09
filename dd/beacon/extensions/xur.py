@@ -56,4 +56,4 @@ loader.command(
     )
 )
 
-follow_control_command_maker("xur", "Xur auto posts")
+follow_control_command_maker("xur", "Xûr auto posts")

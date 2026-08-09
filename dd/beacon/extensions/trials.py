@@ -48,4 +48,4 @@ loader.command(
     )
 )
 
-follow_control_command_maker("trials", "Trials weekly auto posts")
+follow_control_command_maker("trials", "Trials of Osiris weekly auto posts")

@@ -21,7 +21,10 @@ import lightbulb as lb
 
 from dd.hmessage import HMessage
 
-from ...common import settings
+from ...common import (
+    feeds as dd_feeds,
+    settings,
+)
 from ...common.bot import CachedFetchBot
 from .. import utils
 from .autoposts import follow_control_command_maker, resolve_followable_channel
@@ -135,7 +138,7 @@ class FreeGames(lb.SlashCommand, name="games", description=HELP_STRING):
         if last_message_in_channel is None:
             await ctx.respond(
                 await utils.feed_unavailable_embed(
-                    "Free Games",
+                    dd_feeds.FEEDS["free_games"].display_name,
                     unavailable_reason or "the bot is still starting up",
                 )
             )

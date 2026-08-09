@@ -101,4 +101,4 @@ ls_group_2.register(
 loader.command(ls_group)
 loader.command(ls_group_2)
 
-follow_control_command_maker("lost_sector", "Lost sector auto posts")
+follow_control_command_maker("lost_sector", "Lost Sector auto posts")

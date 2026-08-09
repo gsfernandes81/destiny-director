@@ -35,7 +35,7 @@ _pages = setup_nav_pages(
     reference_date=REFERENCE_DATE,
 )
 
-weekly_reset_command_group = lb.Group("weekly", "Weekly reset")
+weekly_reset_command_group = lb.Group("weekly", "Weekly Reset")
 weekly_reset_command_group.register(
     make_navigator_command(
         _pages,
@@ -46,4 +46,4 @@ weekly_reset_command_group.register(
 
 loader.command(weekly_reset_command_group)
 
-follow_control_command_maker("weekly_reset", "Weekly reset auto posts")
+follow_control_command_maker("weekly_reset", "Weekly Reset auto posts")

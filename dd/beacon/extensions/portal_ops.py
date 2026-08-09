@@ -64,4 +64,4 @@ portal_command_group.register(
 
 loader.command(portal_command_group)
 
-follow_control_command_maker("portal_ops", "Portal ops auto posts")
+follow_control_command_maker("portal_ops", "Portal Ops auto posts")

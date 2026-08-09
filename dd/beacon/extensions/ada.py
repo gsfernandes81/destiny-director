@@ -41,7 +41,7 @@ _pages = setup_nav_pages(
 
 
 class AdaCommand(
-    lb.SlashCommand, name="ada", description="Find out about ada's weekly items"
+    lb.SlashCommand, name="ada", description="Find out about Ada-1's weekly items"
 ):
     @lb.invoke
     async def invoke(self, ctx: lb.Context):

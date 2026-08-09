@@ -23,5 +23,5 @@ loader = lb.Loader()
 FOLLOWABLE_CHANNEL = resolve_followable_channel("emblems_and_cosmetics")
 
 follow_control_command_maker(
-    "emblems_and_cosmetics", "D2 Emblems and Cosmetics auto posts"
+    "emblems_and_cosmetics", "D2 Emblems & Cosmetics auto posts"
 )
