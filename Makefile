@@ -167,6 +167,22 @@ dump-prod-db:
 dump-dev-db:
 	railway run -e dev -s Postgres bash -c 'pg_dump --no-owner --no-privileges "$$DATABASE_URL" > "kyber-dev-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
 
+# The same, for the OLD MySQL database, until it is retired. `dump-prod-db` above cannot
+# stand in for this: it targets the Postgres service, so before the cutover there is
+# nothing to back up the database you are migrating *away from* — which is the one
+# backup that matters, since mirrored_channel cannot be reconstructed from anything.
+#
+# Takes host/port from the TCP proxy (MYSQLHOST is the internal name and does not
+# resolve off-platform), the password via MYSQL_PWD rather than --password so it stays
+# out of the process list, and --single-transaction so a running bot doesn't have to be
+# stopped for a consistent InnoDB snapshot. --no-tablespaces avoids needing the PROCESS
+# privilege, which a managed MySQL user usually lacks. Needs mysqldump installed locally.
+dump-mysql-prod:
+	railway run -e production -s MySQL bash -c 'MYSQL_PWD="$$MYSQLPASSWORD" mysqldump --host "$${RAILWAY_TCP_PROXY_DOMAIN:-$$MYSQLHOST}" --port "$${RAILWAY_TCP_PROXY_PORT:-$$MYSQLPORT}" --user "$$MYSQLUSER" --single-transaction --quick --no-tablespaces "$$MYSQLDATABASE" > "kyber-prod-mysql-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
+
+dump-mysql-dev:
+	railway run -e dev -s MySQL bash -c 'MYSQL_PWD="$$MYSQLPASSWORD" mysqldump --host "$${RAILWAY_TCP_PROXY_DOMAIN:-$$MYSQLHOST}" --port "$${RAILWAY_TCP_PROXY_PORT:-$$MYSQLPORT}" --user "$$MYSQLUSER" --single-transaction --quick --no-tablespaces "$$MYSQLDATABASE" > "kyber-dev-mysql-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
+
 # conftest.py is named alongside `dd` in all three: it is the one Python file outside
 # the package tree (repo-root, where pytest's session DB fixture and its non-local-DB
 # wipe guard live), so a bare `dd` path would leave it unlinted and untyped.
