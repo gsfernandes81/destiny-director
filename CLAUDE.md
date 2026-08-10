@@ -55,12 +55,21 @@ DB layer, or building a message/embed, read it.** Quick orientation:
   populated `.env` (copy `.env-example`; **nearly all** vars are required — a few are
   optional, see its inline comments). `dd/common/cfg.py` validates required env **at
   import time**, so a missing var fails fast with `ValueError`.
-- **Every Railway target takes its environment from `RAILWAY_ENV`, which defaults to
+- **Every Railway target takes its environment from `TARGET_ENV`, which defaults to
   `dev`.** The word `prod` on the command line switches it: `make deploy-anchor` is dev,
   `make prod deploy-anchor` is production. One rule serves both bots (`deploy-%`), and
   the same `prod` word drives `dump-db`, `dump-mysql` and the `cutover-*` targets, so
   there is no per-environment target to keep in sync. Deploying is also still possible
   from Railway's plugin.
+  - **It is `TARGET_ENV` and not `RAILWAY_ENV` for a reason — do not rename it back.**
+    `mysql-to-postgres` runs its steps as sub-makes and passes the environment as a
+    command-line assignment, and make exports command-line variables into the
+    environment of every recipe. The `railway` process therefore inherited a variable
+    *we* invented sitting in the CLI's own configuration namespace: `make dump-mysql`
+    worked, `make mysql-to-postgres` failed with "Unauthorized" on a byte-identical
+    command line. Railway's API answers Not Authorized for an identifier it cannot
+    resolve rather than Not Found, so it does not read as a configuration problem at
+    all. Keep our variables out of `RAILWAY_*`.
   - The recipes pass `--environment`/`--service` **flags**; they never run `railway
     environment X` / `railway service Y` first. Those mutate the CLI's persistent link,
     so a later bare `railway …` in the same checkout would silently inherit whatever

@@ -1,5 +1,5 @@
 # ── Which Railway environment ──────────────────────────────────────────────────────
-# Every railway target below reads RAILWAY_ENV. It defaults to dev; the word `prod`
+# Every railway target below reads TARGET_ENV. It defaults to dev; the word `prod`
 # anywhere on the command line switches it to production:
 #
 #     make deploy-anchor          # dev
@@ -9,9 +9,19 @@
 # Prod is never the default and never implicit — you type the word, on the line, every
 # time. That is deliberate: pushing to prod is the one action in this file that needs a
 # human to have meant it, and a flag you can forget is not the same as a word you type.
-RAILWAY_ENV ?= dev
+#
+# **TARGET_ENV, not RAILWAY_ENV** — do not rename it back. mysql-to-postgres drives its
+# steps as sub-makes, passing the environment as a command-line assignment, and make
+# exports command-line variables into the environment of every recipe it runs. So the
+# `railway` process inherited a variable named RAILWAY_ENV that we invented, sitting in
+# the namespace the CLI reads its own configuration from. `make dump-mysql` worked and
+# `make mysql-to-postgres` failed with "Unauthorized" on the identical command line —
+# Railway's API answers Not Authorized for an identifier it cannot resolve rather than
+# Not Found, so it does not read as a configuration error at all. The variable is ours;
+# it has no business wearing another tool's prefix.
+TARGET_ENV ?= dev
 ifneq (,$(filter prod,$(MAKECMDGOALS)))
-  RAILWAY_ENV := production
+  TARGET_ENV := production
 endif
 
 # A no-op goal, so `prod` can sit on the command line purely to be seen by the filter
@@ -25,7 +35,7 @@ prod:
 # whatever the last make target selected — including production. Flags do not leak.
 # The flag goes AFTER the subcommand — `--environment` is a per-subcommand option, not
 # a global one, and `railway --environment production up` is an arg-parse error.
-RAILWAY_ENV_FLAG := --environment $(RAILWAY_ENV)
+TARGET_ENV_FLAG := --environment $(TARGET_ENV)
 
 # The service whose variables the cutover targets borrow. anchor because it is the one
 # with both the old MYSQL_URL and the new DATABASE_URL in scope.
@@ -40,7 +50,7 @@ RAILWAY_SERVICE ?= anchor
 # *absent*. Set to the empty string it is still present, so `_getenv` returns "" without
 # raising, the fallback never fires, and cfg lands on its Library-Mode placeholder —
 # yielding a silently unusable "postgresql+psycopg://" rather than an error. Verified.
-RAILWAY_RUN = railway run $(RAILWAY_ENV_FLAG) --service $(RAILWAY_SERVICE) -- \
+RAILWAY_RUN = railway run $(TARGET_ENV_FLAG) --service $(RAILWAY_SERVICE) -- \
 	env -u DATABASE_PRIVATE_URL -u MYSQL_PRIVATE_URL
 
 # ── Deploys ────────────────────────────────────────────────────────────────────────
@@ -57,13 +67,13 @@ RAILWAY_RUN = railway run $(RAILWAY_ENV_FLAG) --service $(RAILWAY_SERVICE) -- \
 BOTS := beacon anchor
 
 $(addprefix deploy-,$(BOTS)): deploy-%:
-	railway up $(RAILWAY_ENV_FLAG) --detach --service $*
+	railway up $(TARGET_ENV_FLAG) --detach --service $*
 
 # Removes the most recent deployment of a service. Explicit about both service and
 # environment — it used to be a bare `railway down`, which acted on whatever the CLI
 # happened to be linked to at the time.
 $(addprefix remove-last-deploy-,$(BOTS)): remove-last-deploy-%:
-	railway down $(RAILWAY_ENV_FLAG) --service $*
+	railway down $(TARGET_ENV_FLAG) --service $*
 
 # Remote Pi dev container (docker-compose.dev.yml). dev-up builds the image with
 # the uid/gid that OWN this clone so the bind-mounted /workspace stays writable,
@@ -220,7 +230,7 @@ migration-check: .env
 # $(RAILWAY_RUN), and cutover-schema its DATABASE_URL — it just makes the backups agree
 # with the rest of the file.
 dump-db:
-	$(RAILWAY_RUN) bash -c 'pg_dump --no-owner --no-privileges "$$DATABASE_URL" > "kyber-$(RAILWAY_ENV)-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
+	$(RAILWAY_RUN) bash -c 'pg_dump --no-owner --no-privileges "$$DATABASE_URL" > "kyber-$(TARGET_ENV)-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
 
 # The same, for the OLD MySQL database, until it is retired. `dump-db` above cannot
 # stand in for this: it dumps DATABASE_URL, so before the cutover there is nothing to
@@ -241,7 +251,7 @@ dump-db:
 MYSQL_DUMP = n=$$(echo "$$MYSQL_URL" | sed -e "s|^[a-z]*://||"); hp=$$(echo "$$n" | sed -e "s|^.*@||" -e "s|/.*||"); MYSQL_PWD=$$(echo "$$n" | sed -e "s|^[^:]*:||" -e "s|@.*||") mysqldump --host "$$(echo "$$hp" | cut -d: -f1)" --port "$$(echo "$$hp" | cut -d: -f2)" --user "$$(echo "$$n" | cut -d: -f1)" --single-transaction --quick --no-tablespaces "$$(echo "$$n" | sed -e "s|^.*/||" -e "s|?.*||")"
 
 dump-mysql:
-	$(RAILWAY_RUN) bash -c '$(MYSQL_DUMP) > "kyber-$(RAILWAY_ENV)-mysql-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
+	$(RAILWAY_RUN) bash -c '$(MYSQL_DUMP) > "kyber-$(TARGET_ENV)-mysql-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
 
 # ── Environment variables: snapshot and restore ────────────────────────────────────
 # The cutover ends by deleting a dozen legacy variables, and Railway keeps no history.
@@ -253,7 +263,7 @@ dump-mysql:
 # `kyber-*-vars-*.json` is gitignored alongside the .sql dumps. It holds live secrets in
 # plaintext and is written 0600; treat it exactly like a database dump.
 dump-vars:
-	uv run python -m dd.common.railway_vars dump --environment $(RAILWAY_ENV)
+	uv run python -m dd.common.railway_vars dump --environment $(TARGET_ENV)
 
 # Put a snapshot back: `make restore-vars FILE=kyber-production-vars-….json`.
 # Dry run by default, EXECUTE=1 to write, and it writes with --skip-deploys — a restore
@@ -267,7 +277,7 @@ dump-vars:
 restore-vars:
 	@[ -n "$(FILE)" ] || { echo 'Set FILE: make restore-vars FILE=kyber-dev-vars-….json' >&2; exit 1; }
 	uv run python -m dd.common.railway_vars restore --file "$(FILE)" \
-		--environment $(RAILWAY_ENV) $(WRITE)
+		--environment $(TARGET_ENV) $(WRITE)
 
 # Restore from a paste of Railway's web Raw Editor instead of a dump:
 #   make prod restore-raw FILE=anchor-raw.txt SERVICE=anchor [EXECUTE=1]
@@ -284,7 +294,7 @@ restore-vars:
 restore-raw:
 	@[ -n "$(SERVICE)" ] || { echo 'Set SERVICE: the raw editor is per-service' >&2; exit 1; }
 	uv run python -m dd.common.railway_vars restore-raw --file "$(if $(FILE),$(FILE),-)" \
-		--service "$(SERVICE)" --environment $(RAILWAY_ENV) $(WRITE)
+		--service "$(SERVICE)" --environment $(TARGET_ENV) $(WRITE)
 
 # Check dev and production are shaped the same, so a rehearsal on dev predicts
 # production rather than merely resembling it. Reads only — nothing is written, and it
@@ -417,13 +427,13 @@ cutover-verify:
 # which have to be typed on the same line — and a rehearsal against dev is a different
 # command from the real thing by exactly one word, which is the property worth having.
 mysql-to-postgres:
-	@echo "==> environment: $(RAILWAY_ENV)$(if $(WRITE), (EXECUTE=1 — this writes), (rehearsal))"
-	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) cutover-backup
-	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) cutover-schema
-	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) EXECUTE=$(EXECUTE) TRUNCATE=$(TRUNCATE) cutover-copy
-	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) EXECUTE=$(EXECUTE) OVERWRITE=$(OVERWRITE) cutover-settings
-	@$(if $(WRITE),$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) cutover-verify,:)
-	@echo "==> done. $(if $(WRITE),Rows copied and settings written; check cutover-verify above.,Backup taken and the schema is at head on $(RAILWAY_ENV); NO rows were copied and NO settings were written. Re-run with EXECUTE=1.)"
+	@echo "==> environment: $(TARGET_ENV)$(if $(WRITE), (EXECUTE=1 — this writes), (rehearsal))"
+	@$(MAKE) --no-print-directory TARGET_ENV=$(TARGET_ENV) cutover-backup
+	@$(MAKE) --no-print-directory TARGET_ENV=$(TARGET_ENV) cutover-schema
+	@$(MAKE) --no-print-directory TARGET_ENV=$(TARGET_ENV) EXECUTE=$(EXECUTE) TRUNCATE=$(TRUNCATE) cutover-copy
+	@$(MAKE) --no-print-directory TARGET_ENV=$(TARGET_ENV) EXECUTE=$(EXECUTE) OVERWRITE=$(OVERWRITE) cutover-settings
+	@$(if $(WRITE),$(MAKE) --no-print-directory TARGET_ENV=$(TARGET_ENV) cutover-verify,:)
+	@echo "==> done. $(if $(WRITE),Rows copied and settings written; check cutover-verify above.,Backup taken and the schema is at head on $(TARGET_ENV); NO rows were copied and NO settings were written. Re-run with EXECUTE=1.)"
 
 # conftest.py is named alongside `dd` in all three: it is the one Python file outside
 # the package tree (repo-root, where pytest's session DB fixture and its non-local-DB
