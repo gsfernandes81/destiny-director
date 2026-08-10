@@ -53,7 +53,11 @@
             <label class="inline"><input type="checkbox" id="ironBanner" /> Iron Banner active</label>
             <label class="inline"><input type="checkbox" id="trialsActive" /> Trials active</label>
           </div>
-          <span class="muted">Iron Banner forces Trials off (enforced on save).</span>
+          <!-- Swapped for the "why it's off" wording while Iron Banner is ticked; see
+               weekly_reset_form.js's syncEvents. -->
+          <span class="muted" id="trialsGateNote"
+            >Iron Banner forces Trials off (enforced on save).</span
+          >
           <div class="row">
             <div class="field">
               <label for="updateLabel">Update label</label>

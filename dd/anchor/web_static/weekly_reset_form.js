@@ -211,10 +211,28 @@ for (const tier of conquest_tiers) {
 // Control Challenge Reward picker (the server drops it on save/preview) and note that the
 // 6v6 first mode becomes Iron Banner.
 const CRUCIBLE_6V6_HINT = $("crucible6v6Hint").textContent;
+const TRIALS_GATE_NOTE = $("trialsGateNote").textContent;
+// What "Trials active" was before Iron Banner forced it off, or null when the gate isn't
+// holding a value. The gate is a rule, not an edit: ticking Iron Banner — to see the
+// preview, or by mistake — must not quietly cost a setting whose loss is only visible if
+// you happen to look at a greyed checkbox. Untick and the old value comes back. It cannot
+// go stale: while IB is on the box is disabled, so no competing choice can be made.
+let trialsBeforeIb = null;
 function syncEvents() {
   const ib = $("ironBanner").checked;
-  if (ib) $("trialsActive").checked = false;
-  $("trialsActive").disabled = ib;
+  const trials = $("trialsActive");
+  if (ib) {
+    if (trialsBeforeIb === null) trialsBeforeIb = trials.checked;
+    trials.checked = false;
+  } else if (trialsBeforeIb !== null) {
+    trials.checked = trialsBeforeIb;
+    trialsBeforeIb = null;
+  }
+  trials.disabled = ib;
+  $("trialsGateNote").textContent = ib
+    ? "Trials is off for this Iron Banner week. Untick Iron Banner to get your previous"
+      + " Trials setting back."
+    : TRIALS_GATE_NOTE;
   if (ib) TS.controlWeapon.disable();
   else TS.controlWeapon.enable();
   $("controlWeaponNote").hidden = !ib;

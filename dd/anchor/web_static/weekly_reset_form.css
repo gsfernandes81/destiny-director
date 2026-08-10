@@ -15,6 +15,10 @@
 .checks { display: flex; flex-wrap: wrap; gap: .35rem 1.1rem; margin: .2rem 0; }
 .checks label { font-size: .88rem; display: inline-flex; align-items: center; gap: .35rem; }
 .checks input { margin: 0; }
+/* A disabled checkbox greys only itself, so a gated option (Trials, while Iron Banner is
+   ticked) still reads as available right up until the click does nothing. Grey the label
+   with it, and let the cursor say the same before the click. */
+.checks label:has(input:disabled) { color: var(--text-faint); cursor: not-allowed; }
 
 #conquests { display: flex; flex-direction: column; gap: .6rem; }
 
