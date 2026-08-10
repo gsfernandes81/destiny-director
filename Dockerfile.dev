@@ -27,8 +27,13 @@ ARG USER_GID=1000
 # Makefile passes (--single-transaction --quick --no-tablespaces — the last is a MySQL
 # 8 flag MariaDB also honours; verified against 10.11). The `mysql` REPL comes with it,
 # which is also how you would inspect the old database during a cutover.
+# screen keeps a long step alive across a dropped connection. Everything here is driven
+# over SSH from the Pi host or from Zed, and `make mysql-to-postgres` is minutes of
+# mysqldump and row copying under one process: lose the session mid-copy and the run
+# dies partway, which is the worst state for a migration to stop in. Start the window
+# inside `screen -S cutover` and a dropped link costs a reconnect rather than a restart.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential git make fish openssh-client openssh-server curl gnupg ca-certificates tzdata libjemalloc2 postgresql-client mariadb-client \
+        build-essential git make fish screen openssh-client openssh-server curl gnupg ca-certificates tzdata libjemalloc2 postgresql-client mariadb-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Node 22 LTS + Claude Code.
