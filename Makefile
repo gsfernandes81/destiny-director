@@ -256,6 +256,21 @@ restore-vars:
 	uv run python -m dd.common.railway_vars restore --file "$(FILE)" \
 		--environment $(RAILWAY_ENV) $(WRITE)
 
+# Restore from a paste of Railway's web Raw Editor instead of a dump:
+#   make prod restore-raw FILE=anchor-raw.txt SERVICE=anchor [EXECUTE=1]
+#
+# Worth preferring where it is available, because the Raw Editor is the *authoring*
+# surface and so shows references unresolved. `railway variables` renders them, so a
+# dump records ${{shared.SHEETS_PRIVATE_KEY}} as a flattened copy — and a large share of
+# this project's variables are ${{shared.*}}, defined once at the environment level and
+# referenced by both bots. The CLI cannot see that scope at all; it is per-service. Only
+# this path puts a reference back as a reference.
+restore-raw:
+	@[ -n "$(FILE)" ] || { echo 'Set FILE: make restore-raw FILE=raw.txt SERVICE=anchor' >&2; exit 1; }
+	@[ -n "$(SERVICE)" ] || { echo 'Set SERVICE: the raw editor is per-service' >&2; exit 1; }
+	uv run python -m dd.common.railway_vars restore-raw --file "$(FILE)" \
+		--service "$(SERVICE)" --environment $(RAILWAY_ENV) $(WRITE)
+
 # ── Cutover: MySQL → Postgres, env → database ──────────────────────────────────────
 # The runbook's window, one target per step. Every one runs under `railway run`, so
 # none of them needs a local .env, a hand-pasted URL, or a variable exported into your
@@ -418,7 +433,7 @@ check: lint format-check typecheck test test-js
 	dev-down-volumes run-beacon-local run-anchor-local _require-mem-cap \
 	run-beacon-devbot run-anchor-devbot devbot-up devbot-down devbot-logs \
 	devbot-status destroy-schemas create-schemas migration-plan migration-apply \
-	migration-dry-run migration-check dump-db dump-mysql dump-vars restore-vars \
+	migration-dry-run migration-check dump-db dump-mysql dump-vars restore-vars restore-raw \
 	cutover-backup \
 	cutover-schema cutover-copy cutover-settings cutover-verify mysql-to-postgres \
 	lint format format-check typecheck test test-js test-unit test-browser \

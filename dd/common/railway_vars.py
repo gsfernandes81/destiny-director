@@ -24,28 +24,38 @@ Discord and Bungie secrets are no better. This takes the snapshot first
 ``kyber-*-vars-*.json`` is gitignored alongside the ``.sql`` dumps. Treat it exactly
 like the database dumps: keep it, do not commit it, do not paste it.
 
-**A restore is not a perfect inverse, and the tool refuses to pretend otherwise.**
-Railway renders reference variables before handing them out — ``railway variables``
-returns the *resolved* value for ``${{Postgres.DATABASE_URL}}`` under both ``--json``
-and ``--kv``, with no way to read the reference itself. So three classes are excluded
-from a restore rather than written back wrong:
+**Two input formats, and they are not equally good.**
+
+``dump`` reads the CLI, which *renders* references: ``railway variables`` returns the
+resolved value of ``${{Postgres.DATABASE_URL}}`` under both ``--json`` and ``--kv``,
+with no way to read the reference itself. A dump is therefore a faithful record of the
+**values** and a lossy record of the **definitions**.
+
+``restore-raw`` reads a paste of Railway's web **Raw Editor**, which is the authoring
+surface and so shows references unresolved. That is the only way to get
+``${{shared.SHEETS_PRIVATE_KEY}}`` back as a reference rather than as a flattened copy,
+and it matters more than it sounds: a large share of this project's variables are
+``${{shared.*}}``, defined once at the environment level and referenced by both bots.
+The CLI cannot see that scope at all — ``railway variables`` is per-service.
+
+**What is never written back**, in either format:
 
 - ``RAILWAY_*`` — injected by the platform per deploy, not settable.
-- ``DATABASE_*`` / ``MYSQL_*`` — set as references, and Railway reassigns the public
-  TCP proxy's port when a database service is recreated. Restoring the flattened
-  literal would pin a stale host:port that resolves to nothing, which is worse than
-  the variable being absent: absent fails at boot, stale fails at connect, later,
-  looking like a network problem.
+- a **literal** ``DATABASE_*`` / ``MYSQL_*`` — Railway reassigns the public TCP proxy's
+  port when a database service is recreated, so a flattened literal pins a stale
+  host:port. Absent fails at boot; stale fails at connect, later, looking like a network
+  problem. A ``${{...}}`` reference under those names is fine and *is* restored — it
+  re-links rather than freezing.
 - anything whose live value already matches — writing it would only churn the service.
 
-Everything a human typed — tokens, keys, ``FOLLOWABLES``, channel ids — restores
-exactly. That is the set the snapshot exists for.
+So the rule is about the value's shape, not its name.
 """
 
 import argparse
 import datetime as dt
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import typing as t
@@ -55,8 +65,18 @@ import typing as t
 #: would be a snapshot of something that regenerates itself.
 DEFAULT_SERVICES: tuple[str, ...] = ("anchor", "beacon")
 
-#: Never written back — see the module docstring for why each is here.
-_SKIP_PREFIXES: tuple[str, ...] = ("RAILWAY_", "DATABASE_", "MYSQL_")
+#: Injected by Railway per deploy; setting them is meaningless.
+_PLATFORM_PREFIX = "RAILWAY_"
+
+#: Safe as a reference, dangerous as a flattened literal — see the module docstring.
+#: Matched on prefix AND the ``_URL`` suffix, not the prefix alone: the hazard is a
+#: pinned host:port, so it is the URLs that must not be copied. ``MYSQL_SSL=false``
+#: shares the prefix and is perfectly restorable — a prefix-only rule dropped it.
+_ROTATING_PREFIXES: tuple[str, ...] = ("DATABASE_", "MYSQL_")
+_ROTATING_SUFFIX = "_URL"
+
+#: Railway's reference syntax — ``${{shared.FOO}}``, ``${{Postgres.DATABASE_URL}}``.
+_REFERENCE = re.compile(r"^\$\{\{[^}]+\}\}$")
 
 
 class RailwayVarsError(Exception):
@@ -92,9 +112,71 @@ def fetch(service: str, environment: str) -> dict[str, str]:
     return {str(k): "" if v is None else str(v) for k, v in loaded.items()}
 
 
-def restorable(name: str) -> bool:
-    """Whether ``name`` is ours to write back."""
-    return not name.startswith(_SKIP_PREFIXES)
+def is_reference(value: str) -> bool:
+    """Whether ``value`` is a Railway reference rather than a literal."""
+    return bool(_REFERENCE.match(value.strip()))
+
+
+def restorable(name: str, value: str = "") -> tuple[bool, str]:
+    """Whether to write ``name`` back, and if not, why not."""
+    if name.startswith(_PLATFORM_PREFIX):
+        return False, "platform-injected"
+    if is_reference(value):
+        # A reference re-links on write, so it cannot go stale the way a copy can.
+        return True, ""
+    if name.startswith(_ROTATING_PREFIXES) and name.endswith(_ROTATING_SUFFIX):
+        return False, "literal database URL — would pin a host:port that rotates"
+    return True, ""
+
+
+def parse_raw(text: str) -> dict[str, str]:
+    """Variables from a paste of Railway's web Raw Editor.
+
+    The format is ``KEY="value"`` with the value **JSON-encoded** — inner quotes arrive
+    as ``\\"``, which is exactly what ``json.loads`` undoes. Decoding it as JSON rather
+    than stripping quotes by hand is what keeps ``SHEETS_PRIVATE_KEY`` intact: its value
+    contains literal backslash-n sequences, and hand-rolled unquoting either mangles
+    them into real newlines or leaves a doubled backslash. Both look plausible and both
+    are wrong.
+
+    Unquoted values are accepted verbatim, so a hand-edited file still works.
+    """
+    variables: dict[str, str] = {}
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        name, sep, raw = stripped.partition("=")
+        if not sep:
+            raise RailwayVarsError(f"line {lineno}: no '=' in {stripped[:40]!r}")
+        name = name.strip()
+        raw = raw.strip()
+        if raw.startswith('"'):
+            try:
+                variables[name] = json.loads(raw)
+            except json.JSONDecodeError as e:
+                raise RailwayVarsError(
+                    f"line {lineno}: {name} is quoted but not valid JSON ({e.msg}). "
+                    "Paste the Raw Editor's contents unmodified."
+                ) from e
+        else:
+            variables[name] = raw
+    if not variables:
+        raise RailwayVarsError("no variables found — is the file empty?")
+
+    # Self-check on the decoder rather than on Railway: FOLLOWABLES is our own variable
+    # and is always a JSON object, so if it decoded correctly the quoting was handled
+    # correctly. A parser that silently half-works is the failure mode here.
+    followables = variables.get("FOLLOWABLES")
+    if followables is not None:
+        try:
+            json.loads(followables)
+        except json.JSONDecodeError as e:
+            raise RailwayVarsError(
+                "FOLLOWABLES did not survive parsing, so the quoting was misread — "
+                f"refusing to write anything ({e.msg})"
+            ) from e
+    return variables
 
 
 def build_snapshot(
@@ -110,7 +192,7 @@ def build_snapshot(
 def _counts(snapshot: dict[str, t.Any]) -> str:
     lines = []
     for svc, variables in snapshot["services"].items():
-        keep = sum(1 for k in variables if restorable(k))
+        keep = sum(1 for k, v in variables.items() if restorable(k, v)[0])
         lines.append(f"  {svc:<10} {len(variables):>3} captured, {keep:>3} restorable")
     return "\n".join(lines)
 
@@ -146,7 +228,8 @@ def plan_restore(
         current = live.get(svc, {})
         entries: dict[str, tuple[str, str]] = {}
         for name, value in sorted(variables.items()):
-            if not restorable(name):
+            allowed, _why = restorable(name, value)
+            if not allowed:
                 entries[name] = ("skipped", value)
             elif current.get(name) == value:
                 entries[name] = ("same", value)
@@ -223,6 +306,30 @@ def _do_restore(args: argparse.Namespace) -> int:
     return 0
 
 
+def _do_restore_raw(args: argparse.Namespace) -> int:
+    path = pathlib.Path(args.file)
+    if not path.is_file():
+        raise RailwayVarsError(f"{path} does not exist")
+    variables = parse_raw(path.read_text())
+    refs = sum(1 for v in variables.values() if is_reference(v))
+    print(
+        f"Read {len(variables)} variable(s) from {path.name} — {refs} reference(s), "
+        f"{len(variables) - refs} literal(s)"
+    )
+    snapshot = {
+        "environment": args.environment,
+        "captured_at": "(raw editor paste)",
+        "services": {args.service: variables},
+    }
+    live = {args.service: fetch(args.service, args.environment)}
+    plan = plan_restore(snapshot, live)
+    print(_format_plan(plan, execute=args.execute))
+    if args.execute:
+        apply_restore(args.environment, plan)
+        print("\nWritten, with --skip-deploys. Redeploy when you are ready.")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m dd.common.railway_vars",
@@ -250,6 +357,16 @@ def _parser() -> argparse.ArgumentParser:
     restore.add_argument("--execute", action="store_true")
     restore.add_argument("--force-cross-environment", action="store_true")
     restore.set_defaults(func=_do_restore)
+
+    raw = sub.add_parser(
+        "restore-raw",
+        help="put back a paste of the web Raw Editor (preserves ${{...}} references)",
+    )
+    raw.add_argument("--file", required=True)
+    raw.add_argument("--service", required=True)
+    raw.add_argument("--environment", required=True)
+    raw.add_argument("--execute", action="store_true")
+    raw.set_defaults(func=_do_restore_raw)
     return parser
 
 
