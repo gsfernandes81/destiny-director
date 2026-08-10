@@ -300,8 +300,16 @@ restore-raw:
 # and off is the direction a mistake should fall.
 EXECUTE ?=
 OVERWRITE ?=
+TRUNCATE ?=
 WRITE = $(if $(filter 1,$(EXECUTE)),--execute,)
 FORCE = $(if $(filter 1,$(OVERWRITE)),--overwrite,)
+
+# TRUNCATE empties the destination tables before copying. Doubly gated — it needs its
+# own `1` *and* EXECUTE=1 — because on its own it reads like a modifier and it is not:
+# it is the only flag in this file that destroys data already in Postgres. Requiring
+# both also stops it being armed on a dry run, where it would issue the DELETEs and
+# then roll them back: nothing lost, but a confusing thing to have happened.
+EMPTY_FIRST = $(if $(and $(filter 1,$(EXECUTE)),$(filter 1,$(TRUNCATE))),--truncate,)
 
 cutover-backup: dump-mysql
 
@@ -314,8 +322,24 @@ cutover-schema:
 # Dry run by default: prints a per-table report of source rows, destination-before,
 # copied and destination-after, and writes nothing. Read it, then EXECUTE=1.
 # --source is the old database, taken from the same injected environment.
+#
+# Note what the dry run does NOT prove: its "dest after" column is computed as
+# before+source rather than measured, so the per-table OK flag is true by construction.
+# It tells you the row counts, the credentials and the schema are good. Only the real
+# run measures whether the copy reconciled.
+#
+# The copy is ONE transaction, so a failure rolls the whole thing back and leaves the
+# destination empty — re-run freely. The exception is a run that completes but does not
+# reconcile: it exits 1 having *committed*, and says so. That is what TRUNCATE=1 is for,
+# and the only thing:
+#
+#     make prod cutover-copy EXECUTE=1 TRUNCATE=1
+#
+# Without it a second EXECUTE=1 run refuses a non-empty destination rather than doubling
+# every row whose primary key is generated. That refusal is the safe default; TRUNCATE
+# is how you say "I have read the report and I want to start over".
 cutover-copy:
-	$(RAILWAY_RUN) sh -c 'uv run python -m dd.common.db_transfer --source "$$MYSQL_URL" $(WRITE)'
+	$(RAILWAY_RUN) sh -c 'uv run python -m dd.common.db_transfer --source "$$MYSQL_URL" $(WRITE) $(EMPTY_FIRST)'
 
 # Loads FOLLOWABLES, the alerts channel and level, the colours, the default URL, the
 # bad-channel switch and the two image URLs into auto_post_settings — the step that
@@ -348,7 +372,7 @@ mysql-to-postgres:
 	@echo "==> environment: $(RAILWAY_ENV)$(if $(WRITE), (EXECUTE=1 — this writes), (rehearsal))"
 	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) cutover-backup
 	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) cutover-schema
-	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) EXECUTE=$(EXECUTE) cutover-copy
+	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) EXECUTE=$(EXECUTE) TRUNCATE=$(TRUNCATE) cutover-copy
 	@$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) EXECUTE=$(EXECUTE) OVERWRITE=$(OVERWRITE) cutover-settings
 	@$(if $(WRITE),$(MAKE) --no-print-directory RAILWAY_ENV=$(RAILWAY_ENV) cutover-verify,:)
 	@echo "==> done. $(if $(WRITE),Rows copied and settings written; check cutover-verify above.,Backup taken and the schema is at head on $(RAILWAY_ENV); NO rows were copied and NO settings were written. Re-run with EXECUTE=1.)"
