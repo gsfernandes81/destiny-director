@@ -50,16 +50,13 @@ The CLI cannot see that scope at all — ``railway variables`` is per-service.
 
 So the rule is about the value's shape, not its name.
 
-**And a third thing it does**: ``compare`` (``make vars-check``) reports where two
-environments disagree, so a rehearsal on dev predicts production instead of merely
-resembling it. See the parity section below for the two axes and what the CLI's
-reference-rendering hides from it.
+**And a third thing it does**: ``compare`` (``make vars-check``) lists the variables
+beacon has and anchor does not — the one asymmetry that costs something, since every
+cutover step runs under anchor. See the parity section below.
 """
 
 import argparse
-import dataclasses
 import datetime as dt
-import itertools
 import json
 import pathlib
 import re
@@ -82,49 +79,10 @@ _PLATFORM_PREFIX = "RAILWAY_"
 _ROTATING_PREFIXES: tuple[str, ...] = ("DATABASE_", "MYSQL_")
 _ROTATING_SUFFIX = "_URL"
 
-#: Names that only ever exist in a development environment, so their absence from
-#: production is correct rather than drift.
-_DEV_ONLY: frozenset[str] = frozenset({"TEST_ENV", "DEV_AUTH_USER_ID"})
-
-#: Environments where a :data:`_DEV_ONLY` name is at home. Anywhere else, its presence
-#: is a finding and its absence is not.
-_DEVELOPMENT_ENVIRONMENTS: frozenset[str] = frozenset({"dev", "development", "staging"})
-
-#: Values expected to differ between environments, because the name refers to an
-#: environment-scoped *thing*: a database, a Discord or Bungie application, a guild, a
-#: channel, a hostname. The line is secrets-and-identities versus behavioural knobs:
-#: ``DATABASE_SSL``, ``RUN_MIGRATIONS_ON_STARTUP`` and ``OOM_SCORE_ADJ`` are on purpose
-#: *not* here, because those differing is precisely what makes a dev rehearsal stop
-#: predicting production. A checker that flagged the credentials too would cry wolf on
-#: every run and be switched off within a week.
-_ENVIRONMENT_SCOPED: frozenset[str] = (
-    frozenset(
-        {
-            "ALERTS_CHANNEL_ID",
-            "BUNGIE_API_KEY",
-            "BUNGIE_CLIENT_ID",
-            "BUNGIE_CLIENT_SECRET",
-            "CONTROL_DISCORD_ROLE_ID",
-            "CONTROL_DISCORD_SERVER_ID",
-            "DISCORD_OAUTH_CLIENT_ID",
-            "DISCORD_OAUTH_CLIENT_SECRET",
-            "DISCORD_TOKEN_ANCHOR",
-            "DISCORD_TOKEN_BEACON",
-            "FOLLOWABLES",
-            "KYBER_DISCORD_SERVER_ID",
-            "LOG_CHANNEL_ID",
-            "PUBLIC_BASE_URL",
-        }
-    )
-    | _DEV_ONLY
-)
-
-#: Names that belong to one bot and not the other. Only ``anchor`` serves the web UI, so
-#: the OAuth pair, the port and the base URL are its alone; each bot holds its own
-#: gateway token. Everything else — every settings-migration variable included — should
-#: be on both services, and a name on one but not the other is the finding this axis
-#: exists for. It is not hypothetical: ``DEFAULT_URL`` and ``DISABLE_BAD_CHANNELS`` are
-#: set on beacon and not on anchor, and ``cutover-settings`` runs under anchor.
+#: Names that belong to one bot and not the other, so their absence from the other is
+#: correct rather than drift. Only ``DISCORD_TOKEN_BEACON`` can ever be reported by
+#: :func:`beacon_only` — the anchor entries are here to say what the map means, since a
+#: beacon-only view can never reach them.
 _SERVICE_SCOPED: dict[str, str] = {
     "DISCORD_TOKEN_ANCHOR": "anchor",
     "DISCORD_TOKEN_BEACON": "beacon",
@@ -206,37 +164,17 @@ def restorable(name: str, value: str = "") -> tuple[bool, str]:
 
 # --- parity ---------------------------------------------------------------------------
 #
-# A dev rehearsal only predicts production to the extent the two environments are shaped
-# the same. Two axes, and the second is the one that bites:
+# One question, deliberately: **which variables does beacon have that anchor does not?**
 #
-#   dev vs production, per service — does the same set of names exist on both sides, and
-#   do the values that are not environment-scoped agree?
+# That is the asymmetry that costs something. `cutover-settings` and every other cutover
+# step run under anchor (RAILWAY_SERVICE), so a variable set only on beacon is read by
+# nothing during the migration and its value is quietly replaced by a default. It is not
+# hypothetical — DEFAULT_URL and DISABLE_BAD_CHANNELS were in exactly that state, found
+# by hand, which is what this exists to do instead.
 #
-#   anchor vs beacon, within one environment — a variable set on one bot and not the
-#   other is invisible until something reads it under the wrong service. `cutover-
-#   settings` runs under anchor and would silently miss beacon's DEFAULT_URL and
-#   DISABLE_BAD_CHANNELS; that is this axis, found by hand, which is why it is here.
-#
-# **What this cannot see.** `railway variables` renders references, so a name that is
-# ${{shared.X}} on one side and a flattened literal on the other compares equal as long
-# as the values agree. That drift is only visible in the web Raw Editor — the same
-# limitation `restore-raw` exists for.
-
-
-@dataclasses.dataclass(frozen=True)
-class Difference:
-    """One thing that does not match, named without printing its value."""
-
-    axis: str  # "environment" or "service"
-    left: str  # a label, e.g. "dev/anchor"
-    right: str
-    name: str
-    kind: str  # "missing" (absent on the right) or "value"
-
-    def describe(self) -> str:
-        if self.kind == "missing":
-            return f"{self.name}: on {self.left}, not on {self.right}"
-        return f"{self.name}: differs between {self.left} and {self.right}"
+# The reverse direction is not reported. Anchor legitimately holds more than beacon (it
+# serves the web UI), so anchor-only names are ordinary rather than interesting, and a
+# check that lists them is one people stop reading.
 
 
 def _platform(name: str) -> bool:
@@ -244,151 +182,31 @@ def _platform(name: str) -> bool:
     return name.startswith(_PLATFORM_PREFIX)
 
 
-def _rotating_url(name: str) -> bool:
-    return name.startswith(_ROTATING_PREFIXES) and name.endswith(_ROTATING_SUFFIX)
-
-
-def _absent_ok_across_environments(name: str, environment: str, _service: str) -> bool:
-    """Whether ``name``'s absence from ``environment`` is expected rather than drift.
-
-    Only the dev-only helpers, and only outside a development environment. The rule is
-    one-sided on purpose: a ``TEST_ENV`` set in production and nowhere else still shows
-    up, as "on production/anchor, not on dev/anchor" — which is the sentence you want,
-    because a production deployment scoping its commands to test guilds is a real fault.
-    """
-    return name in _DEV_ONLY and environment not in _DEVELOPMENT_ENVIRONMENTS
-
-
-def _absent_ok_across_services(name: str, _environment: str, service: str) -> bool:
-    """Whether ``name``'s absence from ``service`` is fine — it belongs to the other."""
-    owner = _SERVICE_SCOPED.get(name)
-    return owner is not None and owner != service
-
-
-def _pair(
-    axis: str,
-    left: tuple[str, str, dict[str, str]],
-    right: tuple[str, str, dict[str, str]],
-    *,
-    absent_ok: t.Callable[[str, str, str], bool],
-    value_may_differ: t.Callable[[str], bool],
-) -> list[Difference]:
-    """Differences between two (environment, service, variables) sides, both ways."""
-    found: list[Difference] = []
-    for (a_env, a_svc, a), (b_env, b_svc, b) in ((left, right), (right, left)):
-        for name in sorted(a):
-            if _platform(name) or name in b or absent_ok(name, b_env, b_svc):
-                continue
-            found.append(
-                Difference(
-                    axis=axis,
-                    left=f"{a_env}/{a_svc}",
-                    right=f"{b_env}/{b_svc}",
-                    name=name,
-                    kind="missing",
-                )
-            )
-
-    (l_env, l_svc, l_vars), (r_env, r_svc, r_vars) = left, right
-    for name in sorted(set(l_vars) & set(r_vars)):
-        if _platform(name) or value_may_differ(name) or l_vars[name] == r_vars[name]:
-            continue
-        found.append(
-            Difference(
-                axis=axis,
-                left=f"{l_env}/{l_svc}",
-                right=f"{r_env}/{r_svc}",
-                name=name,
-                kind="value",
-            )
-        )
-    return found
-
-
-def compare(
-    variables: dict[str, dict[str, dict[str, str]]], *, cross_service: bool = True
-) -> list[Difference]:
-    """Every mismatch in ``{environment: {service: variables}}``.
-
-    The environment axis lets a value differ when the name refers to something
-    environment-scoped (:data:`_ENVIRONMENT_SCOPED`, plus the rotating database URLs).
-    The service axis allows **no** value difference at all: within one environment the
-    two bots talk to the same database, the same guild and the same channels, so any
-    name they both hold should hold the same thing — a ``FOLLOWABLES`` that differs per
-    bot means ``cutover-settings`` imports whichever service it happened to run under.
-    """
-    found: list[Difference] = []
-
-    for left_env, right_env in itertools.combinations(sorted(variables), 2):
-        for service in sorted(set(variables[left_env]) & set(variables[right_env])):
-            found += _pair(
-                "environment",
-                (left_env, service, variables[left_env][service]),
-                (right_env, service, variables[right_env][service]),
-                absent_ok=_absent_ok_across_environments,
-                value_may_differ=lambda name: (
-                    name in _ENVIRONMENT_SCOPED or _rotating_url(name)
-                ),
-            )
-
-    if cross_service:
-        for environment, services in sorted(variables.items()):
-            for left_svc, right_svc in itertools.combinations(sorted(services), 2):
-                found += _pair(
-                    "service",
-                    (environment, left_svc, services[left_svc]),
-                    (environment, right_svc, services[right_svc]),
-                    absent_ok=_absent_ok_across_services,
-                    value_may_differ=lambda name: False,
-                )
-
-    return found
-
-
-def _format_comparison(found: list[Difference], axes: t.Sequence[str]) -> str:
-    lines: list[str] = []
-    for axis in axes:
-        subset = [d for d in found if d.axis == axis]
-        heading = {
-            "environment": "Across environments (same service)",
-            "service": "Across services (same environment)",
-        }[axis]
-        lines.append(f"\n{heading}: {len(subset)} difference(s)")
-        if not subset:
-            lines.append("  none")
-            continue
-        for pair in sorted({(d.left, d.right) for d in subset}):
-            lines.append(f"  {pair[0]}  vs  {pair[1]}")
-            for d in subset:
-                if (d.left, d.right) != pair:
-                    continue
-                # Never a value: this runs in a terminal and the values are secrets.
-                mark = "only here" if d.kind == "missing" else "differs  "
-                lines.append(f"    {mark}  {d.name}")
-    return "\n".join(lines)
+def beacon_only(anchor: dict[str, str], beacon: dict[str, str]) -> list[str]:
+    """Names beacon holds and anchor does not, minus the ones that mean nothing."""
+    return sorted(
+        name
+        for name in beacon
+        if name not in anchor
+        and not _platform(name)
+        and _SERVICE_SCOPED.get(name) != "beacon"
+    )
 
 
 def _do_compare(args: argparse.Namespace) -> int:
-    variables = {
-        environment: {svc: fetch(svc, environment) for svc in args.services}
-        for environment in args.environments
-    }
-    axes = ["environment"] + (["service"] if args.cross_service else [])
-    found = compare(variables, cross_service=args.cross_service)
-    print(
-        "Comparing "
-        + ", ".join(args.environments)
-        + " over "
-        + ", ".join(args.services)
-    )
-    print(_format_comparison(found, axes))
-    if not found:
-        print("\nNo drift.")
+    anchor = fetch("anchor", args.environment)
+    beacon = fetch("beacon", args.environment)
+    names = beacon_only(anchor, beacon)
+
+    print(f"On beacon and not on anchor, in {args.environment}:")
+    if not names:
+        print("  none")
         return 0
+    for name in names:
+        print(f"  {name}")
     print(
-        f"\n{len(found)} difference(s). Names only — the values are secrets and are "
-        "never printed.\nA reference that was flattened to a literal on one side is "
-        "invisible here; only the\nweb Raw Editor shows that."
+        f"\n{len(names)} variable(s). Every cutover step runs under anchor, so nothing "
+        "reads these\nduring the migration. Names only — the values are secrets."
     )
     return 1
 
@@ -677,21 +495,9 @@ def _parser() -> argparse.ArgumentParser:
 
     compare_cmd = sub.add_parser(
         "compare",
-        help="report where two environments' variables disagree (exit 1 on any drift)",
+        help="list variables beacon has and anchor does not (exit 1 if any)",
     )
-    compare_cmd.add_argument(
-        "--environments",
-        type=_csv,
-        default=("dev", "production"),
-        help="comma-separated; compared pairwise (default: dev,production)",
-    )
-    compare_cmd.add_argument("--services", type=_csv, default=DEFAULT_SERVICES)
-    compare_cmd.add_argument(
-        "--no-cross-service",
-        dest="cross_service",
-        action="store_false",
-        help="skip the anchor-vs-beacon axis within each environment",
-    )
+    compare_cmd.add_argument("--environment", required=True)
     compare_cmd.set_defaults(func=_do_compare)
     return parser
 

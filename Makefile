@@ -316,40 +316,26 @@ restore-raw:
 	uv run python -m dd.common.railway_vars restore-raw --file "$(if $(FILE),$(FILE),-)" \
 		--service "$(SERVICE)" --environment $(TARGET_ENV) $(WRITE)
 
-# Check dev and production are shaped the same, so a rehearsal on dev predicts
-# production rather than merely resembling it. Reads only — nothing is written, and it
-# needs no .env, no database and no `railway run`; `railway variables --json` per
-# service is the whole input.
+# List the variables beacon has and anchor does not.
 #
-#     make vars-check
+#     make vars-check          # dev
+#     make prod vars-check     # production
 #
-# Two axes. Across environments (dev/anchor vs production/anchor, and the same for
-# beacon): a name on one side and not the other, or a value that differs where the name
-# is not environment-scoped. Credentials, guild ids, channel ids and the database URLs
-# are allowed to differ — flagging those would be noise. DATABASE_SSL,
-# RUN_MIGRATIONS_ON_STARTUP and OOM_SCORE_ADJ are deliberately not exempt: those
-# differing is exactly what makes a dev rehearsal stop predicting prod.
+# One question, because it is the one that costs something: every cutover step runs
+# under anchor ($(RAILWAY_SERVICE)), so a variable set only on beacon is read by nothing
+# during the migration and its value is quietly replaced by a default. DEFAULT_URL and
+# DISABLE_BAD_CHANNELS were in exactly that state on production, found by hand.
 #
-# Across services (anchor vs beacon within one environment): no value may differ at all
-# — the two bots share a database, a guild and a set of channels — and a name on one bot
-# only is a finding unless it is one of the handful that belongs to a single bot (the
-# gateway tokens, and anchor's web-UI settings). This axis is here because it is not
-# hypothetical: DEFAULT_URL and DISABLE_BAD_CHANNELS are set on beacon and not on
-# anchor, and `cutover-settings` runs under anchor.
+# The reverse is not reported: anchor legitimately holds more than beacon (it serves the
+# web UI), so anchor-only names are ordinary rather than interesting, and a check that
+# lists them is one people stop reading. RAILWAY_* and the gateway tokens are dropped
+# for the same reason.
 #
-# Exit 1 on any difference, so it works as a gate. Names only — values are secrets and
-# are never printed. It cannot see a ${{shared.X}} that was flattened to a literal on
-# one side: `railway variables` renders references, and only the web Raw Editor does
-# not (the same limitation `restore-raw` exists for).
-#
-# ENVS/SERVICES override the pairs; `prod` has no meaning here, since the target spans
-# both environments by definition.
-ENVS ?= dev,production
-SERVICES ?= anchor,beacon
-
+# Reads only — no .env, no database, no `railway run`; `railway variables --json` per
+# service is the whole input. Exit 1 if there is anything to report, so it works as a
+# gate. Names only, never values.
 vars-check:
-	uv run python -m dd.common.railway_vars compare \
-		--environments $(ENVS) --services $(SERVICES)
+	uv run python -m dd.common.railway_vars compare --environment $(TARGET_ENV)
 
 # ── Cutover: MySQL → Postgres, env → database ──────────────────────────────────────
 # The runbook's window, one target per step. Every one runs under `railway run`, so
