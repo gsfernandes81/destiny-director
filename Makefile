@@ -417,6 +417,8 @@ cutover-settings:
 # successful cutover-settings every row should read `unchanged` — anything else is a
 # setting that did not land, and it names which.
 cutover-verify:
+	@echo "==> read-back only. Nothing is written here, whatever EXECUTE says."
+	@echo "    Every row should read 'unchanged'; anything else did not land."
 	$(RAILWAY_RUN) uv run python -m dd.common.settings_import
 
 # All of it, in order. Without EXECUTE=1 this is a full rehearsal: it takes the backup,

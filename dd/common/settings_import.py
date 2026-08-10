@@ -343,9 +343,16 @@ def format_report(changes: list[Change], *, execute: bool) -> str:
         )
     writing = [c for c in changes if c.writes]
     lines.append("")
+    # The nudge is suppressed when there is nothing to write, because that is the shape
+    # of a *verification*: `cutover-verify` runs this module read-only right after
+    # `cutover-settings` wrote, and is the last thing the cutover prints. Telling the
+    # operator "DRY RUN — nothing written, re-run with --execute" at that moment reads
+    # as the write having failed, seconds after it succeeded.
+    nudge = "" if execute or not writing else "  DRY RUN — nothing written."
     lines.append(
         f"{len(writing)} setting(s) to write, {len(changes) - len(writing)} skipped."
-        + ("" if execute else "  DRY RUN — nothing written. Re-run with --execute.")
+        + nudge
+        + ("  Re-run with --execute." if nudge else "")
     )
     for var in _DROPPED_VARS:
         if os.environ.get(var):
