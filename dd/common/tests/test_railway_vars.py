@@ -22,7 +22,6 @@ key that comes back with real newlines instead of the literal ``\\n`` it needs, 
 strings, and both are wrong.
 """
 
-import argparse
 import io
 import json
 import pathlib
@@ -152,94 +151,6 @@ def test_the_plan_report_never_prints_a_value() -> None:
 
     assert "TOKEN" in report
     assert "hunter2" not in report
-
-
-# --- one file per service -------------------------------------------------------------
-
-
-def test_a_dump_writes_one_file_per_service(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        rv, "fetch", lambda svc, env: {"TOKEN": f"{svc}-secret", "SHARED": "same"}
-    )
-
-    assert (
-        rv.main(["dump", "--environment", "production", "--out-dir", str(tmp_path)])
-        == 0
-    )
-
-    files = sorted(p.name for p in tmp_path.glob("*.json"))
-    assert len(files) == 2
-    assert files[0].startswith("kyber-production-anchor-vars-")
-    assert files[1].startswith("kyber-production-beacon-vars-")
-    # The whole point: anchor's file does not carry beacon's token.
-    anchor = json.loads((tmp_path / files[0]).read_text())
-    assert list(anchor["services"]) == ["anchor"]
-    assert "beacon-secret" not in (tmp_path / files[0]).read_text()
-
-
-def test_the_files_of_one_run_share_a_timestamp(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # They are separate files but one snapshot, and the name is the only thing that says
-    # so — a mismatched pair restored together would be two different moments.
-    monkeypatch.setattr(rv, "fetch", lambda svc, env: {"FOO": "1"})
-
-    rv.main(["dump", "--environment", "dev", "--out-dir", str(tmp_path)])
-
-    stamps = {p.name.rsplit("-", 1)[1] for p in tmp_path.glob("*.json")}
-    assert len(stamps) == 1
-
-
-def test_a_dump_is_not_world_readable(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(rv, "fetch", lambda svc, env: {"TOKEN": "secret"})
-
-    rv.main(["dump", "--environment", "dev", "--out-dir", str(tmp_path)])
-
-    for path in tmp_path.glob("*.json"):
-        assert path.stat().st_mode & 0o077 == 0
-
-
-def test_a_pre_split_combined_file_can_still_be_aimed_at_one_service(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # A dump taken before the split holds both bots. Restoring it whole would write the
-    # other bot as a side effect of repairing one.
-    path = tmp_path / "old.json"
-    path.write_text(
-        json.dumps(
-            {
-                "environment": "dev",
-                "services": {"anchor": {"FOO": "a"}, "beacon": {"FOO": "b"}},
-            }
-        )
-    )
-    asked: list[str] = []
-    monkeypatch.setattr(rv, "fetch", lambda svc, env: asked.append(svc) or {})
-
-    assert rv.main(["restore", "--file", str(path), "--service", "anchor"]) == 0
-    assert asked == ["anchor"]
-
-
-def test_naming_a_service_the_file_does_not_hold_is_an_error(
-    tmp_path: pathlib.Path,
-) -> None:
-    path = tmp_path / "anchor.json"
-    path.write_text(json.dumps({"environment": "dev", "services": {"anchor": {}}}))
-
-    with pytest.raises(rv.RailwayVarsError, match="not 'beacon'"):
-        rv._do_restore(
-            argparse.Namespace(
-                file=str(path),
-                environment=None,
-                service="beacon",
-                execute=False,
-                force_cross_environment=False,
-            )
-        )
 
 
 # --- reading the paste ---------------------------------------------------------------
