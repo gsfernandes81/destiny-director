@@ -3,6 +3,48 @@
 **Status: in progress** on `web-panel-errand-list`. IA settled (Scheme A); the other three
 schemes were drawn and rejected. This file is the build spec — delete it when the work lands.
 
+## The visual source of truth is the reviewed design, not this file's prose
+
+The owner reviewed and approved a **rendered design** before any of this was built. Where the
+written specification below and that design disagree about how something *looks*, **the design
+wins** and this file is wrong. The goal for the whole piece of work is stated plainly: at the end,
+the product should look like the design that was approved at the start.
+
+This is not hypothetical. The landing page shipped with every group in one uniform treatment —
+one bordered box per group, hairline dividers between rows — because prose here said "borrow the
+settings page's group anatomy". The approved design had three descending weights. Losing them lost
+what the ordering was *for*: if "Send a post" looks identical to "Set up and admin", putting it
+first says nothing. It was rebuilt in `d72354b`.
+
+### The visual vocabulary, concretely
+
+Every surface in the approved design is built from four things. Match them.
+
+- **Cards, not shared boxes.** A row or a feed is its own card: `background: var(--surface-2)`,
+  `1px solid var(--border)`, `border-radius: var(--radius-sm)` (rows) or `var(--radius)` (feed
+  groups), separated by a `.4rem`–`.6rem` gap. Never a single box with rows divided by hairlines —
+  that flattens hierarchy and forces hover to work through a background tint, because a border
+  hover would light up an edge two rows share.
+- **One tinted surface per page, at most.** On the landing page it is group 1, mixed from
+  `--accent-strong` (`color-mix`, so it tracks the brand). Everywhere else, tint marks the single
+  primary action and nothing else.
+- **Weight descends by fill, then by size.** Primary: filled + tinted border + roomier padding.
+  Secondary: transparent fill, plain border, title a notch smaller. There is no third mechanism —
+  do not reach for colour, weight or capitals to add a fourth rank.
+- **Buttons:** quiet = `--surface-3` with `--border`; primary = filled `--accent-strong`, white
+  text, one per page or per dialog; unavailable = the quiet button at `opacity: .4`, never removed.
+  A vanished control reads as a missing feature; a dimmed one with a reason reads as a state.
+- **Fields and chips** are `--surface-3` boxes. An empty one says what is absent in italic muted
+  text ("No channel set"), never a blank.
+- **Explanatory lines** sit under the row they belong to: a small bullet plus one sentence, in
+  `--warn` when it is a state to fix and `--err` when something is broken.
+
+### Before calling any page done
+
+Screenshot it from the running app (the `run-anchor-web` skill; the working Chromium binary is
+`/opt/pw-browsers/chromium-1194/chrome-linux/chrome`) and put it beside the approved design. If a
+reviewer would call them "quite different", it is not done. Say in your report what you compared.
+
 ## The shape
 
 Landing page `/` is a **grouped list of rows**, not a card grid. Four groups, in this fixed
