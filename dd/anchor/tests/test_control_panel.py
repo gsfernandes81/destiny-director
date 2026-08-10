@@ -194,6 +194,8 @@ async def test_render_emits_every_group_heading_in_enum_order(
 
 
 async def test_a_danger_card_is_the_only_one_rendered_red(clean_cards: None) -> None:
+    # Group 4 renders as links, so `danger` marks a link rather than a row — but the
+    # property under test is unchanged: exactly one entry carries it.
     web.register_card(web.Card("Quiet", "", "/quiet", web.CardGroup.ADMIN, 10))
     web.register_card(
         web.Card("Loud", "", "/loud", web.CardGroup.ADMIN, 20, danger=True)
@@ -201,8 +203,29 @@ async def test_a_danger_card_is_the_only_one_rendered_red(clean_cards: None) -> 
 
     html_out = await control_panel._render_panel_html()
 
-    assert '<a class="row danger" href="/loud">' in html_out
-    assert '<a class="row" href="/quiet">' in html_out
+    assert '<a class="qlink danger" href="/loud">' in html_out
+    assert '<a class="qlink" href="/quiet">' in html_out
+
+
+async def test_the_send_group_renders_rows_and_the_rest_render_links(
+    clean_cards: None,
+) -> None:
+    # The weights are the design: group 1 is a stack of rows carrying a description and
+    # a verb, the rest are wrapped lists of destinations. Rows everywhere gave every
+    # group the same weight and made the ordering decorative.
+    web.register_card(
+        web.Card("Compose", "Write it", "/compose", web.CardGroup.SEND, action="Start")
+    )
+    web.register_card(web.Card("Somewhere", "unused", "/there", web.CardGroup.DATA))
+
+    html_out = await control_panel._render_panel_html()
+
+    assert '<a class="row" href="/compose">' in html_out
+    assert '<span class="row-action">Start</span>' in html_out
+    assert '<a class="qlink" href="/there">' in html_out
+    # A link group shows the title only — the description would turn a list back into
+    # rows, which is the treatment being replaced.
+    assert "unused" not in html_out
 
 
 async def test_iron_banner_week_de_emphasises_the_trials_row(
@@ -257,7 +280,10 @@ async def test_sign_out_posts_a_form_rather_than_following_a_link(
 
 
 async def test_render_escapes_html_in_card_fields(clean_cards: None) -> None:
-    web.register_card(web.Card("A & <b>", "desc <script>", "/x?a=1&b=2"))
+    # In the SEND group, because that is the one whose rows render a description too.
+    web.register_card(
+        web.Card("A & <b>", "desc <script>", "/x?a=1&b=2", web.CardGroup.SEND)
+    )
 
     html_out = await control_panel._render_panel_html()
 
@@ -393,7 +419,7 @@ async def test_panel_hosts_the_bot_actions_and_modals(clean_cards: None) -> None
 
     assert 'id="infoBtn"' in body
     # The destructive row is the only red thing on the page.
-    assert '<button type="button" class="row danger" id="stopBtn">' in body
+    assert '<button type="button" class="qlink danger" id="stopBtn">' in body
     # `danger` on the dialog is what makes the shutdown modal read as a warning rather
     # than another form — the copy below is only half of it. `consequence` is the motion
     # half: it opens at --dur-slow, so arriving at it takes a beat.

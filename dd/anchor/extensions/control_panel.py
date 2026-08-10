@@ -109,11 +109,14 @@ def _row(
     element_id: str | None = None,
     danger: bool = False,
     quiet: bool = False,
+    action: str = "Open",
 ) -> str:
     """One landing row: an ``<a>`` when it goes somewhere, a ``<button>`` when it acts.
 
     The whole row is the control — a row whose link is only its title gives the
-    pointer a two-word target on a full-width surface.
+    pointer a two-word target on a full-width surface. The trailing label is decorative
+    (the row is already the target); it is there because a verb tells you what happens
+    next in a way a chevron does not, and the verbs differ per row.
     """
     classes = " ".join(
         ["row", *(["danger"] if danger else []), *(["quiet"] if quiet else [])]
@@ -123,7 +126,7 @@ def _row(
         f'<span class="row-title">{html.escape(title)}</span>'
         f'<span class="row-desc">{html.escape(description)}</span>'
         "</span>"
-        '<span class="row-go" aria-hidden="true">→</span>'
+        f'<span class="row-action">{html.escape(action)}</span>'
     )
     if href is not None:
         return f'<a class="{classes}" href="{html.escape(href)}">{inner}</a>'
@@ -131,7 +134,29 @@ def _row(
     return f'<button type="button" class="{classes}"{ident}>{inner}</button>'
 
 
-def _panel_rows() -> list[str]:
+def _link(
+    title: str,
+    *,
+    href: str | None = None,
+    element_id: str | None = None,
+    danger: bool = False,
+) -> str:
+    """One entry in an errand list — a plain link, or a button that looks like one.
+
+    Groups 2-4 are lists of destinations, not things to weigh up: rendering them as
+    full rows gave every group on the page the same weight and made the ordering say
+    nothing. A wrapped list of links reads as "and these are the other places you can
+    go", which is what they are.
+    """
+    classes = " ".join(["qlink", *(["danger"] if danger else [])])
+    label = html.escape(title)
+    if href is not None:
+        return f'<a class="{classes}" href="{html.escape(href)}">{label}</a>'
+    ident = f' id="{html.escape(element_id)}"' if element_id else ""
+    return f'<button type="button" class="{classes}"{ident}>{label}</button>'
+
+
+def _panel_links() -> list[str]:
     """This page's own rows, appended to the last group.
 
     Sign out is a ``<form method="post">`` and not a link, which is load-bearing:
@@ -140,27 +165,10 @@ def _panel_rows() -> list[str]:
     anchor here would reopen the hole that closed.
     """
     return [
-        _row(
-            "Configured channels",
-            "Which channel each feed posts to, plus the control server and test "
-            "environment.",
-            element_id="infoBtn",
-        ),
+        _link("Configured channels", element_id="infoBtn"),
         '<form method="post" action="/auth/logout">'
-        '<button type="submit" class="row">'
-        '<span class="row-text">'
-        '<span class="row-title">Sign out</span>'
-        '<span class="row-desc">End this browser session. You sign back in with '
-        "Discord.</span>"
-        "</span>"
-        '<span class="row-go" aria-hidden="true">→</span>'
-        "</button></form>",
-        _row(
-            "Shut down",
-            "Stops the bot, and this page with it. Bringing it back is a redeploy.",
-            element_id="stopBtn",
-            danger=True,
-        ),
+        '<button type="submit" class="qlink">Sign out</button></form>',
+        _link("Shut down", element_id="stopBtn", danger=True),
     ]
 
 
@@ -175,27 +183,38 @@ async def _render_panel_html() -> str:
 
     sections: list[str] = []
     for group in web.CardGroup:
-        rows = [
-            _row(
-                card.title,
-                _IRON_BANNER_NOTE
-                if (iron_banner_on and card.href == _TRIALS_HREF)
-                else card.description,
-                href=card.href,
-                danger=card.danger,
-                quiet=iron_banner_on and card.href == _TRIALS_HREF,
-            )
-            for card in by_group.get(group, [])
-        ]
-        # The last group also holds the three actions that live on this page.
-        if group is web.CardGroup.ADMIN:
-            rows.extend(_panel_rows())
-        if not rows:
+        cards = by_group.get(group, [])
+        # Group 1 is a stack of rows; the rest are lists of links. Weight descends with
+        # how often the errand happens — see the note in the page's stylesheet.
+        if group is web.CardGroup.SEND:
+            entries = [
+                _row(
+                    card.title,
+                    _IRON_BANNER_NOTE
+                    if (iron_banner_on and card.href == _TRIALS_HREF)
+                    else card.description,
+                    href=card.href,
+                    danger=card.danger,
+                    quiet=iron_banner_on and card.href == _TRIALS_HREF,
+                    action=card.action,
+                )
+                for card in cards
+            ]
+            body = f'<div class="rows">{"".join(entries)}</div>'
+        else:
+            entries = [
+                _link(card.title, href=card.href, danger=card.danger) for card in cards
+            ]
+            # The last group also holds the three actions that live on this page.
+            if group is web.CardGroup.ADMIN:
+                entries.extend(_panel_links())
+            body = f'<div class="links">{"".join(entries)}</div>'
+        if not entries:
             continue
         sections.append(
             f'<section class="group group-{group.name.lower()}">'
             f"<h2>{html.escape(group.value)}</h2>"
-            f'<div class="rows">{"".join(rows)}</div>'
+            f"{body}"
             "</section>"
         )
 

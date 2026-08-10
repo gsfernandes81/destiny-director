@@ -79,6 +79,11 @@ class Card(t.NamedTuple):
     and the homepage renders it as the only red thing on the page. That scarcity is the
     point: a page with one red link says which action is different from all the others,
     and a page with five says nothing.
+
+    ``action`` is the label on the row's button, and is read only in the group that
+    renders as rows — the errand groups below it are a list of links, where a button
+    per line would be four buttons saying "Open". Most rows want the default; a row
+    whose verb is genuinely different ("Choose", "Start") says so.
     """
 
     title: str
@@ -87,6 +92,7 @@ class Card(t.NamedTuple):
     group: CardGroup = CardGroup.ADMIN
     order: int = 100
     danger: bool = False
+    action: str = "Open"
 
 
 # Homepage cards contributed by feature modules at import time (mirrors

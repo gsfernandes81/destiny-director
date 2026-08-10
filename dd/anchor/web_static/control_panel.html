@@ -75,23 +75,50 @@
         background: color-mix(in srgb, var(--accent-strong) 7%, var(--surface-2));
         border-color: color-mix(in srgb, var(--accent-strong) 26%, var(--border));
       }
-      .group-data .rows .row,
-      .group-check .rows .row,
-      .group-admin .rows .row { background: transparent; }
+
+      /* Groups 2-4 are a wrapped list of links, not a stack of rows. Rows everywhere
+         gave every group the same weight, which made the ordering say nothing — if the
+         last group looks exactly like the first, putting one of them first is
+         decoration. These are destinations, not things to weigh up.
+
+         Deliberately no group heading is quoted in these comments: the render tests
+         search the raw HTML for heading text, and a comment mentioning one is found
+         before the heading itself. */
+      .links {
+        display: flex; flex-wrap: wrap; gap: .35rem 1.4rem; padding: .15rem .2rem;
+      }
+      .links form { margin: 0; display: contents; }
+      .qlink {
+        color: var(--link); font: inherit; font-size: .95rem; text-decoration: none;
+        background: none; border: 0; padding: 0; cursor: pointer;
+      }
+      .qlink:hover { text-decoration: underline; }
+      /* The chrome resets are repeated here, not just the colour. `.qlink` is (0,1,0)
+         and shared.css's `button.danger` is (0,1,1), so the base rule loses the fill,
+         the border and the padding to it — the one red entry on the page arrives as a
+         filled danger pill sitting among plain links. Only the colour needs to differ;
+         everything else has to be won back. */
+      .qlink.danger {
+        color: var(--danger-text);
+        background: none; border: 0; padding: 0;
+      }
 
       .row-text { min-width: 0; }
       .row-title {
         display: block; color: var(--link); font-size: 1.05rem; font-weight: 600;
       }
-      /* Groups 2-4 title a notch smaller — the size difference is what carries the
-         hierarchy once the fill is gone. */
-      .group-data .row-title,
-      .group-check .row-title,
-      .group-admin .row-title { font-size: .98rem; }
       .row-desc {
         display: block; color: var(--text-faint); font-size: .85rem; margin-top: .1rem;
       }
-      .row-go { margin-left: auto; color: var(--text-muted); }
+      /* Decorative: the row is already the target. A verb says what happens next in a
+         way a chevron cannot, and these verbs differ — Open, Choose, Start. */
+      .row-action {
+        margin-left: auto; flex: none;
+        font-size: .8rem; font-weight: 600; color: var(--text-2);
+        padding: .35rem .75rem; border-radius: var(--radius-sm);
+        background: var(--surface-3); border: 1px solid var(--border);
+      }
+      .row:hover:not(:disabled) .row-action { border-color: var(--border-hover); }
 
       .row:hover:not(:disabled) {
         background: var(--surface-3); border-color: var(--border-hover);
