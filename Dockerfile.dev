@@ -19,9 +19,16 @@ ARG USER_GID=1000
 # ENV in the repo-root Dockerfile) for RAM work.
 # postgresql-client gives psql for poking at the `postgres` sibling service (pulls in
 # libpq5, which psycopg's pure-Python distribution also dlopens at import time — see
-# the runtime Dockerfile's libpq5 comment).
+# the runtime Dockerfile's libpq5 comment), and pg_dump for `make dump-db`.
+# mariadb-client is here for `mysqldump` alone: `make dump-mysql` / `cutover-backup`
+# take the pre-cutover backup of the old MySQL, and that is the one artefact of the
+# cutover that cannot be reconstructed afterwards. Debian ships MariaDB's client rather
+# than Oracle's, which is fine for a logical dump and accepts the exact flags the
+# Makefile passes (--single-transaction --quick --no-tablespaces — the last is a MySQL
+# 8 flag MariaDB also honours; verified against 10.11). The `mysql` REPL comes with it,
+# which is also how you would inspect the old database during a cutover.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential git make fish openssh-client openssh-server curl gnupg ca-certificates tzdata libjemalloc2 postgresql-client \
+        build-essential git make fish openssh-client openssh-server curl gnupg ca-certificates tzdata libjemalloc2 postgresql-client mariadb-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Node 22 LTS + Claude Code.
