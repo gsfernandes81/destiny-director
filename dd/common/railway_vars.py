@@ -306,14 +306,36 @@ def _do_restore(args: argparse.Namespace) -> int:
     return 0
 
 
-def _do_restore_raw(args: argparse.Namespace) -> int:
-    path = pathlib.Path(args.file)
+def _read_raw_source(spec: str) -> tuple[str, str]:
+    """The Raw Editor text and a label for it, from a path or from stdin (``-``).
+
+    Pasting into a terminal is the intended path — you are copying out of a browser, so
+    a file is a step that exists only to be deleted afterwards. Two notes on it. The
+    prompt goes to stderr so piping still works. And a terminal in canonical mode
+    truncates any *line* over 4096 bytes: the longest line here is ~1800 (the Google
+    service-account key), so there is headroom, and a truncated line would lose its
+    closing quote and be rejected by :func:`parse_raw` rather than written half-formed.
+    """
+    if spec == "-":
+        if sys.stdin.isatty():
+            print(
+                "Paste the Raw Editor contents, then press Ctrl-D on a blank line.\n"
+                "(Railway → the service → Variables → the ⋮ menu → Raw Editor)",
+                file=sys.stderr,
+            )
+        return sys.stdin.read(), "the paste"
+    path = pathlib.Path(spec)
     if not path.is_file():
         raise RailwayVarsError(f"{path} does not exist")
-    variables = parse_raw(path.read_text())
+    return path.read_text(), path.name
+
+
+def _do_restore_raw(args: argparse.Namespace) -> int:
+    text, label = _read_raw_source(args.file)
+    variables = parse_raw(text)
     refs = sum(1 for v in variables.values() if is_reference(v))
     print(
-        f"Read {len(variables)} variable(s) from {path.name} — {refs} reference(s), "
+        f"Read {len(variables)} variable(s) from {label} — {refs} reference(s), "
         f"{len(variables) - refs} literal(s)"
     )
     snapshot = {
@@ -362,7 +384,9 @@ def _parser() -> argparse.ArgumentParser:
         "restore-raw",
         help="put back a paste of the web Raw Editor (preserves ${{...}} references)",
     )
-    raw.add_argument("--file", required=True)
+    raw.add_argument(
+        "--file", default="-", help="a file, or '-' (the default) to read the paste"
+    )
     raw.add_argument("--service", required=True)
     raw.add_argument("--environment", required=True)
     raw.add_argument("--execute", action="store_true")

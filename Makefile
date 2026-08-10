@@ -265,10 +265,12 @@ restore-vars:
 # this project's variables are ${{shared.*}}, defined once at the environment level and
 # referenced by both bots. The CLI cannot see that scope at all; it is per-service. Only
 # this path puts a reference back as a reference.
+# FILE is optional: with none, it prompts and reads the paste from the terminal, which
+# is the natural shape when you are copying out of a browser — a file would exist only
+# to be deleted afterwards. FILE=path still works for a saved capture.
 restore-raw:
-	@[ -n "$(FILE)" ] || { echo 'Set FILE: make restore-raw FILE=raw.txt SERVICE=anchor' >&2; exit 1; }
 	@[ -n "$(SERVICE)" ] || { echo 'Set SERVICE: the raw editor is per-service' >&2; exit 1; }
-	uv run python -m dd.common.railway_vars restore-raw --file "$(FILE)" \
+	uv run python -m dd.common.railway_vars restore-raw --file "$(if $(FILE),$(FILE),-)" \
 		--service "$(SERVICE)" --environment $(RAILWAY_ENV) $(WRITE)
 
 # ── Cutover: MySQL → Postgres, env → database ──────────────────────────────────────

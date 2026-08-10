@@ -22,7 +22,9 @@ key that comes back with real newlines instead of the literal ``\\n`` it needs, 
 strings, and both are wrong.
 """
 
+import io
 import json
+import pathlib
 
 import pytest
 
@@ -149,3 +151,55 @@ def test_the_plan_report_never_prints_a_value() -> None:
 
     assert "TOKEN" in report
     assert "hunter2" not in report
+
+
+# --- reading the paste ---------------------------------------------------------------
+
+
+def test_a_dash_reads_the_paste_from_stdin(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The intended path: you are copying out of a browser, so a file would exist only to
+    # be deleted afterwards.
+    monkeypatch.setattr("sys.stdin", io.StringIO(RAW))
+
+    text, label = rv._read_raw_source("-")
+
+    assert rv.parse_raw(text)["MYSQL_SSL"] == "false"
+    assert label == "the paste"
+
+
+def test_the_paste_prompt_goes_to_stderr_so_piping_still_works(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class _Tty(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr("sys.stdin", _Tty(RAW))
+
+    rv._read_raw_source("-")
+
+    captured = capsys.readouterr()
+    assert "Raw Editor" in captured.err
+    assert captured.out == ""
+
+
+def test_a_file_is_still_accepted(tmp_path: pathlib.Path) -> None:
+    path = tmp_path / "raw.txt"
+    path.write_text(RAW)
+
+    text, label = rv._read_raw_source(str(path))
+
+    assert rv.parse_raw(text)["MYSQL_SSL"] == "false"
+    assert label == "raw.txt"
+
+
+def test_a_line_truncated_by_the_terminal_is_rejected() -> None:
+    # A terminal in canonical mode truncates any line over 4096 bytes. The longest line
+    # here is ~1800, so there is headroom — but a truncated one loses its closing quote,
+    # and being rejected beats writing half a private key.
+    truncated = 'SHEETS_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADAN'
+
+    with pytest.raises(rv.RailwayVarsError, match="not valid JSON"):
+        rv.parse_raw(truncated)
