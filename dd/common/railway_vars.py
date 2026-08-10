@@ -78,6 +78,21 @@ _ROTATING_SUFFIX = "_URL"
 #: Railway's reference syntax — ``${{shared.FOO}}``, ``${{Postgres.DATABASE_URL}}``.
 _REFERENCE = re.compile(r"^\$\{\{[^}]+\}\}$")
 
+#: A POSIX environment-variable name. Anything else in a pasted name is a copy artefact
+#: — a non-breaking space picked up from a web page renders identically to a space and
+#: would otherwise create a second, wrong variable that looks right in every listing.
+_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+#: Wrappers a terminal adds around a paste when bracketed-paste mode is on. An artefact
+#: of the transport, not of the data, so they are removed rather than complained about.
+_BRACKETED_PASTE = re.compile(r"\x1b\[20[01]~")
+
+#: Control characters that have no business in an environment value. Tab, newline and
+#: carriage return are spared — a genuinely multi-line value is legal, if unusual. The
+#: rest are rejected because they reach a terminal eventually: a value carrying an ANSI
+#: escape can rewrite whatever prints it, and no real setting needs one.
+_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+
 
 class RailwayVarsError(Exception):
     """A problem that should stop the dump or restore rather than half-finish it."""
@@ -141,6 +156,12 @@ def parse_raw(text: str) -> dict[str, str]:
 
     Unquoted values are accepted verbatim, so a hand-edited file still works.
     """
+    # Strip what the *transport* added before parsing what the user meant: a leading
+    # BOM (a browser copy can carry one) and bracketed-paste wrappers. Left in place,
+    # both attach themselves to the first variable's name and produce a plausible-
+    # looking variable nobody asked for.
+    text = _BRACKETED_PASTE.sub("", text.lstrip("\ufeff"))
+
     variables: dict[str, str] = {}
     for lineno, line in enumerate(text.splitlines(), start=1):
         stripped = line.strip()
@@ -151,6 +172,12 @@ def parse_raw(text: str) -> dict[str, str]:
             raise RailwayVarsError(f"line {lineno}: no '=' in {stripped[:40]!r}")
         name = name.strip()
         raw = raw.strip()
+        if not _NAME.match(name):
+            raise RailwayVarsError(
+                f"line {lineno}: {name!r} is not a valid variable name. The repr is "
+                "shown because the offending character is usually invisible — a "
+                "non-breaking space or a zero-width character picked up from the page."
+            )
         if raw.startswith('"'):
             try:
                 variables[name] = json.loads(raw)
@@ -161,6 +188,13 @@ def parse_raw(text: str) -> dict[str, str]:
                 ) from e
         else:
             variables[name] = raw
+        found = _CONTROL.search(variables[name])
+        if found:
+            raise RailwayVarsError(
+                f"line {lineno}: {name} contains a control character "
+                f"({found.group()!r}) — refusing to write it. Escape sequences in a "
+                "value can rewrite any terminal that later prints it."
+            )
     if not variables:
         raise RailwayVarsError("no variables found — is the file empty?")
 

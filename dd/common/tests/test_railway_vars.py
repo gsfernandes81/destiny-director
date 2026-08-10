@@ -203,3 +203,59 @@ def test_a_line_truncated_by_the_terminal_is_rejected() -> None:
 
     with pytest.raises(rv.RailwayVarsError, match="not valid JSON"):
         rv.parse_raw(truncated)
+
+
+# --- paste hygiene -------------------------------------------------------------------
+#
+# The input is a clipboard round trip through a browser and a terminal, and each leg
+# adds something. What matters is the split: artefacts of the *transport* are removed
+# silently, because the operator did nothing wrong; anything that would change the
+# *meaning* of a variable stops the run.
+
+
+def test_bracketed_paste_wrappers_are_stripped_not_complained_about() -> None:
+    # A terminal with bracketed-paste on wraps the whole paste. Left in, it glues itself
+    # to the first name and invents a variable.
+    wrapped = '\x1b[200~FOO="bar"\x1b[201~'
+
+    assert rv.parse_raw(wrapped) == {"FOO": "bar"}
+
+
+def test_a_byte_order_mark_is_stripped() -> None:
+    assert rv.parse_raw('\ufeffFOO="bar"') == {"FOO": "bar"}
+
+
+def test_crlf_line_endings_parse() -> None:
+    assert rv.parse_raw('FOO="a"\r\nBAR="b"\r\n') == {"FOO": "a", "BAR": "b"}
+
+
+@pytest.mark.parametrize(
+    "name", ["FOO\u00a0BAR", "FOO\u200bBAR", "FOO-BAR", "2FOO", "FOO BAR"]
+)
+def test_a_name_that_is_not_a_posix_name_is_rejected(name: str) -> None:
+    # A non-breaking space renders identically to a space, so this would otherwise
+    # create a second variable that looks correct in every listing and is never read.
+    with pytest.raises(rv.RailwayVarsError, match="not a valid variable name"):
+        rv.parse_raw(f'{name}="value"')
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'FOO="a\\u001bb"',  # an escape sequence, legal JSON, decodes to a real ESC
+        'FOO="a\\u0007b"',  # BEL
+        "FOO=a\x1bb",  # unquoted, so JSON's own control-character check never runs
+    ],
+)
+def test_a_control_character_in_a_value_stops_the_run(line: str) -> None:
+    # These reach a terminal eventually — the settings page, a log, a `railway
+    # variables` listing — and an ANSI escape rewrites whatever prints it. No real
+    # setting needs one.
+    with pytest.raises(rv.RailwayVarsError, match="control character"):
+        rv.parse_raw(line)
+
+
+def test_tabs_and_newlines_are_still_allowed_in_a_value() -> None:
+    # A genuinely multi-line value is legal, if unusual, and the guard must not be so
+    # eager that it refuses one.
+    assert rv.parse_raw('FOO="line1\\nline2"')["FOO"] == "line1\nline2"
