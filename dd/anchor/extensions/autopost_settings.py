@@ -100,8 +100,9 @@ class _Setting(t.NamedTuple):
       "0" rather than NULL, so a cleared channel reads back as *dormant* rather than as
       "never set"; a followable's channel cannot be cleared at all, see
       :data:`_UNCLEARABLE_CHANNEL_SLUGS`). ``channel_scope`` picks which guild(s) the
-      picker offers: ``"kyber"`` (where every followable posts) or ``"kyber_control"``
-      (the alerts channel, which could be in either).
+      picker offers: ``"kyber"`` (the feed guild(s) — Kyber, or the ``TEST_ENV`` servers
+      on a test deployment; see :func:`_feed_guild_ids`) or ``"kyber_control"`` (the
+      alerts channel, which could be in either).
     """
 
     slug: str
@@ -691,15 +692,34 @@ _REQUIRED_CHANNEL_PERMS: tuple[tuple[h.Permissions, str], ...] = (
 )
 
 
+def _feed_guild_ids() -> set[int]:
+    """The guild(s) standing in for Kyber — where a feed's own post channel may live.
+
+    A test deployment (``TEST_ENV`` set, which is what dev runs as) offers its OWN
+    servers instead. Otherwise every picker on the dev control panel lists the live
+    Kyber server's channels, and the one mis-save that invites points a dev feed at a
+    real Kyber channel. ``TEST_ENV`` is already the "these are my servers" list every
+    guild-scoped command registers against, so it answers this too rather than being a
+    second variable to keep in sync with it.
+
+    The control server is NOT replaced: it is the operator's own either way, and a
+    ``kyber_control``-scoped setting (the log/alerts channels) may legitimately sit
+    there in both environments. On dev it is in ``TEST_ENV`` anyway.
+    """
+    guild_ids = set(cfg.test_env) or {cfg.kyber_discord_server_id}
+    return {int(g) for g in guild_ids if g and g != -1}
+
+
 def _allowed_guild_ids(setting: _Setting) -> set[int]:
     """The guild(s) ``setting``'s picker offers — and therefore the only guilds a saved
     channel for it may live in. Mirrors autopost_settings.js's ``data-scope`` filter
     and _handle_channels' own guild list; see _channel_problem on why the server
     re-derives this rather than trusting the client's."""
-    guild_ids = {cfg.kyber_discord_server_id}
-    if setting.channel_scope == "kyber_control":
-        guild_ids.add(cfg.control_discord_server_id)
-    return {int(g) for g in guild_ids if g and g != -1}
+    guild_ids = _feed_guild_ids()
+    control_id = int(cfg.control_discord_server_id)
+    if setting.channel_scope == "kyber_control" and control_id and control_id != -1:
+        guild_ids = guild_ids | {control_id}
+    return guild_ids
 
 
 async def _channel_problem(setting: _Setting, channel_id: int) -> str | None:
@@ -774,7 +794,10 @@ async def _channel_problem(setting: _Setting, channel_id: int) -> str | None:
 
 
 async def _handle_channels(request: aiohttp.web.Request) -> aiohttp.web.Response:
-    """List postable channels in Kyber + the control server, for the channel pickers.
+    """List postable channels in the feed guild(s) + the control server, for the picker.
+
+    "Feed guild(s)" is Kyber in production and the ``TEST_ENV`` servers on a test
+    deployment — see :func:`_feed_guild_ids`.
 
     One fetch covers every channel field on the page — autopost_settings.js filters by
     each field's ``data-scope`` (which guild(s)) and ``data-announce-only`` (whether a
@@ -792,11 +815,13 @@ async def _handle_channels(request: aiohttp.web.Request) -> aiohttp.web.Response
     # has no postable channels" — so refuse, and let web's middleware say why.
     bot = web.require_bot()
 
-    guild_ids = [
-        g
-        for g in {cfg.kyber_discord_server_id, cfg.control_discord_server_id}
-        if g and g != -1
-    ]
+    feed_guild_ids = _feed_guild_ids()
+    control_id = int(cfg.control_discord_server_id)
+    # Sorted so the response (and the tests reading it) has one stable order; a set's
+    # iteration order is not one.
+    guild_ids = sorted(
+        feed_guild_ids | ({control_id} if control_id and control_id != -1 else set())
+    )
     # Both guilds' fetches are independent REST calls — run them concurrently rather
     # than one after another, since nothing here depends on the other's result.
     results = await asyncio.gather(
@@ -826,7 +851,9 @@ async def _handle_channels(request: aiohttp.web.Request) -> aiohttp.web.Response
     return aiohttp.web.json_response(
         {
             "channels": channels,
-            "kyberGuildId": str(cfg.kyber_discord_server_id),
+            # A list, not one id: TEST_ENV may name several servers (see
+            # _feed_guild_ids), and the client filters each picker against them all.
+            "feedGuildIds": [str(g) for g in sorted(feed_guild_ids)],
             "controlGuildId": str(cfg.control_discord_server_id),
         }
     )
