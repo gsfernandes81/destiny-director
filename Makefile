@@ -206,16 +206,29 @@ migration-check: .env
 # Back up a database to a timestamped ./kyber-<env>-<UTC>.sql, pulling the connection
 # URL from the given Railway environment. Both run locally, so they need pg_dump /
 # mysqldump installed here and the service reachable over its public TCP proxy.
+#
+# Both go through $(RAILWAY_RUN) — i.e. the *bot* service — rather than naming the
+# database service, because the database services are not named the same in both
+# environments: production's Postgres is `Postgres`, dev's is `Postgres-5iZg`. A
+# hardcoded `--service Postgres` therefore worked on production and could never work on
+# dev, which is the worst possible split for a target whose whole job is to be exercised
+# on dev before it is trusted on production.
+#
+# Going through anchor removes the coupling entirely: its DATABASE_URL and MYSQL_URL are
+# ${{...}} references that resolve to whatever each environment's database service is
+# called. This is not a new assumption — cutover-copy already reads $$MYSQL_URL through
+# $(RAILWAY_RUN), and cutover-schema its DATABASE_URL — it just makes the backups agree
+# with the rest of the file.
 dump-db:
-	railway run $(RAILWAY_ENV_FLAG) --service Postgres -- bash -c 'pg_dump --no-owner --no-privileges "$$DATABASE_URL" > "kyber-$(RAILWAY_ENV)-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
+	$(RAILWAY_RUN) bash -c 'pg_dump --no-owner --no-privileges "$$DATABASE_URL" > "kyber-$(RAILWAY_ENV)-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
 
 # The same, for the OLD MySQL database, until it is retired. `dump-db` above cannot
-# stand in for this: it targets the Postgres service, so before the cutover there is
-# nothing to back up the database you are migrating *away from* — which is the one
-# backup that matters, since mirrored_channel cannot be reconstructed from anything.
+# stand in for this: it dumps DATABASE_URL, so before the cutover there is nothing to
+# back up the database you are migrating *away from* — which is the one backup that
+# matters, since mirrored_channel cannot be reconstructed from anything.
 #
-# Driven off the single MYSQL_URL that `railway run` injects, exactly as the pg target
-# uses DATABASE_URL. The one way these have to differ: mysqldump takes flags rather than
+# Driven off the MYSQL_URL that `railway run` injects, exactly as the pg target uses
+# DATABASE_URL. The one way these have to differ: mysqldump takes flags rather than
 # a URL, so MYSQL_DUMP below splits it. sed's scripts are double-quoted so the recipe's
 # own single quotes survive, and none of them contain a `$` to be expanded early.
 #
@@ -228,7 +241,7 @@ dump-db:
 MYSQL_DUMP = n=$$(echo "$$MYSQL_URL" | sed -e "s|^[a-z]*://||"); hp=$$(echo "$$n" | sed -e "s|^.*@||" -e "s|/.*||"); MYSQL_PWD=$$(echo "$$n" | sed -e "s|^[^:]*:||" -e "s|@.*||") mysqldump --host "$$(echo "$$hp" | cut -d: -f1)" --port "$$(echo "$$hp" | cut -d: -f2)" --user "$$(echo "$$n" | cut -d: -f1)" --single-transaction --quick --no-tablespaces "$$(echo "$$n" | sed -e "s|^.*/||" -e "s|?.*||")"
 
 dump-mysql:
-	railway run $(RAILWAY_ENV_FLAG) --service MySQL -- bash -c '$(MYSQL_DUMP) > "kyber-$(RAILWAY_ENV)-mysql-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
+	$(RAILWAY_RUN) bash -c '$(MYSQL_DUMP) > "kyber-$(RAILWAY_ENV)-mysql-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
 
 # ── Environment variables: snapshot and restore ────────────────────────────────────
 # The cutover ends by deleting a dozen legacy variables, and Railway keeps no history.
