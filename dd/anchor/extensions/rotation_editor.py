@@ -18,8 +18,9 @@
 ``{public_base_url}/rotation`` is a homepage listing every rotation type
 (``ROTATION_SCHEMAS``); each links to ``/rotation/edit?type=…`` so the owner edits the
 document with a friendly form, previews the rendered post, and saves — the server
-re-validates against the JSON schema on save. Reached from the control-panel card grid
-(``/control_panel``), which replaced the former ``/rotation edit`` command.
+re-validates against the JSON schema on save. The four rotations that feed a post are
+linked by name from the panel's "Fix the data behind a post" group and go straight to
+their own tab; this page is the way in to the nine legacy location pages behind them.
 Authentication for every page, preview and save is handled centrally by the
 Discord-OAuth middleware in ``web_auth.py`` (this module carries no auth code of its
 own).
@@ -516,18 +517,64 @@ async def _warm_item_index(_event: h.StartedEvent) -> None:
     task.add_done_callback(_warm_tasks.discard)
 
 
-# One row for the whole editor while it is still one page listing every rotation type.
-# The landing page's group 2 wants a row per subject — Lost Sector schedule, Xûr's map,
-# Trials loot, Iron Banner weeks, the legacy activity pages — and that is a split of
-# THIS page, not of this card; the card follows once the routes exist.
+# A row per subject, not one row for the editor. The four rotations an admin actually
+# edits are named on the landing page and link straight to their own tab; the nine
+# legacy location pages sit behind the last row, which is the whole point of the group —
+# a single "Rotation data" row would put a menu between the admin and the thing they
+# came for, which is the click this redesign exists to remove.
+#
+# `register_card` appends, so one module contributing several rows is ordinary. These
+# are separate rows because they are separate *subjects*, and the fact that one page
+# happens to serve all of them is an implementation detail the landing page should not
+# be shaped by.
+# Spelled as literals rather than via the two ``*_SLUG`` constants that happen to exist
+# (``lost_sector`` and ``xur_location`` have none): a half-constant tuple reads as
+# though the difference means something. A test pins every one of these to a real
+# ROTATION_SCHEMAS key, which is what a constant would have bought, and catches a
+# rename besides.
+_FEATURED_ROTATIONS: tuple[tuple[str, str, str], ...] = (
+    (
+        "lost_sector",
+        "Lost sector rotation",
+        "The daily sector schedule, and the details each sector's post shows.",
+    ),
+    (
+        "xur_location",
+        "Xûr location map",
+        "The location names and map links Xûr's post points at.",
+    ),
+    (
+        "trials_loot",
+        "Trials loot pool",
+        "The weapon sets and weekly schedule the Trials post draws from.",
+    ),
+    (
+        "iron_banner",
+        "Iron Banner",
+        "Event weeks, game modes, and the bonus focus pools.",
+    ),
+)
+
+for _order, (_slug, _title, _desc) in enumerate(_FEATURED_ROTATIONS, start=1):
+    web.register_card(
+        web.Card(
+            _title,
+            _desc,
+            f"/rotation/edit?type={_slug}",
+            web.CardGroup.DATA,
+            _order * 10,
+        )
+    )
+
+# Last in the group, and the only one that still goes through the index page — the nine
+# older location pages are a pile to rummage in, not a subject you arrive with in mind.
 web.register_card(
     web.Card(
-        "Rotation data",
-        "The Lost Sector schedule, Xûr's locations, Trials loot, Iron Banner weeks, "
-        "and the legacy activity pages.",
+        "World activity pages",
+        "Nine older location pages — Neomuna, the Moon, Europa and the rest.",
         "/rotation",
         web.CardGroup.DATA,
-        10,
+        50,
     )
 )
 
