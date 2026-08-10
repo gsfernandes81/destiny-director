@@ -1,0 +1,117 @@
+<!doctype html>
+<!--
+  "Custom one-off post" — the doorway to the web builder for a message written from
+  scratch. Served by dd.anchor.extensions.cv2_builder_page (GET /custom-post); auth is
+  the shared OAuth middleware (web_auth), same as every other page.
+
+  The page does exactly one thing: name the channel. Everything else about the message
+  is the builder's job, and the builder cannot ask this question itself — a draft's
+  target is fixed at mint (POST /cv2-builder/new vets it and stores what it resolved),
+  which is what stops a later request pointing an existing draft at a channel nobody
+  checked. So the choice has to happen before the draft exists, on a page of its own,
+  and the sub-heading says so rather than letting someone discover it downstream.
+
+  Static shell (CSP is script-src 'self', so no inline script): custom_post.js fills the
+  picker from GET /autopost_settings/channels and posts the choice to the mint route.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Custom one-off post — Destiny Director</title>
+    <link rel="stylesheet" href="/static/shared.css" />
+    <!-- The vendored light theme first, this site's dark overrides second: reverse them
+         and the vendor sheet cascades in last and wins. -->
+    <link rel="stylesheet" href="/static/vendor/tom-select.min.css" />
+    <link rel="stylesheet" href="/static/tom_select_dark.css" />
+    <style>
+      /* Base/reset/theme/motion lives in shared.css (linked above); only this page's own
+         styles are here. No motion is defined on this page — the status line rides the
+         shared `.appear` utility and nothing else here moves. */
+      main { margin: 1.1rem 0 0; display: flex; flex-direction: column; gap: .9rem; }
+
+      /* One card, holding the one question. A card and not a bare field so the page has
+         the same anatomy as every other surface here: --surface-2 on --surface-1, its
+         own border, its own radius. Nothing on this page is tinted except the primary
+         button — a page with one question does not need a second emphasis. */
+      .card {
+        background: var(--surface-2); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: .9rem;
+      }
+      /* A --surface-3 box on the card's --surface-2, which is the layering the reviewed
+         design uses for every field. Capped rather than page-wide: a channel name is
+         short, and a control stretched to 880px stops reading as a field. */
+      .field { display: flex; flex-direction: column; gap: .35rem; min-width: 0;
+               max-width: 24rem; }
+      .field > label { font-size: .85rem; color: var(--text-2); }
+
+      /* Tom Select groups the list into announcement channels and text channels, in that
+         order. The header is what makes the ordering legible as a rule rather than as an
+         accident of naming, so it is styled to be read, not skipped past. Scoped to this
+         page: it is the only picker here that has groups at all. */
+      .card .ts-dropdown .optgroup-header {
+        padding: .45rem .55rem .25rem; font-size: .75rem; font-weight: 600;
+        color: var(--text-2); text-transform: uppercase; letter-spacing: .03em;
+        background: transparent; cursor: default;
+      }
+      .card .ts-dropdown .optgroup + .optgroup .optgroup-header {
+        border-top: 1px solid var(--border); margin-top: .25rem;
+      }
+
+      /* The one line that says why nothing can happen — an empty channel list, or the
+         server's refusal of the channel that was picked. A bullet plus one sentence,
+         sitting under the field it belongs to, in the error colour because in both cases
+         something is actually broken rather than merely unset. */
+      .problem { display: flex; gap: .45rem; margin: .6rem 0 0; font-size: .85rem;
+                 color: var(--err); }
+      .problem::before { content: "•"; color: var(--err); }
+
+      .actions { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+      .status { color: var(--text-faint); font-size: .85rem; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <p class="nav"><a href="/" class="backlink">← Home</a></p>
+      <h1>Custom one-off post</h1>
+      <p class="muted">
+        Pick the channel this message will go to, then write it in the builder. The
+        channel can't be changed after this step — come back here to start over if you
+        picked wrong.
+      </p>
+    </header>
+
+    <main>
+      <section class="card">
+        <div class="field">
+          <label for="channel">Post to channel</label>
+          <!-- Announcement channels are listed first but text channels stay pickable:
+               this message is SENT to the channel, not followed out of it, so the
+               announcement requirement the feed pickers enforce does not apply. The
+               server agrees — the mint route vets with announce_only off. -->
+          <select id="channel" placeholder="Loading channels…"></select>
+        </div>
+        <p class="problem appear hidden" id="problem" role="status"></p>
+      </section>
+
+      <div class="actions">
+        <button type="button" class="primary" id="go" disabled>Open the builder</button>
+        <a class="button" href="/">Cancel</a>
+        <span class="status" id="status" role="status"></span>
+      </div>
+    </main>
+
+    <!-- Order is the dependency graph: shared.js (say/busy) and the vendored widget both
+         before this page's script, which uses globals from each.
+
+         NOT ts_single.js, which the other channel pickers load: its one job is to inject
+         a field's STORED value as a synthetic option when the live channel list no longer
+         contains it. This picker has no stored value — the choice is made once and spent
+         on a draft — so loading it would be an asset the page never calls, which is the
+         thing tests/asset_links.test.js exists to keep out of these shells. -->
+    <script src="/static/shared.js" defer></script>
+    <script src="/static/vendor/tom-select.complete.min.js" defer></script>
+    <script src="/static/custom_post.js" defer></script>
+  </body>
+</html>

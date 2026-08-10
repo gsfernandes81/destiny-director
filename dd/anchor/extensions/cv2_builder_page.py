@@ -24,9 +24,16 @@ the browser names the target channel and the **server independently vets it** be
 it is stored (see :func:`_handle_new`). Either way the row carries **what publishing
 means** (post / edit / send a copy) and where it lands.
 
+``GET /custom-post`` (``web_static/custom_post.html``) is the browser's half of that
+second path: one channel picker and one button, whose only job is to produce the
+``channel_id`` the mint route will vet. It is a separate page and not a step inside the
+builder because the target is fixed at mint and immutable afterwards — the question has
+to be asked before the draft exists.
+
 Routes (all behind the shared Discord OAuth middleware; every draft-scoped one is
 additionally scoped to the draft's creator — see :meth:`Cv2Draft.get_for_user`):
 
+- ``GET  /custom-post``                  pick the channel; the doorway to the two below
 - ``POST /cv2-builder/new``              vet a channel, mint a draft, return its path
 - ``GET  /cv2-builder/{draft}``          the static page shell
 - ``GET  /cv2-builder/{draft}/data``     seed nodes, action copy, guild emoji
@@ -87,6 +94,16 @@ loader = lb.Loader()
 
 _PAGE_HTML_PATH = (
     Path(__file__).resolve().parent.parent / "web_static" / "cv2_builder.html"
+)
+
+# The channel-picking doorway in front of the builder (``GET /custom-post``). A page of
+# its own rather than a step inside the builder because a draft's target is fixed at
+# mint — :func:`_handle_new` vets it once and stores what it resolved, and
+# :func:`_handle_publish` reads it off the row and never off the request. That is what
+# makes a later request unable to redirect an existing draft; the cost is that the
+# question has to be answered before there is a draft to answer it on.
+_CUSTOM_POST_HTML_PATH = (
+    Path(__file__).resolve().parent.parent / "web_static" / "custom_post.html"
 )
 
 # Emoji dicts are a REST round-trip per guild; the builder asks for one on every page
@@ -177,6 +194,18 @@ async def _handle_page(request: aiohttp.web.Request) -> aiohttp.web.Response:
     # friendly in-page message instead of a bare 404 document.
     return aiohttp.web.Response(
         text=_PAGE_HTML_PATH.read_text(encoding="utf-8"), content_type="text/html"
+    )
+
+
+async def _handle_custom_post_page(
+    request: aiohttp.web.Request,
+) -> aiohttp.web.Response:
+    # Static shell, like the builder's own. The channel list is fetched by the page from
+    # ``/autopost_settings/channels``, so a bot that is still starting renders a page
+    # that says so rather than a route that refuses to render at all.
+    return aiohttp.web.Response(
+        text=_CUSTOM_POST_HTML_PATH.read_text(encoding="utf-8"),
+        content_type="text/html",
     )
 
 
@@ -420,9 +449,34 @@ def register_cv2_builder_routes(app: aiohttp.web.Application) -> None:
     app.router.add_post("/cv2-builder/{draft}/save", _handle_save)
     app.router.add_post("/cv2-builder/{draft}/preview", _handle_preview)
     app.router.add_post("/cv2-builder/{draft}/publish", _handle_publish)
+    # The page that feeds /cv2-builder/new. Registered here rather than in a module of
+    # its own because it is one static shell whose only server-side contract is the mint
+    # route directly above it — splitting them would put the two halves of one flow in
+    # two files that have to agree.
+    app.router.add_get("/custom-post", _handle_custom_post_page)
 
 
 web.register_routes(register_cv2_builder_routes)
+web.register_card(
+    web.Card(
+        "Custom one-off post",
+        # The reviewed design's own wording for this row, taken verbatim rather than
+        # paraphrased — the landing page is a directory, and its descriptions were
+        # written together to sit at one register.
+        "Build a message from scratch and send it to a channel.",
+        "/custom-post",
+        web.CardGroup.SEND,
+        # After Weekly Reset (10) and Trials (20), and after "Send a scheduled post now"
+        # (30) — the group runs most-frequent errand first, and writing a post from
+        # nothing is the rarest of the four.
+        40,
+        # "Start", not the default "Open": this row does not open something that already
+        # exists. The reviewed design gives group 1 the verbs Open / Open / Choose /
+        # Start, and the differences are the point — four buttons all reading "Open"
+        # would say nothing about which is which.
+        action="Start",
+    )
+)
 
 
 async def _prune_drafts() -> None:
