@@ -235,26 +235,44 @@ dump-mysql:
 # SHEETS_PRIVATE_KEY is a Google service-account key you would not get back; the Discord
 # and Bungie secrets are no better. Take the snapshot before you delete anything.
 #
-# The file lands in the repo root as kyber-<env>-vars-<UTC>.json — a different name per
-# environment, so a prod snapshot and a dev one cannot be confused for each other — and
-# `kyber-*-vars-*.json` is gitignored alongside the .sql dumps. It holds live secrets in
-# plaintext and is written 0600; treat it exactly like a database dump.
+# **One file per service**, in the repo root, sharing one timestamp:
+#
+#     kyber-<env>-anchor-vars-<UTC>.json
+#     kyber-<env>-beacon-vars-<UTC>.json
+#
+# Per service rather than per environment because a restore writes every service its file
+# names — a combined file cannot repair one bot without also writing the other — and
+# because the two bots hold different secrets, so a file handed over to fix beacon should
+# not carry anchor's Discord token with it. The environment is in the name too, so a prod
+# snapshot and a dev one cannot be confused for each other.
+#
+# `kyber-*-vars-*.json` is gitignored alongside the .sql dumps. They hold live secrets in
+# plaintext and are written 0600; treat them exactly like a database dump. OUT_DIR moves
+# them somewhere else.
 dump-vars:
-	uv run python -m dd.common.railway_vars dump --environment $(RAILWAY_ENV)
+	uv run python -m dd.common.railway_vars dump --environment $(RAILWAY_ENV) \
+		$(if $(OUT_DIR),--out-dir "$(OUT_DIR)",)
 
-# Put a snapshot back: `make restore-vars FILE=kyber-production-vars-….json`.
+# Put one service's snapshot back:
+#
+#     make prod restore-vars FILE=kyber-production-anchor-vars-….json
+#
 # Dry run by default, EXECUTE=1 to write, and it writes with --skip-deploys — a restore
-# is a config repair, and redeploying is a separate decision.
+# is a config repair, and redeploying is a separate decision. One file at a time, which
+# is one service at a time; run it twice to put both bots back.
 #
 # The snapshot records which environment it came from and the restore targets that one,
 # so `make prod restore-vars FILE=<a dev snapshot>` refuses rather than quietly seeding
 # production with dev's tokens. RAILWAY_*, DATABASE_* and MYSQL_* are never written back
 # (platform-injected, or reference variables Railway hands us already flattened — see
 # the module docstring).
+#
+# SERVICE is only for a snapshot taken before the per-service split, where it picks one
+# service out of a combined file instead of writing both.
 restore-vars:
-	@[ -n "$(FILE)" ] || { echo 'Set FILE: make restore-vars FILE=kyber-dev-vars-….json' >&2; exit 1; }
+	@[ -n "$(FILE)" ] || { echo 'Set FILE: make restore-vars FILE=kyber-dev-anchor-vars-….json' >&2; exit 1; }
 	uv run python -m dd.common.railway_vars restore --file "$(FILE)" \
-		--environment $(RAILWAY_ENV) $(WRITE)
+		--environment $(RAILWAY_ENV) $(if $(SERVICE),--service "$(SERVICE)",) $(WRITE)
 
 # Restore from a paste of Railway's web Raw Editor instead of a dump:
 #   make prod restore-raw FILE=anchor-raw.txt SERVICE=anchor [EXECUTE=1]

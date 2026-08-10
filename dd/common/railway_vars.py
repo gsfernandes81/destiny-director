@@ -20,9 +20,15 @@ The cutover ends by deleting a dozen legacy variables, and Railway keeps no hist
 Discord and Bungie secrets are no better. This takes the snapshot first
 (``make dump-vars``) and can restore from it (``make restore-vars``).
 
-**The file holds live secrets in plaintext.** It is written to the repo root, where
-``kyber-*-vars-*.json`` is gitignored alongside the ``.sql`` dumps. Treat it exactly
-like the database dumps: keep it, do not commit it, do not paste it.
+**One file per service** — ``kyber-<env>-<service>-vars-<stamp>.json``, the files of a
+run sharing a stamp. A restore writes every service the file names, so a combined
+file could not repair one bot without writing the other; and the two bots hold different
+secrets, so handing over a file to fix beacon should not hand over anchor's Discord
+token with it. :func:`dump_path` has the rest of the reasoning.
+
+**The files hold live secrets in plaintext.** They are written to the repo root, where
+``kyber-*-vars-*.json`` is gitignored alongside the ``.sql`` dumps. Treat them exactly
+like the database dumps: keep them, do not commit them, do not paste them.
 
 **Two input formats, and they are not equally good.**
 
@@ -480,20 +486,41 @@ def _counts(snapshot: dict[str, t.Any]) -> str:
     return "\n".join(lines)
 
 
+def dump_path(
+    directory: pathlib.Path, environment: str, service: str, stamp: str
+) -> pathlib.Path:
+    """``kyber-<environment>-<service>-vars-<stamp>.json``, matching the gitignore rule.
+
+    One file per service, not one per environment. Three reasons, in increasing order of
+    how much they cost when ignored:
+
+    - a restore writes every service the file names, so a combined file cannot repair
+      one bot without also writing the other;
+    - Railway's own authoring surface is per-service, and so is ``restore-raw``, so a
+      per-environment dump was the odd one out;
+    - the two bots hold different secrets, and handing over a file to fix beacon should
+      not hand over anchor's Discord token as well.
+
+    The files of one run share a timestamp, so a snapshot is still obviously one thing.
+    """
+    return directory / f"kyber-{environment}-{service}-vars-{stamp}.json"
+
+
 def _do_dump(args: argparse.Namespace) -> int:
     now = dt.datetime.now(tz=dt.UTC)
-    snapshot = build_snapshot(args.environment, args.services, now=now)
-    out = pathlib.Path(
-        args.out
-        or f"kyber-{args.environment}-vars-{now.strftime('%Y%m%dT%H%M%SZ')}.json"
-    )
-    out.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
-    out.chmod(0o600)  # secrets: not world-readable, same as an ssh key
-    print(f"Wrote {out}  ({args.environment})")
-    print(_counts(snapshot))
+    stamp = now.strftime("%Y%m%dT%H%M%SZ")
+    directory = pathlib.Path(args.out_dir)
+    for service in args.services:
+        snapshot = build_snapshot(args.environment, [service], now=now)
+        out = dump_path(directory, args.environment, service, stamp)
+        out.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
+        out.chmod(0o600)  # secrets: not world-readable, same as an ssh key
+        print(f"Wrote {out}")
+        print(_counts(snapshot))
     print(
-        "\nThis file contains live secrets in plaintext. It is gitignored; keep it "
-        "somewhere you would keep a database dump."
+        "\nThese files contain live secrets in plaintext. They are gitignored; keep "
+        "them somewhere you would keep a database dump. One per service — restore each "
+        "on its own, and note that they are only a matched pair by their timestamp."
     )
     return 0
 
@@ -579,6 +606,21 @@ def _do_restore(args: argparse.Namespace) -> int:
             f"{args.environment!r} — pass --force-cross-environment if you mean it"
         )
 
+    # A dump is one service per file, so this narrows nothing in the normal case. It is
+    # here for a snapshot taken before that split, where a restore aimed at one bot
+    # would otherwise write the other one too.
+    if args.service:
+        if args.service not in snapshot["services"]:
+            raise RailwayVarsError(
+                f"{path.name} holds "
+                f"{', '.join(sorted(snapshot['services'])) or 'no services'} — "
+                f"not {args.service!r}"
+            )
+        snapshot = {
+            **snapshot,
+            "services": {args.service: snapshot["services"][args.service]},
+        }
+
     print(f"Restoring {path.name} ({snapshot.get('captured_at')}) into {environment}")
     live = {svc: fetch(svc, environment) for svc in snapshot["services"]}
     plan = plan_restore(snapshot, live)
@@ -649,7 +691,9 @@ def _parser() -> argparse.ArgumentParser:
     dump = sub.add_parser("dump", help="write every service variable to a JSON file")
     dump.add_argument("--environment", required=True)
     dump.add_argument("--services", type=_csv, default=DEFAULT_SERVICES)
-    dump.add_argument("--out", default=None)
+    dump.add_argument(
+        "--out-dir", default=".", help="where the per-service files land (default: .)"
+    )
     dump.set_defaults(func=_do_dump)
 
     restore = sub.add_parser("restore", help="put a snapshot's variables back")
@@ -658,6 +702,11 @@ def _parser() -> argparse.ArgumentParser:
         "--environment",
         default=None,
         help="defaults to the environment the snapshot was taken from",
+    )
+    restore.add_argument(
+        "--service",
+        default=None,
+        help="restore only this service out of the file (for pre-split snapshots)",
     )
     restore.add_argument("--execute", action="store_true")
     restore.add_argument("--force-cross-environment", action="store_true")
