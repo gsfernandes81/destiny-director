@@ -1154,6 +1154,10 @@ def _guild_ids(monkeypatch: pytest.MonkeyPatch) -> tuple[int, int]:
     kyber, control = _KYBER_GUILD_ID, _CONTROL_GUILD_ID
     monkeypatch.setattr(cfg, "kyber_discord_server_id", kyber)
     monkeypatch.setattr(cfg, "control_discord_server_id", control)
+    # Pinned empty, not left to the ambient environment: TEST_ENV set means "these
+    # servers stand in for Kyber" (see _feed_guild_ids), which would silently move every
+    # picker in every test below off the guild it is asserting about.
+    monkeypatch.setattr(cfg, "test_env", ())
     return kyber, control
 
 
@@ -1181,7 +1185,7 @@ async def test_handle_channels_lists_postable_channels_from_both_guilds(
 
     ids = {c["id"] for c in payload["channels"]}
     assert ids == {"1", "2", "4"}  # the voice channel is filtered out
-    assert payload["kyberGuildId"] == str(kyber)
+    assert payload["feedGuildIds"] == [str(kyber)]
     assert payload["controlGuildId"] == str(control)
     by_id = {c["id"]: c for c in payload["channels"]}
     assert by_id["1"]["name"] == "#lost-sector"
@@ -1192,6 +1196,64 @@ async def test_handle_channels_lists_postable_channels_from_both_guilds(
     # requires it), so this flag must be correct, not just present.
     assert by_id["1"]["announce"] is False
     assert by_id["2"]["announce"] is True
+
+
+async def test_handle_channels_offers_the_test_env_guilds_not_kyber(
+    monkeypatch: pytest.MonkeyPatch, _guild_ids: tuple[int, int]
+) -> None:
+    # A test deployment (dev) must not offer the live Kyber server's channels: picking
+    # one there points a dev feed at a real Kyber channel. TEST_ENV names the servers
+    # that stand in for it, and it may name more than one.
+    kyber, control = _guild_ids
+    test_a, test_b = 777, 888
+    monkeypatch.setattr(cfg, "test_env", (test_a, test_b))
+    monkeypatch.setattr(
+        web,
+        "_bot",
+        _FakeBot(
+            {
+                kyber: [_FakeChannel(1, "real-kyber", h.ChannelType.GUILD_NEWS)],
+                control: [_FakeChannel(2, "mod-log", h.ChannelType.GUILD_TEXT)],
+                test_a: [_FakeChannel(3, "test-announce", h.ChannelType.GUILD_NEWS)],
+                test_b: [_FakeChannel(4, "test-two", h.ChannelType.GUILD_NEWS)],
+            }
+        ),
+    )
+
+    resp = await aps._handle_channels(_as_request(_FakeRequest(None)))
+    payload = t.cast(dict, json.loads(resp.text or ""))
+
+    # Kyber is absent; both test servers and the control server are listed.
+    assert {c["id"] for c in payload["channels"]} == {"2", "3", "4"}
+    assert payload["feedGuildIds"] == [str(test_a), str(test_b)]
+    assert payload["controlGuildId"] == str(control)
+
+
+async def test_channel_problem_rejects_a_kyber_channel_on_a_test_deployment(
+    monkeypatch: pytest.MonkeyPatch, _guild_ids: tuple[int, int]
+) -> None:
+    # The picker is a convenience; this is the enforcement point. With TEST_ENV set, a
+    # Kyber channel is as out-of-scope as the control server is for a followable —
+    # including one submitted by hand, past the browser's filter.
+    kyber, _control = _guild_ids
+    monkeypatch.setattr(cfg, "test_env", (777,))
+    monkeypatch.setattr(web, "_bot", _fake_channel_bot(guild_id=kyber))
+    _permit_everything(monkeypatch)
+
+    problem = await aps._channel_problem(_ANNOUNCE_SETTING, 555)
+
+    assert problem is not None
+    assert "server" in problem
+
+
+async def test_channel_problem_allows_a_test_env_channel_on_a_test_deployment(
+    monkeypatch: pytest.MonkeyPatch, _guild_ids: tuple[int, int]
+) -> None:
+    monkeypatch.setattr(cfg, "test_env", (777,))
+    monkeypatch.setattr(web, "_bot", _fake_channel_bot(guild_id=777))
+    _permit_everything(monkeypatch)
+
+    assert await aps._channel_problem(_ANNOUNCE_SETTING, 555) is None
 
 
 async def test_handle_channels_survives_an_unreachable_guild(

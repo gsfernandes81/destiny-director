@@ -46,8 +46,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // a searchable single-item picker, for exactly one item (never a multi-select) — the
   // channel a feed/setting posts to. One fetch of /autopost_settings/channels supplies
   // every field; a field's own data-scope then filters to the guild(s) it may pick from
-  // (a followable's own channel is Kyber-only; the log/alerts channels may be in Kyber
-  // or the control server), and data-announce-only filters to announcement channels —
+  // (a followable's own channel is feed-guild-only; the log/alerts channels may be in a
+  // feed guild or the control server), and data-announce-only filters to announcement —
   // a followable's post channel must be one for Discord's native "Follow Channel" to
   // work at all, unlike log_channel_id/alerts_channel_id, which the bot only ever sends
   // to directly and so may be a plain text channel. A stored id the live fetch didn't
@@ -66,14 +66,17 @@ document.addEventListener("DOMContentLoaded", () => {
       data = null;
     }
     const channels = (data && data.channels) || [];
-    const kyberId = data && data.kyberGuildId;
+    // The guild(s) a feed may post in: Kyber in production, the TEST_ENV servers on a
+    // test deployment, which is why this is a list the server sends rather than the one
+    // id it used to be (see autopost_settings.py's _feed_guild_ids).
+    const feedGuilds = (data && data.feedGuildIds) || [];
     const controlId = data && data.controlGuildId;
 
     fields.forEach((select) => {
       const scope = select.dataset.scope;
       const announceOnly = select.dataset.announceOnly === "true";
       const allowedGuilds =
-        scope === "kyber_control" ? [kyberId, controlId] : [kyberId];
+        scope === "kyber_control" ? [...feedGuilds, controlId] : feedGuilds;
       const rawOptions = channels
         .filter((c) => allowedGuilds.includes(c.guildId))
         .filter((c) => !announceOnly || c.announce)
