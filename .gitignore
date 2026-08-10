@@ -193,3 +193,9 @@ scratch/
 # secrets (bot tokens) lifted from process memory. GitHub push-protection blocks them.
 core
 core.[0-9]*
+
+# Agent worktrees. `git worktree add` under .claude/ gives a subagent an isolated
+# checkout so its `make check` and `make format` — both whole-tree — cannot see another
+# agent's half-finished edits. The directory is a second working copy of this repo and
+# must never be committed into it; the branch it holds is pushed normally.
+.claude/worktrees/
