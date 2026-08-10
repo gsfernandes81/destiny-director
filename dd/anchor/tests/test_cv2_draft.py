@@ -123,6 +123,16 @@ async def test_unknown_action_is_rejected():
         )
 
 
+async def _backdate(draft_id: str, days: float) -> None:
+    """Set a draft's ``created_at`` explicitly, so prune tests turn on the cutoff rather
+    than on how long the test itself took to run."""
+    when = dt.datetime.now(dt.UTC).replace(tzinfo=None) - dt.timedelta(days=days)
+    async with db_session() as session, session.begin():
+        draft = await Cv2Draft.get_for_user(draft_id, OWNER, session=session)
+        assert draft is not None
+        draft.created_at = when
+
+
 @pytest.mark.asyncio
 async def test_prune_drops_only_stale_drafts():
     fresh, stale = _id(), _id()
@@ -130,14 +140,26 @@ async def test_prune_drops_only_stale_drafts():
     await _create(stale)
 
     # Backdate one row past the retention window.
-    old = dt.datetime.now(dt.UTC).replace(tzinfo=None) - dt.timedelta(days=45)
-    async with db_session() as session, session.begin():
-        draft = await Cv2Draft.get_for_user(stale, OWNER, session=session)
-        assert draft is not None
-        draft.created_at = old
+    await _backdate(stale, 45)
 
     removed = await Cv2Draft.prune(older_than_days=30)
 
     assert removed >= 1
     assert await Cv2Draft.get_for_user(stale, OWNER) is None
     assert await Cv2Draft.get_for_user(fresh, OWNER) is not None
+
+
+@pytest.mark.asyncio
+async def test_prune_retains_for_fourteen_days_by_default():
+    """The default IS the policy — the scheduled sweep in ``cv2_builder_page`` calls
+    ``prune()`` with no arguments, so a drifting default silently changes retention."""
+    keep, drop = _id(), _id()
+    await _create(keep)
+    await _create(drop)
+    await _backdate(keep, 13)
+    await _backdate(drop, 15)
+
+    await Cv2Draft.prune()
+
+    assert await Cv2Draft.get_for_user(drop, OWNER) is None
+    assert await Cv2Draft.get_for_user(keep, OWNER) is not None

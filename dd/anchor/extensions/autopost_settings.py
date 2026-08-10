@@ -710,87 +710,142 @@ def _feed_guild_ids() -> set[int]:
     return {int(g) for g in guild_ids if g and g != -1}
 
 
-def _allowed_guild_ids(setting: _Setting) -> set[int]:
-    """The guild(s) ``setting``'s picker offers — and therefore the only guilds a saved
-    channel for it may live in. Mirrors autopost_settings.js's ``data-scope`` filter
-    and _handle_channels' own guild list; see _channel_problem on why the server
-    re-derives this rather than trusting the client's."""
+def allowed_guild_ids(*, include_control_server: bool = False) -> set[int]:
+    """The guild(s) a channel field's picker offers — and therefore the only guilds a
+    saved channel for it may live in. Mirrors autopost_settings.js's ``data-scope``
+    filter and _handle_channels' own guild list; see :func:`check_channel` on why the
+    server re-derives this rather than trusting the client's.
+
+    ``include_control_server`` is the ``"kyber_control"`` scope (the alerts channel,
+    which may legitimately sit in the control server). Public because the CV2 builder's
+    web-originated "custom post" flow validates its target against exactly the
+    non-control scope this returns by default — one definition of "where may this bot
+    post", not two that can drift.
+    """
     guild_ids = _feed_guild_ids()
     control_id = int(cfg.control_discord_server_id)
-    if setting.channel_scope == "kyber_control" and control_id and control_id != -1:
+    if include_control_server and control_id and control_id != -1:
         guild_ids = guild_ids | {control_id}
     return guild_ids
 
 
-async def _channel_problem(setting: _Setting, channel_id: int) -> str | None:
-    """``None`` if ``channel_id`` is a channel ``setting`` may actually use — right
-    guild, right type, and the bot can fully post there (view/send/embed/external-emoji)
-    — otherwise a human-readable reason to reject the save for.
+class ChannelCheck(t.NamedTuple):
+    """What :func:`check_channel` concluded about a channel.
+
+    ``problem`` is ``None`` exactly when the channel is usable, and otherwise the
+    human-readable reason to refuse. ``channel`` is the fetched channel on success, so a
+    caller that needs a fact off it (the CV2 mint route needs its ``guild_id``) doesn't
+    pay a second REST round-trip — and, more to the point, records the guild the
+    *server* resolved rather than one the client also sent.
+    """
+
+    problem: str | None
+    channel: h.PermissibleGuildChannel | None = None
+
+
+async def check_channel(
+    channel_id: int, *, announce_only: bool, allowed_guild_ids: set[int]
+) -> ChannelCheck:
+    """Whether ``channel_id`` is a channel the bot may actually post to — right guild,
+    right type, and the bot can fully post there (view/send/embed/external-emoji).
+
+    Takes the two facts a caller cares about rather than a :class:`_Setting`, so the
+    web surfaces that have no setting row — the CV2 builder's "custom post" mint route —
+    can vet a target through this same function instead of a stand-in setting.
+    :func:`_channel_problem` is the settings-page shaped wrapper over it.
 
     Every rule the channel picker applies in the browser (autopost_settings.js's
     ``data-scope`` / ``data-announce-only`` filters, and _handle_channels' postable-type
     filter) is re-applied here, because this is the only place the value is actually
-    written: the browser filter is a convenience for whoever is picking, not the
-    enforcement point. A followable's channel must be an announcement channel or
-    Discord's native "Follow Channel" cannot target it at all — the bot would post
-    happily and every follower would silently receive nothing.
+    used: the browser filter is a convenience for whoever is picking, not the
+    enforcement point. With ``announce_only`` the channel must additionally be an
+    announcement channel — a followable's channel must be, or Discord's native "Follow
+    Channel" cannot target it at all and the bot would post happily while every follower
+    silently received nothing.
 
-    Fails CLOSED — rejects the save — on anything short of a confirmed "yes, this
-    channel is usable": the bot not started yet, an unresolvable permission-cache
-    lookup, or an unexpected REST hiccup all reject, same as a confirmed missing
-    permission does. A channel setting is worth being unable to save for a moment
-    (retry once the bot's finished starting, or once its permission cache is warm)
-    rather than risk accepting one silently unusable — this is the primary safety net,
-    not just a courtesy check (a channel that goes bad *after* being saved still alerts
-    rather than failing silently — see ``dd.beacon.utils.open_feed_source`` — but this
-    is what stops a bad one going in to begin with).
+    Fails CLOSED — rejects — on anything short of a confirmed "yes, this channel is
+    usable": the bot not started yet, an unresolvable permission-cache lookup, or an
+    unexpected REST hiccup all reject, same as a confirmed missing permission does. A
+    channel is worth being unable to use for a moment (retry once the bot's finished
+    starting, or once its permission cache is warm) rather than risk accepting one
+    silently unusable — this is the primary safety net, not just a courtesy check (a
+    channel that goes bad *after* being saved still alerts rather than failing silently
+    — see ``dd.beacon.utils.open_feed_source`` — but this is what stops a bad one going
+    in to begin with).
     """
     # get_bot(), not require_bot(): this function owes its caller a REASON, and a
     # BotNotReady would leave the save's error path with no sentence to show. Fail
     # closed with the reason, as every other branch here does.
     bot = web.get_bot()
     if bot is None:
-        return "the bot hasn't finished starting yet — try again in a moment."
+        return ChannelCheck(
+            "the bot hasn't finished starting yet — try again in a moment."
+        )
     try:
         channel = await bot.rest.fetch_channel(channel_id)
     except (h.NotFoundError, h.ForbiddenError):
-        return "the bot can't see that channel (deleted, or its access was revoked)."
+        return ChannelCheck(
+            "the bot can't see that channel (deleted, or its access was revoked)."
+        )
     except Exception:
         logger.warning(
             "Channel permission check failed for %s", channel_id, exc_info=True
         )
-        return (
+        return ChannelCheck(
             "couldn't confirm the bot's access to that channel right now — try again."
         )
     if not isinstance(channel, h.PermissibleGuildChannel):
-        return "that channel doesn't support posting (not a text/announcement channel)."
+        return ChannelCheck(
+            "that channel doesn't support posting (not a text/announcement channel)."
+        )
     if channel.type not in _POSTABLE_CHANNEL_TYPES:
-        return "that channel doesn't support posting (not a text/announcement channel)."
-    if setting.announce_only and channel.type != h.ChannelType.GUILD_NEWS:
-        return (
+        return ChannelCheck(
+            "that channel doesn't support posting (not a text/announcement channel)."
+        )
+    if announce_only and channel.type != h.ChannelType.GUILD_NEWS:
+        return ChannelCheck(
             "that's a text channel — this one has to be an announcement channel, or "
             "other servers can't follow it."
         )
-    allowed_guilds = _allowed_guild_ids(setting)
-    if allowed_guilds and int(channel.guild_id) not in allowed_guilds:
-        return "that channel is in a server this setting can't post to."
+    if allowed_guild_ids and int(channel.guild_id) not in allowed_guild_ids:
+        return ChannelCheck("that channel is in a server this setting can't post to.")
     me = bot.get_me()
     if me is None:
-        return "the bot's own identity isn't available yet — try again in a moment."
+        return ChannelCheck(
+            "the bot's own identity isn't available yet — try again in a moment."
+        )
     try:
         member = await bot.rest.fetch_member(channel.guild_id, me.id)
         perms = calculate_permissions(member, channel)
     except CacheFailureError:
-        return (
+        return ChannelCheck(
             "couldn't confirm the bot's permissions there yet (its cache isn't warm) "
             "— try again shortly."
         )
     except (h.NotFoundError, h.ForbiddenError):
-        return "the bot isn't a member of that server."
+        return ChannelCheck("the bot isn't a member of that server.")
     missing = [name for perm, name in _REQUIRED_CHANNEL_PERMS if not (perms & perm)]
     if not missing:
-        return None
-    return f"the bot is missing permissions there: {', '.join(missing)}."
+        return ChannelCheck(None, channel)
+    return ChannelCheck(f"the bot is missing permissions there: {', '.join(missing)}.")
+
+
+async def _channel_problem(setting: _Setting, channel_id: int) -> str | None:
+    """``None`` if ``channel_id`` is a channel ``setting`` may actually use, otherwise a
+    human-readable reason to reject the save for.
+
+    A thin :class:`_Setting`-shaped wrapper over :func:`check_channel`, which holds the
+    rules and the sentences — ``setting`` only ever contributed these two facts.
+    """
+    return (
+        await check_channel(
+            channel_id,
+            announce_only=setting.announce_only,
+            allowed_guild_ids=allowed_guild_ids(
+                include_control_server=setting.channel_scope == "kyber_control"
+            ),
+        )
+    ).problem
 
 
 async def _handle_channels(request: aiohttp.web.Request) -> aiohttp.web.Response:

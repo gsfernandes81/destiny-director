@@ -23,18 +23,28 @@ Two things here are load-bearing and everything else is plumbing:
 2. **The server is the authority on validity.** The client blocks its own Post button on
    the same rules, but a hand-rolled POST must still not be able to publish an invalid
    tree — so ``/publish`` re-validates and never reaches Discord when it shouldn't.
+3. **The server is the authority on the target.** ``/cv2-builder/new`` is the one
+   route a browser may name a publish target through, and it stores one only if
+   ``autopost_settings.check_channel`` vouches for it — so the row ``/publish`` reads
+   from can never hold a channel nobody vetted.
 """
 
 import json
 import typing as t
 import uuid
+from unittest.mock import MagicMock
 
 import aiohttp.web
+import hikari as h
 import pytest
 
 from dd.anchor import web
-from dd.anchor.extensions import cv2_builder_page as page
+from dd.anchor.extensions import (
+    autopost_settings as aps,
+    cv2_builder_page as page,
+)
 from dd.anchor.extensions.web_auth import AUTH_USER_KEY
+from dd.common import cfg
 from dd.common.schemas import Cv2Draft
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
@@ -313,14 +323,206 @@ async def test_new_draft_returns_a_url_and_persists_the_target(
     assert "//cv2-builder" not in url
 
 
+async def test_new_draft_id_returns_a_bare_id_not_a_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The web path's reason for existing: an id, with no ``public_base_url`` involved.
+
+    That variable is legitimately empty on a local dev box, so a web flow composing an
+    absolute URL from it would hand the browser a dead link on the very deployment the
+    flow is most likely to be tried on.
+    """
+    monkeypatch.setattr(page.cfg, "public_base_url", "")
+
+    draft_id = await page.new_draft_id(user_id=OWNER, action=Cv2Draft.ACTION_POST)
+
+    assert "/" not in draft_id
+    assert await Cv2Draft.get_for_user(draft_id, OWNER) is not None
+
+
+# --- minting a draft from the web (POST /cv2-builder/new) -----------------------
+
+
+_FULL_PERMS = (
+    h.Permissions.VIEW_CHANNEL
+    | h.Permissions.SEND_MESSAGES
+    | h.Permissions.EMBED_LINKS
+    | h.Permissions.USE_EXTERNAL_EMOJIS
+)
+
+
+def _new_req(body: dict | None, user_id: int = OWNER):
+    """A request to the mint route, which is not draft-scoped (no draft exists yet)."""
+    return t.cast(aiohttp.web.Request, _FakeRequest("", user_id, body))
+
+
+@pytest.fixture
+def vettable_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bot for which ``CHANNEL`` passes every check the mint route makes.
+
+    Deliberately a plain ``GUILD_TEXT`` channel: a one-off custom post is just a message
+    — nothing follows it — so the route runs the validator with ``announce_only=False``
+    and a text channel must be accepted. Guild scope is pinned rather than inherited
+    from the ambient environment, since ``TEST_ENV`` would otherwise silently move the
+    allowed set off ``GUILD``.
+    """
+    monkeypatch.setattr(cfg, "kyber_discord_server_id", GUILD)
+    monkeypatch.setattr(cfg, "control_discord_server_id", -1)
+    monkeypatch.setattr(cfg, "test_env", ())
+
+    channel = MagicMock(spec=h.GuildTextChannel)
+    channel.guild_id = GUILD
+    channel.type = h.ChannelType.GUILD_TEXT
+
+    class _Rest:
+        async def fetch_channel(self, _channel_id: int) -> h.GuildTextChannel:
+            return channel
+
+        async def fetch_member(self, _guild_id: int, _user_id: int) -> t.Any:
+            return object()
+
+    class _FakeBot:
+        rest = _Rest()
+
+        def get_me(self) -> h.OwnUser:
+            return t.cast(h.OwnUser, MagicMock(spec=h.OwnUser, id=999))
+
+    monkeypatch.setattr(web, "_bot", _FakeBot())
+    monkeypatch.setattr(
+        aps, "calculate_permissions", lambda _member, _chan: _FULL_PERMS
+    )
+
+
+async def test_new_mints_a_draft_for_a_vetted_channel(vettable_channel: None) -> None:
+    resp = await page._handle_new(_new_req({"channel_id": str(CHANNEL)}))
+    payload = _payload(resp)
+
+    assert resp.status == 200
+    # Relative, and not a 302: the page decides whether to navigate, and a fetch() that
+    # followed a redirect would be handed the builder's HTML instead of an answer.
+    assert payload["path"].startswith("/cv2-builder/")
+    assert "://" not in payload["path"]
+
+    draft_id = payload["path"].rsplit("/", 1)[-1]
+    draft = await Cv2Draft.get_for_user(draft_id, OWNER)
+    assert draft is not None
+    assert draft.action == Cv2Draft.ACTION_POST
+    assert draft.target_channel_id == CHANNEL
+    # Resolved from the channel the server fetched, not taken from the request.
+    assert draft.guild_id == GUILD
+
+
+async def test_new_credits_the_authenticated_user(vettable_channel: None) -> None:
+    """``created_by`` comes from the session, so a body claiming otherwise is ignored —
+    otherwise a draft could be minted into another owner's creator-scoped space."""
+    resp = await page._handle_new(
+        _new_req({"channel_id": str(CHANNEL), "created_by": OTHER_OWNER}, user_id=OWNER)
+    )
+
+    draft_id = _payload(resp)["path"].rsplit("/", 1)[-1]
+    assert await Cv2Draft.get_for_user(draft_id, OTHER_OWNER) is None
+    assert await Cv2Draft.get_for_user(draft_id, OWNER) is not None
+
+
+async def test_new_refuses_an_unusable_channel_with_the_validators_own_sentence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The validator's whole design is that the reason is the payload, so the route
+    surfaces the sentence verbatim rather than flattening it to "that didn't work".
+
+    Driven through the real validator (bot not up is its fail-closed branch), so this
+    breaks if the refusal ever stops reaching the caller.
+    """
+    monkeypatch.setattr(web, "_bot", None)
+
+    resp = await page._handle_new(_new_req({"channel_id": str(CHANNEL)}))
+    payload = _payload(resp)
+
+    assert resp.status == 400
+    assert (
+        "the bot hasn't finished starting yet — try again in a moment."
+        in payload["error"]
+    )
+    assert "path" not in payload
+
+
+async def test_new_refuses_a_channel_outside_the_allowed_guilds(
+    vettable_channel: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Same guild scope the settings page's non-control-scoped channel fields use: the
+    # browser may name a channel, but not one in a server this bot doesn't serve.
+    monkeypatch.setattr(cfg, "kyber_discord_server_id", GUILD + 1)
+
+    resp = await page._handle_new(_new_req({"channel_id": str(CHANNEL)}))
+
+    assert resp.status == 400
+    assert "server this setting can't post to" in _payload(resp)["error"]
+
+
+@pytest.mark.parametrize(
+    "body", [None, {}, {"channel_id": None}, {"channel_id": "not a number"}]
+)
+async def test_new_rejects_a_body_with_no_usable_channel_id(body: dict | None) -> None:
+    resp = await page._handle_new(_new_req(body))
+
+    assert resp.status == 400
+    assert "path" not in _payload(resp)
+
+
 async def test_routes_are_registered() -> None:
     app = aiohttp.web.Application()
     page.register_cv2_builder_routes(app)
     paths = {
         r.resource.canonical for r in app.router.routes() if r.resource is not None
     }
+    assert "/cv2-builder/new" in paths
     assert "/cv2-builder/{draft}" in paths
     assert "/cv2-builder/{draft}/publish" in paths
+
+
+# --- draft disposal -------------------------------------------------------------
+
+
+async def test_prune_drafts_contains_a_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The daily cron calls this; an escaping exception would take the scheduled job
+    down with it, so the next day's sweep would not run either."""
+
+    async def _boom(*_args, **_kwargs) -> int:
+        raise RuntimeError("db is down")
+
+    monkeypatch.setattr(Cv2Draft, "prune", _boom)
+
+    await page._prune_drafts()  # must not raise
+
+
+async def test_startup_prunes_once_and_schedules_a_daily_sweep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Boot-time prune (what cleans up after a long outage) *and* a recurring one (what
+    keeps a long-lived process from accumulating drafts a web button mints per click).
+
+    The schedule must also stay off 17:00 UTC, where every producer in this bot fires —
+    a delete has no reason to contend with the day's posting.
+    """
+    pruned: list[int] = []
+    specs: list[str] = []
+
+    async def _fake_prune(*_args, **_kwargs) -> int:
+        pruned.append(1)
+        return 0
+
+    def _fake_crontab(spec: str, **_kwargs):
+        specs.append(spec)
+        return lambda fn: fn
+
+    monkeypatch.setattr(Cv2Draft, "prune", _fake_prune)
+    monkeypatch.setattr(page.aiocron, "crontab", _fake_crontab)
+
+    await page._on_started(t.cast(h.StartedEvent, object()))
+
+    assert pruned == [1]
+    assert specs == ["0 4 * * *"]
+    assert not specs[0].startswith("0 17 ")
 
 
 async def test_page_shell_is_servable() -> None:
