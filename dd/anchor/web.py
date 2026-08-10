@@ -23,6 +23,7 @@ started once on ``StartedEvent`` (see ``dd/anchor/__main__.py``) and stopped on
 ``StoppingEvent``.
 """
 
+import enum
 import logging
 import typing as t
 from pathlib import Path
@@ -47,21 +48,50 @@ _route_registrars: list[t.Callable[[aiohttp.web.Application], None]] = []
 _runner: aiohttp.web.AppRunner | None = None
 
 
+class CardGroup(enum.Enum):
+    """Which errand a homepage entry belongs to.
+
+    The homepage used to be an alphabetical list of *modules*, which is how the bot is
+    built rather than how it is administered — the two most frequent errands, composing
+    the Weekly Reset and Trials posts, sorted last. These four groups are the admin's
+    errands instead, and the declaration order below **is** the display order: most
+    frequent first, and the group holding the one irreversible action last.
+    """
+
+    SEND = "Send a post"
+    DATA = "Fix the data behind a post"
+    CHECK = "Check what happened"
+    ADMIN = "Set up and admin"
+
+
 class Card(t.NamedTuple):
     """A homepage entry for one web page/tool.
 
     ``href`` is a same-origin path (e.g. ``/rotation``); ``title``/``description`` are
-    dev-authored copy rendered (escaped) into the homepage card grid.
+    dev-authored copy rendered (escaped) into the homepage.
+
+    ``group`` places the entry under one of the four errand headings; ``order`` sorts
+    within the group, low first, ties broken by title. Order is explicit rather than
+    alphabetical because within an errand the *frequency* of each task is the useful
+    ranking and no property of the title encodes it.
+
+    ``danger`` marks the entry as destructive. Exactly one card sets it — Shut down —
+    and the homepage renders it as the only red thing on the page. That scarcity is the
+    point: a page with one red link says which action is different from all the others,
+    and a page with five says nothing.
     """
 
     title: str
     description: str
     href: str
+    group: CardGroup = CardGroup.ADMIN
+    order: int = 100
+    danger: bool = False
 
 
 # Homepage cards contributed by feature modules at import time (mirrors
 # _route_registrars). Read at request time by the homepage handler, so contribution
-# order is irrelevant — the homepage sorts for display.
+# order is irrelevant — the homepage groups and sorts for display.
 _cards: list[Card] = []
 
 
@@ -90,6 +120,22 @@ def register_card(card: Card) -> None:
 def registered_cards() -> list[Card]:
     """Return the contributed homepage cards (a copy; caller sorts for display)."""
     return list(_cards)
+
+
+def grouped_cards() -> list[tuple[CardGroup, list[Card]]]:
+    """The cards as the homepage renders them: by group, in group-declaration order.
+
+    A group with no cards is omitted rather than rendered empty — a heading over
+    nothing reads as something broken.
+    """
+    by_group: dict[CardGroup, list[Card]] = {group: [] for group in CardGroup}
+    for card in _cards:
+        by_group[card.group].append(card)
+    return [
+        (group, sorted(cards, key=lambda c: (c.order, c.title)))
+        for group, cards in by_group.items()
+        if cards
+    ]
 
 
 # --- the live bot -------------------------------------------------------------------

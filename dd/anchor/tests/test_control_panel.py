@@ -55,6 +55,68 @@ class _FakeRequest:
     """Minimal aiohttp.web.Request stand-in — the panel handler reads nothing off it."""
 
 
+# --- grouping ------------------------------------------------------------------------
+#
+# The panel used to sort every card alphabetically by title, which put the two most
+# frequent errands last. Cards now carry the errand they belong to, and the group order
+# is the enum's declaration order rather than anything about the words.
+
+
+async def test_groups_render_in_declaration_order_not_alphabetically(
+    clean_cards: None,
+) -> None:
+    for group in reversed(list(web.CardGroup)):
+        web.register_card(web.Card(f"card for {group.name}", "", "/x", group))
+
+    assert [group for group, _ in web.grouped_cards()] == list(web.CardGroup)
+
+
+async def test_within_a_group_order_wins_over_title(clean_cards: None) -> None:
+    # Weekly Reset before Trials because it is the more frequent errand — alphabetical
+    # would put Trials first, which is exactly the ranking being replaced.
+    web.register_card(
+        web.Card("Trials of Osiris", "", "/trials", web.CardGroup.SEND, 20)
+    )
+    web.register_card(
+        web.Card("Weekly Reset", "", "/weekly_reset", web.CardGroup.SEND, 10)
+    )
+
+    ((_, cards),) = web.grouped_cards()
+
+    assert [c.title for c in cards] == ["Weekly Reset", "Trials of Osiris"]
+
+
+async def test_equal_order_falls_back_to_title(clean_cards: None) -> None:
+    web.register_card(web.Card("Beta", "", "/b", web.CardGroup.DATA, 10))
+    web.register_card(web.Card("Alpha", "", "/a", web.CardGroup.DATA, 10))
+
+    ((_, cards),) = web.grouped_cards()
+
+    assert [c.title for c in cards] == ["Alpha", "Beta"]
+
+
+async def test_an_empty_group_is_omitted_not_rendered_headless(
+    clean_cards: None,
+) -> None:
+    # A heading over nothing reads as something broken.
+    web.register_card(web.Card("Feeds", "", "/feeds", web.CardGroup.ADMIN))
+
+    assert [group for group, _ in web.grouped_cards()] == [web.CardGroup.ADMIN]
+
+
+async def test_a_card_defaults_to_admin_so_an_unconverted_module_still_appears(
+    clean_cards: None,
+) -> None:
+    # The three positional fields are the whole of the old signature; a module that has
+    # not been converted yet must not vanish from the panel.
+    web.register_card(web.Card("Legacy", "desc", "/legacy"))
+
+    ((group, cards),) = web.grouped_cards()
+
+    assert group is web.CardGroup.ADMIN
+    assert cards[0].danger is False
+
+
 async def test_register_card_appends_and_registered_cards_returns_copy(
     clean_cards: None,
 ) -> None:
