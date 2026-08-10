@@ -230,6 +230,32 @@ MYSQL_DUMP = n=$$(echo "$$MYSQL_URL" | sed -e "s|^[a-z]*://||"); hp=$$(echo "$$n
 dump-mysql:
 	railway run $(RAILWAY_ENV_FLAG) --service MySQL -- bash -c '$(MYSQL_DUMP) > "kyber-$(RAILWAY_ENV)-mysql-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
 
+# ── Environment variables: snapshot and restore ────────────────────────────────────
+# The cutover ends by deleting a dozen legacy variables, and Railway keeps no history.
+# SHEETS_PRIVATE_KEY is a Google service-account key you would not get back; the Discord
+# and Bungie secrets are no better. Take the snapshot before you delete anything.
+#
+# The file lands in the repo root as kyber-<env>-vars-<UTC>.json — a different name per
+# environment, so a prod snapshot and a dev one cannot be confused for each other — and
+# `kyber-*-vars-*.json` is gitignored alongside the .sql dumps. It holds live secrets in
+# plaintext and is written 0600; treat it exactly like a database dump.
+dump-vars:
+	uv run python -m dd.common.railway_vars dump --environment $(RAILWAY_ENV)
+
+# Put a snapshot back: `make restore-vars FILE=kyber-production-vars-….json`.
+# Dry run by default, EXECUTE=1 to write, and it writes with --skip-deploys — a restore
+# is a config repair, and redeploying is a separate decision.
+#
+# The snapshot records which environment it came from and the restore targets that one,
+# so `make prod restore-vars FILE=<a dev snapshot>` refuses rather than quietly seeding
+# production with dev's tokens. RAILWAY_*, DATABASE_* and MYSQL_* are never written back
+# (platform-injected, or reference variables Railway hands us already flattened — see
+# the module docstring).
+restore-vars:
+	@[ -n "$(FILE)" ] || { echo 'Set FILE: make restore-vars FILE=kyber-dev-vars-….json' >&2; exit 1; }
+	uv run python -m dd.common.railway_vars restore --file "$(FILE)" \
+		--environment $(RAILWAY_ENV) $(WRITE)
+
 # ── Cutover: MySQL → Postgres, env → database ──────────────────────────────────────
 # The runbook's window, one target per step. Every one runs under `railway run`, so
 # none of them needs a local .env, a hand-pasted URL, or a variable exported into your
@@ -392,7 +418,8 @@ check: lint format-check typecheck test test-js
 	dev-down-volumes run-beacon-local run-anchor-local _require-mem-cap \
 	run-beacon-devbot run-anchor-devbot devbot-up devbot-down devbot-logs \
 	devbot-status destroy-schemas create-schemas migration-plan migration-apply \
-	migration-dry-run migration-check dump-db dump-mysql cutover-backup \
+	migration-dry-run migration-check dump-db dump-mysql dump-vars restore-vars \
+	cutover-backup \
 	cutover-schema cutover-copy cutover-settings cutover-verify mysql-to-postgres \
 	lint format format-check typecheck test test-js test-unit test-browser \
 	coverage test-integration test-mirror-integration test-all check

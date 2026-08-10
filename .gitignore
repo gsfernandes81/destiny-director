@@ -150,6 +150,10 @@ manifest/
 # Local DB dumps (`make dump-prod-db` / `dump-dev-db`). Alembic revisions are Python,
 # so nothing under migrations/ is caught by this.
 *.sql
+# Railway variable snapshots (make dump-vars). Live secrets in plaintext — the Google
+# service-account key among them — so this sits with the .sql dumps above rather than
+# anywhere near a commit.
+kyber-*-vars-*.json
 
 # My ToDo list
 ToDo
