@@ -273,6 +273,41 @@ restore-raw:
 	uv run python -m dd.common.railway_vars restore-raw --file "$(if $(FILE),$(FILE),-)" \
 		--service "$(SERVICE)" --environment $(RAILWAY_ENV) $(WRITE)
 
+# Check dev and production are shaped the same, so a rehearsal on dev predicts
+# production rather than merely resembling it. Reads only — nothing is written, and it
+# needs no .env, no database and no `railway run`; `railway variables --json` per
+# service is the whole input.
+#
+#     make vars-check
+#
+# Two axes. Across environments (dev/anchor vs production/anchor, and the same for
+# beacon): a name on one side and not the other, or a value that differs where the name
+# is not environment-scoped. Credentials, guild ids, channel ids and the database URLs
+# are allowed to differ — flagging those would be noise. DATABASE_SSL,
+# RUN_MIGRATIONS_ON_STARTUP and OOM_SCORE_ADJ are deliberately not exempt: those
+# differing is exactly what makes a dev rehearsal stop predicting prod.
+#
+# Across services (anchor vs beacon within one environment): no value may differ at all
+# — the two bots share a database, a guild and a set of channels — and a name on one bot
+# only is a finding unless it is one of the handful that belongs to a single bot (the
+# gateway tokens, and anchor's web-UI settings). This axis is here because it is not
+# hypothetical: DEFAULT_URL and DISABLE_BAD_CHANNELS are set on beacon and not on
+# anchor, and `cutover-settings` runs under anchor.
+#
+# Exit 1 on any difference, so it works as a gate. Names only — values are secrets and
+# are never printed. It cannot see a ${{shared.X}} that was flattened to a literal on
+# one side: `railway variables` renders references, and only the web Raw Editor does
+# not (the same limitation `restore-raw` exists for).
+#
+# ENVS/SERVICES override the pairs; `prod` has no meaning here, since the target spans
+# both environments by definition.
+ENVS ?= dev,production
+SERVICES ?= anchor,beacon
+
+vars-check:
+	uv run python -m dd.common.railway_vars compare \
+		--environments $(ENVS) --services $(SERVICES)
+
 # ── Cutover: MySQL → Postgres, env → database ──────────────────────────────────────
 # The runbook's window, one target per step. Every one runs under `railway run`, so
 # none of them needs a local .env, a hand-pasted URL, or a variable exported into your
@@ -460,7 +495,7 @@ check: lint format-check typecheck test test-js
 	run-beacon-devbot run-anchor-devbot devbot-up devbot-down devbot-logs \
 	devbot-status destroy-schemas create-schemas migration-plan migration-apply \
 	migration-dry-run migration-check dump-db dump-mysql dump-vars restore-vars restore-raw \
-	cutover-backup \
+	vars-check cutover-backup \
 	cutover-schema cutover-copy cutover-settings cutover-verify mysql-to-postgres \
 	lint format format-check typecheck test test-js test-unit test-browser \
 	coverage test-integration test-mirror-integration test-all check

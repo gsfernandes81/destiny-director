@@ -259,3 +259,167 @@ def test_tabs_and_newlines_are_still_allowed_in_a_value() -> None:
     # A genuinely multi-line value is legal, if unusual, and the guard must not be so
     # eager that it refuses one.
     assert rv.parse_raw('FOO="line1\\nline2"')["FOO"] == "line1\nline2"
+
+
+# --- parity ---------------------------------------------------------------------------
+#
+# A dev rehearsal predicts production only to the extent the two are shaped the same.
+# Both axes are checked; the service one exists because it caught a real miss by hand.
+
+
+def test_two_identical_environments_report_nothing() -> None:
+    both = {"anchor": {"FOO": "1"}, "beacon": {"FOO": "1"}}
+    assert rv.compare({"dev": both, "production": both}) == []
+
+
+def test_a_name_on_one_environment_only_is_a_difference() -> None:
+    found = rv.compare(
+        {
+            "dev": {"anchor": {"FOO": "1", "EXTRA": "x"}},
+            "production": {"anchor": {"FOO": "1"}},
+        }
+    )
+
+    assert [(d.axis, d.name, d.kind) for d in found] == [
+        ("environment", "EXTRA", "missing")
+    ]
+    assert found[0].left == "dev/anchor"
+
+
+def test_a_dev_only_helper_is_not_missing_from_production() -> None:
+    # TEST_ENV and DEV_AUTH_USER_ID exist to make a development environment behave
+    # differently; their absence from prod is the point, not drift.
+    assert (
+        rv.compare(
+            {
+                "dev": {"anchor": {"TEST_ENV": "1", "DEV_AUTH_USER_ID": "9"}},
+                "production": {"anchor": {}},
+            }
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        # Environment-scoped: a different database, app, guild or channel per side.
+        ("DISCORD_TOKEN_BEACON", 0),
+        ("KYBER_DISCORD_SERVER_ID", 0),
+        ("FOLLOWABLES", 0),
+        ("DATABASE_URL", 0),
+        ("MYSQL_URL", 0),
+        # Behavioural knobs. These differing is exactly what makes a dev rehearsal stop
+        # predicting production, so they are deliberately NOT exempt — and MYSQL_SSL
+        # shares a prefix with an exempt name, which a prefix-only rule would have let
+        # through.
+        ("DATABASE_SSL", 1),
+        ("MYSQL_SSL", 1),
+        ("RUN_MIGRATIONS_ON_STARTUP", 1),
+        ("OOM_SCORE_ADJ", 1),
+    ],
+)
+def test_which_values_may_differ_between_environments(name: str, expected: int) -> None:
+    found = rv.compare(
+        {
+            "dev": {"anchor": {name: "a"}},
+            "production": {"anchor": {name: "b"}},
+        }
+    )
+
+    assert len([d for d in found if d.kind == "value"]) == expected
+
+
+def test_railway_injected_variables_are_ignored_entirely() -> None:
+    assert (
+        rv.compare(
+            {
+                "dev": {
+                    "anchor": {"RAILWAY_PROJECT_ID": "a", "RAILWAY_ONLY_HERE": "x"}
+                },
+                "production": {"anchor": {"RAILWAY_PROJECT_ID": "b"}},
+            }
+        )
+        == []
+    )
+
+
+def test_a_variable_on_one_bot_only_is_caught() -> None:
+    # The real case, and the reason this axis exists: DEFAULT_URL and
+    # DISABLE_BAD_CHANNELS are set on beacon and not on anchor, and cutover-settings
+    # runs under anchor — so the import reports them "not set" and the DB default wins.
+    found = rv.compare(
+        {"production": {"anchor": {}, "beacon": {"DEFAULT_URL": "https://k/"}}}
+    )
+
+    assert [(d.axis, d.name, d.kind) for d in found] == [
+        ("service", "DEFAULT_URL", "missing")
+    ]
+    assert found[0].left == "production/beacon"
+
+
+def test_a_variable_that_belongs_to_one_bot_is_not_a_finding() -> None:
+    found = rv.compare(
+        {
+            "production": {
+                "anchor": {"DISCORD_TOKEN_ANCHOR": "a", "PORT": "8080"},
+                "beacon": {"DISCORD_TOKEN_BEACON": "b"},
+            }
+        }
+    )
+
+    assert found == []
+
+
+def test_the_two_bots_may_not_disagree_on_a_value_at_all() -> None:
+    # Within one environment they share a database, a guild and a set of channels, so
+    # even the names the environment axis exempts have to match here. A FOLLOWABLES that
+    # differs per bot means the import picks up whichever service it happened to run
+    # under.
+    found = rv.compare(
+        {
+            "dev": {
+                "anchor": {"FOLLOWABLES": "{}"},
+                "beacon": {"FOLLOWABLES": '{"xur":1}'},
+            }
+        }
+    )
+
+    assert [(d.axis, d.name, d.kind) for d in found] == [
+        ("service", "FOLLOWABLES", "value")
+    ]
+
+
+def test_the_service_axis_can_be_switched_off() -> None:
+    variables = {"dev": {"anchor": {}, "beacon": {"EMOJI": "x"}}}
+
+    assert rv.compare(variables, cross_service=False) == []
+    assert rv.compare(variables) != []
+
+
+def test_the_report_names_variables_but_never_prints_a_value() -> None:
+    found = rv.compare(
+        {
+            "dev": {"anchor": {"DATABASE_SSL": "hunter2"}},
+            "production": {"anchor": {"DATABASE_SSL": "other"}},
+        }
+    )
+
+    report = rv._format_comparison(found, ["environment", "service"])
+
+    assert "DATABASE_SSL" in report
+    assert "hunter2" not in report
+    # Both headings appear even when one axis is clean, so "no output" and "no drift"
+    # cannot be confused.
+    assert "none" in report
+
+
+def test_a_clean_comparison_exits_zero_and_a_dirty_one_exits_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live = {"anchor": {"FOO": "1"}, "beacon": {"FOO": "1"}}
+    monkeypatch.setattr(rv, "fetch", lambda svc, env: dict(live[svc]))
+    assert rv.main(["compare"]) == 0
+
+    live["beacon"]["ONLY_BEACON"] = "x"
+    assert rv.main(["compare"]) == 1
