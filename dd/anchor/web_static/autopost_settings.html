@@ -31,10 +31,21 @@
          styles are inlined here. Palette mirrors control_panel.html. */
       main.settings { margin: 1rem 0; }
       form#toggles { display: flex; flex-direction: column; gap: .6rem; }
-      /* One box per category: a feed and its content sub-toggles share a .group. */
+      /* One box per category: a feed and its content sub-toggles share a .group.
+         NOT `overflow: hidden`, however tempting: a channel row's Tom Select dropdown is
+         absolutely positioned below its control, so a clipping ancestor cuts the list off
+         at the box edge — the shorter the group, the less of it survives. The rounded
+         corners that overflow was buying are bought instead by rounding the first and last
+         child, which is all the clipping ever did here (the only children with a
+         background of their own are the .row.sub / .row.flat-alt variants). */
       .group {
         border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-3);
-        overflow: hidden;
+      }
+      .group > :first-child {
+        border-top-left-radius: inherit; border-top-right-radius: inherit;
+      }
+      .group > :last-child {
+        border-bottom-left-radius: inherit; border-bottom-right-radius: inherit;
       }
       .group:hover { border-color: var(--border-hover); }
       /* A general (non-feed) group's title — a feed group needs none, since its own
@@ -141,6 +152,16 @@
          long label on a narrow viewport, while still fitting beside it on desktop. */
       .row.channelrow { flex-wrap: wrap; }
       .channelfield { min-width: 14rem; flex: 1 1 14rem; }
+      /* A name wider than the control ends in an ellipsis rather than being sliced
+         mid-glyph: Tom Select gives both the chosen item and the dropdown rows
+         `overflow: hidden` but neither `white-space` nor `text-overflow`, so a long one
+         (a deep thread name, or the synthetic "Unknown channel (<id>)" for an id the bot
+         can no longer see) is cut off with nothing to say it was. One line per option,
+         because the list is scanned rather than read. */
+      .ts-wrapper.single .ts-control > .item,
+      .ts-dropdown .option {
+        max-width: 100%; text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
+      }
 
       /* Toggle switch — a checkbox restyled as an iOS-style slider. The <input> stays a
          checkbox (visually hidden) so nothing about the save/read path changes. */
