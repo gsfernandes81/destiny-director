@@ -710,9 +710,11 @@ def register_trials_routes(app: aiohttp.web.Application) -> None:
 web.register_routes(register_trials_routes)
 web.register_card(
     web.Card(
-        "Trials",
-        "Compose & publish the Trials of Osiris post",
+        "Trials of Osiris",
+        "Write this weekend's Trials post and publish it.",
         "/trials",
+        web.CardGroup.SEND,
+        20,
     )
 )
 

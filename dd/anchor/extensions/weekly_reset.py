@@ -1515,8 +1515,10 @@ web.register_routes(register_weekly_reset_routes)
 web.register_card(
     web.Card(
         "Weekly Reset",
-        "Compose & publish the weekly-reset post",
+        "Write this week's reset post and publish it.",
         "/weekly_reset",
+        web.CardGroup.SEND,
+        10,
     )
 )
 

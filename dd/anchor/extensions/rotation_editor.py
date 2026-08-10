@@ -516,11 +516,18 @@ async def _warm_item_index(_event: h.StartedEvent) -> None:
     task.add_done_callback(_warm_tasks.discard)
 
 
+# One row for the whole editor while it is still one page listing every rotation type.
+# The landing page's group 2 wants a row per subject — Lost Sector schedule, Xûr's map,
+# Trials loot, Iron Banner weeks, the legacy activity pages — and that is a split of
+# THIS page, not of this card; the card follows once the routes exist.
 web.register_card(
     web.Card(
-        "Rotation Editor",
-        "Edit rotation post data (Xûr, weekly rotations, …)",
+        "Rotation data",
+        "The Lost Sector schedule, Xûr's locations, Trials loot, Iron Banner weeks, "
+        "and the legacy activity pages.",
         "/rotation",
+        web.CardGroup.DATA,
+        10,
     )
 )
 

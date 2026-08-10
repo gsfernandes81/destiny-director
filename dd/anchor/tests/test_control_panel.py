@@ -18,6 +18,7 @@
 # Authentication is handled centrally by the web_auth middleware (covered in
 # test_web_auth.py), so the handler assumes an already-authenticated request.
 
+import datetime as dt
 import json
 import typing as t
 
@@ -26,6 +27,7 @@ import pytest
 
 from dd.anchor import web
 from dd.anchor.extensions import control_panel
+from dd.common import iron_banner
 
 pytestmark = pytest.mark.asyncio
 
@@ -49,6 +51,33 @@ def clean_cards() -> t.Iterator[None]:
         yield
     finally:
         web._cards[:] = saved
+
+
+@pytest.fixture(autouse=True)
+def quiet_iron_banner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No live Iron Banner week, and no database, for every test that isn't about it.
+
+    Rendering the panel now asks the rotation store whether Iron Banner is on. That is
+    one PK SELECT in production and an irrelevant dependency in a test about card
+    grouping, so it answers "no" by default; the two tests that care patch it again.
+    """
+
+    async def _empty() -> iron_banner.IronBannerRotation:
+        return iron_banner.IronBannerRotation([])
+
+    monkeypatch.setattr(control_panel.iron_banner, "load_rotation", _empty)
+
+
+def _live_iron_banner_week(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Put an Iron Banner event around *now*."""
+    now = int(dt.datetime.now(tz=dt.UTC).timestamp())
+
+    async def _rotation() -> iron_banner.IronBannerRotation:
+        return iron_banner.IronBannerRotation(
+            [iron_banner.Event(now - 3600, now + 3600, "Pool", ["Control"], [])]
+        )
+
+    monkeypatch.setattr(control_panel.iron_banner, "load_rotation", _rotation)
 
 
 class _FakeRequest:
@@ -130,27 +159,109 @@ async def test_register_card_appends_and_registered_cards_returns_copy(
     assert web.registered_cards() == [card]
 
 
-async def test_render_lists_cards_href_and_title_sorted(clean_cards: None) -> None:
-    # Register out of order; the panel sorts by (title, …) for a stable display.
-    web.register_card(web.Card("Weekly Reset", "compose the post", "/weekly_reset"))
-    web.register_card(web.Card("Rotation Editor", "edit rotations", "/rotation"))
+async def test_render_lists_cards_href_and_title_in_order(clean_cards: None) -> None:
+    # Register out of display order; the panel renders them by (order, title).
+    web.register_card(
+        web.Card(
+            "Trials of Osiris", "the weekend post", "/trials", web.CardGroup.SEND, 20
+        )
+    )
+    web.register_card(
+        web.Card(
+            "Weekly Reset", "the reset post", "/weekly_reset", web.CardGroup.SEND, 10
+        )
+    )
 
-    html_out = control_panel._render_panel_html()
+    html_out = await control_panel._render_panel_html()
 
-    assert 'href="/rotation"' in html_out
+    assert 'href="/trials"' in html_out
     assert 'href="/weekly_reset"' in html_out
-    assert "Rotation Editor" in html_out
-    assert "Weekly Reset" in html_out
-    # Sorted: "Rotation Editor" (R) renders before "Weekly Reset" (W).
-    assert html_out.index("Rotation Editor") < html_out.index("Weekly Reset")
+    assert html_out.index("Weekly Reset") < html_out.index("Trials of Osiris")
+
+
+async def test_render_emits_every_group_heading_in_enum_order(
+    clean_cards: None,
+) -> None:
+    # The whole point of the rewrite: the reader's errand, not the alphabet, decides
+    # what comes first. Register backwards to prove the order is not contribution order.
+    for group in reversed(list(web.CardGroup)):
+        web.register_card(web.Card(f"{group.name} page", "", f"/{group.name}", group))
+
+    html_out = await control_panel._render_panel_html()
+
+    positions = [html_out.index(group.value) for group in web.CardGroup]
+    assert positions == sorted(positions)
+
+
+async def test_a_danger_card_is_the_only_one_rendered_red(clean_cards: None) -> None:
+    web.register_card(web.Card("Quiet", "", "/quiet", web.CardGroup.ADMIN, 10))
+    web.register_card(
+        web.Card("Loud", "", "/loud", web.CardGroup.ADMIN, 20, danger=True)
+    )
+
+    html_out = await control_panel._render_panel_html()
+
+    assert '<a class="row danger" href="/loud">' in html_out
+    assert '<a class="row" href="/quiet">' in html_out
+
+
+async def test_iron_banner_week_de_emphasises_the_trials_row(
+    clean_cards: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # De-emphasis, not a gate: the row keeps its href, because "Trials isn't on" is a
+    # fact about the weekend rather than a reason to lock the form.
+    _live_iron_banner_week(monkeypatch)
+    web.register_card(
+        web.Card("Trials of Osiris", "the weekend post", "/trials", web.CardGroup.SEND)
+    )
+
+    html_out = await control_panel._render_panel_html()
+
+    assert '<a class="row quiet" href="/trials">' in html_out
+    assert control_panel._IRON_BANNER_NOTE in html_out
+    assert "the weekend post" not in html_out
+
+
+async def test_a_failed_iron_banner_lookup_renders_trials_normally(
+    clean_cards: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # load_rotation raises when the store is unreadable and nothing has loaded in this
+    # process yet — a cold start during a DB blip, i.e. exactly when someone is opening
+    # the panel to find out what is wrong. Rotation data must not take down the front
+    # door.
+    async def _boom() -> iron_banner.IronBannerRotation:
+        raise RuntimeError("no rotation data and no cache")
+
+    monkeypatch.setattr(control_panel.iron_banner, "load_rotation", _boom)
+    web.register_card(
+        web.Card("Trials of Osiris", "the weekend post", "/trials", web.CardGroup.SEND)
+    )
+
+    html_out = await control_panel._render_panel_html()
+
+    assert '<a class="row" href="/trials">' in html_out
+    assert "the weekend post" in html_out
+    assert control_panel._IRON_BANNER_NOTE not in html_out
+
+
+async def test_sign_out_posts_a_form_rather_than_following_a_link(
+    clean_cards: None,
+) -> None:
+    # web_auth made /auth/logout POST-only and origin-checked because a GET logout is
+    # triggerable cross-site by an <img> or a prefetch. A styled anchor here would
+    # reopen exactly that hole.
+    html_out = await control_panel._render_panel_html()
+
+    assert '<form method="post" action="/auth/logout">' in html_out
+    assert 'href="/auth/logout"' not in html_out
 
 
 async def test_render_escapes_html_in_card_fields(clean_cards: None) -> None:
     web.register_card(web.Card("A & <b>", "desc <script>", "/x?a=1&b=2"))
 
-    html_out = control_panel._render_panel_html()
+    html_out = await control_panel._render_panel_html()
 
-    # The card grid must not contain the raw, unescaped markup we fed in.
+    # The rows must not contain the raw, unescaped markup we fed in.
     assert "<b>" not in html_out
     assert "<script>" not in html_out
     assert "A &amp; &lt;b&gt;" in html_out
@@ -158,15 +269,22 @@ async def test_render_escapes_html_in_card_fields(clean_cards: None) -> None:
     assert "/x?a=1&amp;b=2" in html_out
 
 
-async def test_render_empty_registry_does_not_crash(clean_cards: None) -> None:
-    html_out = control_panel._render_panel_html()
+async def test_render_empty_registry_still_renders_the_panel_s_own_rows(
+    clean_cards: None,
+) -> None:
+    # Configured channels, Sign out and Shut down are actions on this page rather than
+    # links to another one, so they survive an empty card registry — and the last group
+    # is therefore never empty.
+    html_out = await control_panel._render_panel_html()
 
-    assert "No web tools are available." in html_out
-    assert "<!--__CARDS__-->" not in html_out
+    assert 'id="infoBtn"' in html_out
+    assert 'id="stopBtn"' in html_out
+    assert web.CardGroup.ADMIN.value in html_out
+    assert "<!--__GROUPS__-->" not in html_out
 
 
 async def test_handle_panel_returns_html_response(clean_cards: None) -> None:
-    web.register_card(web.Card("Rotation Editor", "edit rotations", "/rotation"))
+    web.register_card(web.Card("Rotation data", "edit rotations", "/rotation"))
 
     resp = await control_panel._handle_panel(
         t.cast(aiohttp.web.Request, _FakeRequest())
@@ -192,8 +310,10 @@ async def test_bot_info_reports_configured_channels() -> None:
     # Snowflakes exceed JS's safe-integer range, so ids travel as strings.
     assert isinstance(payload["controlServerId"], str)
     assert isinstance(payload["testEnv"], list)
+    # By display name, not slug: the dialog says "Lost Sector", never `lost_sector`.
     feeds = {c["feed"] for c in payload["channels"]}
-    assert "lost_sector" in feeds
+    assert "Lost Sector" in feeds
+    assert "lost_sector" not in feeds
 
 
 async def test_bot_info_resolves_channel_names(
@@ -272,10 +392,12 @@ async def test_panel_hosts_the_bot_actions_and_modals(clean_cards: None) -> None
     body = _text(await control_panel._handle_panel(_as_request(_FakeRequest())))
 
     assert 'id="infoBtn"' in body
-    assert 'id="stopBtn"' in body
+    # The destructive row is the only red thing on the page.
+    assert '<button type="button" class="row danger" id="stopBtn">' in body
     # `danger` on the dialog is what makes the shutdown modal read as a warning rather
-    # than another form — the copy below is only half of it.
-    assert '<dialog class="panelmodal danger" id="stopDialog">' in body
+    # than another form — the copy below is only half of it. `consequence` is the motion
+    # half: it opens at --dur-slow, so arriving at it takes a beat.
+    assert '<dialog class="panelmodal danger consequence" id="stopDialog">' in body
     # Shutting down takes the panel with it; the dialog must say so.
     assert "panel runs inside the bot" in body
     assert "/static/control_panel.js" in body

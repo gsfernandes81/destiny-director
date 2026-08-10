@@ -118,8 +118,10 @@ def register_stats_routes(app: aiohttp.web.Application) -> None:
 web.register_routes(register_stats_routes)
 web.register_card(
     web.Card(
-        "Statistics",
-        "Command usage & autopost reach over time",
+        "Reach & usage",
+        "How many servers each feed reaches, and which commands people run.",
         "/stats",
+        web.CardGroup.CHECK,
+        20,
     )
 )

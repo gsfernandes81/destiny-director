@@ -67,6 +67,12 @@
   --dur-fast: 80ms;
   --dur: 140ms;
   --dur-slow: 240ms;
+  /* The gap between one revealed thing and the next (the landing page's four groups).
+     A token rather than a hand-written delay for the same reason as the durations: a
+     literal `40ms` would survive the reduced-motion collapse below and keep sliding the
+     page in for someone who asked the OS to stop. It is a DELAY, so it multiplies —
+     stagger only things you can count on one hand. */
+  --dur-stagger: 40ms;
   /* One spinner rotation. Deliberately NOT one of the --dur* transition tokens: those
      are 80-240ms (right for a state flip, absurd for a rotation) and the reduced-motion
      block zeroes them, which would spin at strobe speed rather than stopping. */
@@ -87,6 +93,9 @@
     --dur-fast: 0.01ms;
     --dur: 0.01ms;
     --dur-slow: 0.01ms;
+    /* Zeroed outright: a stagger is pure sequencing, and there is nothing to sequence
+       once the durations it separates are gone. */
+    --dur-stagger: 0ms;
     /* Slowed, not zeroed: a spinner's job is to say "still working", so it has to keep
        moving. Zeroing it would strobe. */
     --dur-spin: 2400ms;
@@ -102,6 +111,36 @@
    source order. Attribute only: the `.hidden` CLASS some pages define is separate, and
    `#problems.hidden` animates its display, which this must not freeze. */
 [hidden] { display: none !important; }
+
+/* --- the appear utility -----------------------------------------------------------
+   A status line, a validation summary, a "saved" sentence: something that was not on the
+   page a moment ago and now is. It eases down into an EMPTY slot rather than appearing
+   between two frames — motion here says "this is new", which is the one thing a reader
+   who was looking elsewhere cannot get from the words.
+
+   It is deliberately NOT for swapping one message for another: words are read, not
+   watched, and animating a swap makes the reader wait to find out what changed. Hide,
+   then fill, then show.
+
+   `display` is transitioned discretely so a hidden element still leaves the layout, and
+   @starting-style supplies the pre-open state a `display: none` element has no other way
+   to animate from. It hangs off the `.hidden` CLASS, never the `hidden` ATTRIBUTE: the
+   `[hidden] { display: none !important }` rule at the top of this sheet would freeze the
+   discrete transition it needs.
+
+   `#problems` (the hybrid-post forms' validation panel) is named here because this rule
+   IS that pattern, lifted out of `.form-page` scope — the forms' own sheet keeps only
+   the panel's colours. Anything else that wants it asks for `class="appear hidden"`. */
+.appear, #problems {
+  transition: opacity var(--dur) ease, transform var(--dur) ease, display var(--dur);
+  transition-behavior: allow-discrete;
+}
+@starting-style {
+  .appear, #problems { opacity: 0; transform: translateY(-.25rem); }
+}
+.appear.hidden, #problems.hidden {
+  display: none; opacity: 0; transform: translateY(-.25rem);
+}
 
 /* A wide table scrolls INSIDE its container rather than widening the document. Here
    rather than in a page sheet because it is layout chrome, not a page's own look: the
@@ -164,10 +203,35 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
    (cv2_builder.css turns this back off for its palette, which is cursor: grab) — a
    grab handle that dips on pointerdown reads as a mis-click at the start of a gesture. */
 button:not(:disabled):active { transform: translateY(1px); }
+
+/* --- page entry -------------------------------------------------------------------
+   `main` rises and fades in once, on load. Deliberately the container and not its
+   children: staggering a page's own content means the reader watches it assemble every
+   single visit, and the header staying put is what makes main's rise legible at all —
+   something has to hold still for something else to move against.
+
+   `backwards` rather than `both`: with no delay the backwards fill is a no-op, and a
+   forwards fill would leave `main` animation-controlled after it finished. That matters
+   for a transform — an element with a transform is a containing block for `position:
+   fixed` descendants — which is also why the CV2 builder's mount opts out below: its
+   drag ghost, context menu and emoji picker are all fixed children of `main`, and
+   re-parenting them to a briefly-transformed ancestor moves them under the pointer. The
+   opt-out names the mount twice because the browser-test harness
+   (web_static/tests/builder_harness.html) mounts the same widget on a bare `<main
+   id="mount">`, and a drag begun in the first 140ms of that page would be measured
+   against a moving ancestor — an invisible source of flake in the one suite that drives
+   real pointer events. */
+main:not(.cv2b-mount, #mount) {
+  animation: page-enter var(--dur) var(--ease-out) backwards;
+}
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(4px); }
+}
+
 header { padding-top: 1.2rem; }
 h1 { font-size: 1.3rem; margin: 0 0 .2rem; }
 .muted { color: var(--text-faint); font-size: .85rem; }
-/* Header nav links (e.g. "← Control panel") — one place so every page matches. */
+/* Header nav links (e.g. "← Home") — one place so every page matches. */
 .backlink { color: var(--text-faint); text-decoration: none; font-size: .85rem; }
 .backlink:hover { text-decoration: underline; }
 p.nav { margin: 0 0 .4rem; }
@@ -236,23 +300,14 @@ p.nav { margin: 0 0 .4rem; }
 .form-page .preview-head { display: flex; align-items: center; gap: .6rem; }
 .form-page .preview-head h2 { font-size: 1.05rem; margin: 0; flex: 1 1 auto; }
 
-/* The problem list is the only thing that says why a publish was refused, so it eases in
-   rather than appearing between two frames. `display` is transitioned discretely so the
-   element still leaves the layout when hidden, and @starting-style supplies the pre-open
-   state a display:none element would otherwise have no way to animate from. Both forms
-   ship it with class="hidden", so this never fires on page load. */
+/* The problem list is the only thing that says why a publish was refused. Its LOOK is
+   here; its motion is the shared appear utility near the top of this sheet, which names
+   `#problems` directly so both forms keep it without a markup change. Both forms ship it
+   with class="hidden", so it never fires on page load. */
 .form-page #problems {
   color: var(--err); margin: 0; padding: .5rem .5rem .5rem 1.6rem;
   border: 1px solid var(--danger-border); border-radius: var(--radius);
   background: var(--danger-bg);
-  transition: opacity var(--dur) ease, transform var(--dur) ease, display var(--dur);
-  transition-behavior: allow-discrete;
-}
-@starting-style {
-  .form-page #problems { opacity: 0; transform: translateY(-.25rem); }
-}
-.form-page #problems.hidden {
-  display: none; opacity: 0; transform: translateY(-.25rem);
 }
 
 /* --- action toolbar (a sibling below main.layout) --- */
@@ -312,6 +367,61 @@ button.small { padding: .35rem .75rem; font-size: .85rem; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* --- dialog motion ------------------------------------------------------------------
+   Every modal on every page opens and closes the same way: it rises a little and settles,
+   the backdrop fades with it. Promoted from the CV2 builder's publish confirmation, which
+   is where the mechanics were worked out and where they are proven in a browser test.
+
+   Three parts make the EXIT animate, which is the half most dialogs get wrong:
+   `display` and `overlay` are in the transition list, `transition-behavior:
+   allow-discrete` lets those two flip discretely at the right end of the transition
+   instead of instantly, and @starting-style gives the entry a state to start from (an
+   element that was `display: none` has no previous style to interpolate). Take any one of
+   the three away and the dialog snaps out even though it eased in.
+
+   `--dur` in both directions here. This is the routine dialog: a preview, a config dump,
+   a confirmation you have already decided about by the time you reach for it.
+
+   No JS is involved and none should be: showModal()/close() flip the `open` attribute and
+   the cascade does the rest, so nothing has to await a duration or mirror one in a
+   setTimeout. */
+dialog {
+  opacity: 0;
+  transform: translateY(.5rem) scale(.98);
+  transition:
+    opacity var(--dur) var(--ease-out),
+    transform var(--dur) var(--ease-out),
+    display var(--dur),
+    overlay var(--dur);
+  transition-behavior: allow-discrete;
+}
+dialog[open] { opacity: 1; transform: none; }
+dialog::backdrop {
+  background: rgba(0, 0, 0, 0);
+  transition:
+    background-color var(--dur) var(--ease-out),
+    display var(--dur),
+    overlay var(--dur);
+  transition-behavior: allow-discrete;
+}
+dialog[open]::backdrop { background: rgba(0, 0, 0, .55); }
+@starting-style {
+  dialog[open] { opacity: 0; transform: translateY(.5rem) scale(.98); }
+  dialog[open]::backdrop { background: rgba(0, 0, 0, 0); }
+}
+
+/* The consequence dialog: shutting the bot down, publishing to every following server.
+   Same mechanics, opened slower — a moment with weight is one you should arrive at, not
+   one that arrives at you. Closing stays at --dur: once the decision is made, get out of
+   the way. A transition runs with the timing declared on the state it is heading TO, so
+   the slow duration belongs on [open] and the base rule above is already the exit.
+
+   Nothing here pulses, throbs or otherwise recruits attention: motion that draws the eye
+   toward a destructive control inverts what the red is for. */
+dialog.consequence[open], dialog.consequence[open]::backdrop {
+  transition-duration: var(--dur-slow);
+}
+
 /* --- shared confirmation dialog ----------------------------------------------------
    Used by the hybrid post forms for publish and delete (shared.js confirmInPage). */
 dialog.confirmmodal {
@@ -319,7 +429,6 @@ dialog.confirmmodal {
   background: var(--surface-3); color: var(--text-1); padding: 1.1rem;
   max-width: 32rem; width: calc(100% - 2rem);
 }
-dialog.confirmmodal::backdrop { background: rgba(0, 0, 0, .55); }
 dialog.confirmmodal h2 { margin: 0 0 .6rem; font-size: 1.05rem; }
 dialog.confirmmodal p { margin: 0 0 1rem; font-size: .92rem; color: var(--muted); }
 dialog.confirmmodal .modal-actions {

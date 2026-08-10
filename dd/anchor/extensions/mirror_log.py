@@ -263,8 +263,10 @@ def register_mirror_log_routes(app: aiohttp.web.Application) -> None:
 web.register_routes(register_mirror_log_routes)
 web.register_card(
     web.Card(
-        "Mirror logs",
-        "How each mirrored post fanned out to its follower channels",
+        "Delivery log",
+        "Which servers got each post, when, and what failed.",
         "/mirror-logs",
+        web.CardGroup.CHECK,
+        10,
     )
 )

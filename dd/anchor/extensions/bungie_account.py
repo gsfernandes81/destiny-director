@@ -174,8 +174,10 @@ def register_bungie_account_routes(app: aiohttp.web.Application) -> None:
 web.register_routes(register_bungie_account_routes)
 web.register_card(
     web.Card(
-        "Bungie Account",
-        "The bot's Bungie link — status, re-login, and account numbers",
+        "Bungie connection",
+        "The account the bot reads Destiny data with — status and re-login.",
         "/bungie",
+        web.CardGroup.ADMIN,
+        30,
     )
 )
