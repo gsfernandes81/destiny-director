@@ -2,7 +2,7 @@
   Tom Select dark theme — overrides the vendored light stylesheet
   (/static/vendor/tom-select.min.css) to match this site's dark palette. Colours come
   from shared.css's tokens. Shared by every page that uses Tom Select (currently
-  weekly_reset_form.html, autopost_settings.html): link this file AFTER the vendored
+  weekly_reset_form.html, feeds.html, settings.html): link this file AFTER the vendored
   sheet, or the vendored light theme cascades in after it and wins. No build step —
   served as-is, same as every other stylesheet here.
 */

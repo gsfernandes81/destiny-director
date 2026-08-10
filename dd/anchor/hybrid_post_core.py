@@ -411,6 +411,12 @@ class HybridPostSpec:
     followable_key: str
     #: Human name of the post for the Create/Edit 409 messages (e.g. "Trials post").
     post_noun: str
+    #: Same-origin path of this producer's web form (e.g. ``"/trials"``) — the page an
+    #: operator writes the post on. Declared here rather than left implicit in the
+    #: producer's ``add_get`` call because the feeds page links to it: a feed "written
+    #: by you" is exactly one with a form, so the fact that decides the grouping and
+    #: the link it renders are one field, not two that can disagree.
+    form_path: str
     #: ``() -> int`` — the current reset-period boundary used for
     #: ``DraftMeta.is_current`` (the create-vs-edit split). A producer-supplied hook
     #: (usually a late-binding wrapper over its module ``current_reset_ts``) so a test
@@ -461,6 +467,35 @@ class HybridPostSpec:
         # settings.get_followable_channel_sync's docstring; call sites needing the
         # live value use the async getter directly.
         return settings.get_followable_channel_sync(self.followable_key)
+
+
+# Specs contributed by the producer modules at import time, mirroring how they
+# contribute routes, homepage cards and autopost feeds (``web.register_routes`` /
+# ``web.register_card`` / ``autopost.register_feed``). Read at request time, so
+# contribution order does not matter.
+#
+# What this registry answers, and why it is here rather than in the catalog: the feeds
+# page groups its twelve feeds three ways, and "written by you" — Trials and Weekly
+# Reset — is not a fact ``dd.common.feeds.FeedKind`` can supply. Both are
+# ``UNSCHEDULED``, alongside This Week At Bungie and Free Games, and what actually
+# separates them is that anchor has a form wired to them. That is anchor wiring,
+# naturally partial per process (beacon has no forms and needs no such answer), so it
+# belongs to the registry rather than to the static catalog — the same split
+# ``dd.common.feeds``' docstring already draws between enumeration and wiring.
+_specs: dict[str, HybridPostSpec] = {}
+
+
+def register_spec(spec: HybridPostSpec) -> None:
+    """Contribute a producer's spec, keyed by the feed it publishes to.
+
+    Call at import time from the producer module, next to its ``web.register_routes``.
+    """
+    _specs[spec.followable_key] = spec
+
+
+def registered_specs() -> dict[str, HybridPostSpec]:
+    """The contributed specs, keyed by followable slug (a copy)."""
+    return dict(_specs)
 
 
 # ---------------------------------------------------------------------------

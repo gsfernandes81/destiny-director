@@ -64,6 +64,16 @@ class FeedKind(enum.Enum):
     it from a web form" and "content arrives some other way". Nothing ever branched on
     that difference — ``has_toggle`` collapsed both to False — so it was a fact with no
     consumer in the one module whose purpose is removing facts that drift.
+
+    Something branches on it now: anchor's feeds page groups its twelve feeds three
+    ways, and "written by you" is exactly the web-form pair. The member still does not
+    come back, because the fact is not one this module can hold honestly. A feed is
+    written by a human because **anchor has a form wired to it** — a ``HybridPostSpec``,
+    at import time in a process beacon does not share. Restating that here would put a
+    copy of anchor's wiring in the catalog, where nothing can check it and where beacon
+    would carry an assertion it has no way to test. The page derives it from
+    ``dd.anchor.hybrid_post_core.registered_specs()`` instead, which is the same
+    enumeration-vs-wiring split this module's own docstring draws.
     """
 
     #: anchor produces on a schedule (``@aiocron.crontab`` in the producer module).
@@ -129,9 +139,10 @@ class Followable:
         return self.follow_confirmation_name or self.display_name
 
 
-#: Every followable, in settings-page order: the six anchor-produced feeds first (each a
-#: toggle group), then the six whose content originates elsewhere (each a single channel
-#: row). Descriptions are the settings page's own copy.
+#: Every followable, in feeds-page order: the six anchor produces on a schedule first
+#: (each a toggle group), then the six it does not (each a single channel row). Anchor's
+#: page splits that second half again — see :class:`FeedKind` on why the fact that does
+#: it is not stored here. Descriptions are the feeds page's own copy.
 FOLLOWABLES: tuple[Followable, ...] = (
     Followable(
         "lost_sector",
@@ -183,14 +194,13 @@ FOLLOWABLES: tuple[Followable, ...] = (
         "trials",
         FeedKind.UNSCHEDULED,
         "Trials of Osiris",
-        "The Kyber channel this feed posts to. Content is edited on the Trials form.",
+        "The Kyber channel this feed posts to.",
     ),
     Followable(
         "weekly_reset",
         FeedKind.UNSCHEDULED,
         "Weekly Reset",
-        "The Kyber channel this feed posts to. Content is edited on the Weekly Reset "
-        "form.",
+        "The Kyber channel this feed posts to.",
     ),
     Followable(
         "weekly_nightfall",

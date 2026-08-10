@@ -3,8 +3,14 @@
 // This file is part of "dd" henceforth referred to as "destiny-director".
 // Licensed under the GNU AGPL v3 or later; see the project LICENSE.
 
-// The autopost settings page: the save button, the colour/channel pickers, plus each
-// feed row's two actions.
+// Both settings pages — /feeds and /settings: the save button, the colour/channel
+// pickers, plus each feed row's two actions.
+//
+// One script for two pages, because what the two have in common is nearly all of it: the
+// save protocol (see the baseline map below) is identical, and the channel picker appears
+// on both. What only /feeds has is the per-feed Preview/Send pair, which is why that
+// section returns early when the page carries no modals rather than being a third file
+// with its own copy of the save.
 //
 // Preview and Send now replaced the `/<feed> show` and `send` slash commands. They live
 // on the row rather than a per-feed page — a feed has no state a page could show that
@@ -93,10 +99,15 @@ document.addEventListener("DOMContentLoaded", () => {
       // post channel — see _UNCLEARABLE_CHANNEL_SLUGS). Offering an X there would only
       // produce a rejected save, so the clear button is for the clearable fields.
       const required = select.dataset.required === "true";
+      // An empty picker says what is missing rather than sitting blank — a blank control
+      // is indistinguishable from one that failed to load, and "no channel" is a real
+      // state a feed can be in. The server renders the same words into the pre-JS
+      // <option> (autopost_settings.py's _NO_CHANNEL_LABEL), so the page does not change
+      // its mind about them as Tom Select mounts.
       const ts = new TomSelect(select, {
         options,
         maxOptions: 200,
-        placeholder: "Search channels…",
+        placeholder: current ? "Search channels…" : "No channel set",
         plugins: required ? [] : ["clear_button"],
         allowEmptyOption: !required,
       });
@@ -163,8 +174,15 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // --- per-feed actions --------------------------------------------------------------
+  //
+  // /feeds only. /settings renders no feed rows and hosts no modals, so every byId below
+  // would be null and the first addEventListener a TypeError — which, being thrown from
+  // DOMContentLoaded, would take the save button's listener down with it if this ran
+  // first. Bail on the dialogs rather than on the buttons: a page could have the modals
+  // and no registered feeds (nothing is wired at boot), and that is not this condition.
 
   const previewDialog = byId("previewDialog");
+  if (!previewDialog) return;
   const previewTitle = byId("previewTitle");
   const previewBox = byId("previewBox");
   const previewStatus = byId("previewStatus");
@@ -290,7 +308,7 @@ document.addEventListener("DOMContentLoaded", () => {
         sendDialog.close();
         say(
           status,
-          "Send started — it continues even if you leave. Check Mirror logs for " +
+          "Send started — it continues even if you leave. Check the Delivery log for " +
             "delivery.",
           false,
         );
