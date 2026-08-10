@@ -58,7 +58,7 @@ _parser.add_argument(
     "--surface",
     default="all",
     help="which flow to drive: all (default), home, rotation, weekly_reset, trials, "
-    "builder, mirror_log. Repeatable as a comma list.",
+    "builder, mirror_log, feeds, settings. Repeatable as a comma list.",
 )
 _parser.add_argument("--port", type=int, default=8813)
 _parser.add_argument(
@@ -181,6 +181,7 @@ async def main() -> int:
     # empty, because the auth middleware is the app's only security boundary.
     from dd.anchor import web
     from dd.anchor.extensions import (  # noqa: F401
+        autopost_settings,
         control_panel,
         cv2_builder_page,
         mirror_log,
@@ -293,6 +294,15 @@ async def main() -> int:
 
         if want("mirror_log"):
             await go("/mirror-logs", "06_mirror_log")
+
+        # The two settings pages. Both hydrate their channel pickers from a fetch that
+        # needs the live bot, which there is none of here — the pickers fall back to
+        # their rendered <select>, which is exactly the state worth seeing, and the
+        # 503 that fetch gets is expected rather than a problem.
+        if want("feeds"):
+            await go("/feeds", "07_feeds")
+        if want("settings"):
+            await go("/settings", "08_settings")
 
         await browser.close()
 

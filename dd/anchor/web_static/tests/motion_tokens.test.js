@@ -36,7 +36,8 @@ const SHARED_CSS = fs.readFileSync(path.join(STATIC_DIR, "shared.css"), "utf8");
 const TOKENS = ["--dur-fast", "--dur", "--dur-slow", "--dur-stagger"];
 
 /** Every stylesheet we author: .css plus .html (pages inline their own <style>, which is
- *  where the switch on autopost_settings.html hid its durations from a CSS-only sweep).
+ *  where the settings toggle switch hid its durations from a CSS-only sweep, back when it
+ *  was inlined in autopost_settings.html rather than in settings_page.css).
  *  This read is deliberately NOT recursive: vendor/ is a subdirectory, and tom-select's
  *  minified CSS is full of literal durations we neither own nor edit. */
 function authoredSheets() {

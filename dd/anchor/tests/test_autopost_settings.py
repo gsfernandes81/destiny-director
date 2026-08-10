@@ -13,10 +13,16 @@
 # You should have received a copy of the GNU Affero General Public License along with
 # destiny-director. If not, see <https://www.gnu.org/licenses/>.
 
-# Autopost settings page: render reflects the AutoPostSettings rows, save persists via
-# the model, unknown keys are ignored, and the homepage card is registered. Exercised
-# with a fake request (no live server); auth is the web_auth middleware, covered in
-# test_web_auth.py, so the handlers assume an already-authenticated request.
+# The /feeds and /settings pages: render reflects the AutoPostSettings rows, save
+# persists via the model, unknown keys are ignored, and both homepage cards are
+# registered. Exercised with a fake request (no live server); auth is the web_auth
+# middleware, covered in test_web_auth.py, so the handlers assume an already-
+# authenticated request.
+#
+# The two pages render disjoint halves of one row set. Assertions that are about a ROW
+# rather than about which page carries it run against _render_both_pages() below, so
+# they did not all have to be sorted into two piles by hand; the ones that ARE about the
+# split name their page and live under "the split" near the top.
 
 import asyncio
 import html
@@ -84,13 +90,24 @@ def _as_request(req: _FakeRequest) -> aiohttp.web.Request:
     return t.cast(aiohttp.web.Request, req)
 
 
+async def _render_both_pages() -> str:
+    """Both pages' HTML, concatenated — for assertions about a row, not about a page.
+
+    Every row this module owns renders on exactly one of the two, so a substring found
+    here was rendered somewhere. Which page it landed on is a separate question,
+    asserted directly in the section below rather than smuggled into every row
+    assertion.
+    """
+    return await aps._render_feeds_html() + await aps._render_settings_html()
+
+
 # --- structural: the page's rows follow from the catalog ----------------------------
 #
 # What used to live here was a watchdog: _SETTINGS and FOLLOWABLE_SLUGS were two
 # hand-maintained lists of the same twelve feeds, and a test compared them so drift
 # failed loudly. Both now derive from dd.common.feeds, so that comparison has become a
 # tautology and is gone. What can still be got wrong is the page-side data that names
-# feeds, and the ordering invariant _render_html depends on — so those are asserted
+# feeds, and the ordering invariant _render_groups depends on — so those are asserted
 # instead.
 
 
@@ -115,7 +132,7 @@ async def test_the_page_names_exactly_the_catalog_s_feed_channels() -> None:
 
 
 async def test_a_parent_row_always_precedes_its_subs() -> None:
-    """_render_html groups in a single pass, so the order is load-bearing.
+    """_render_groups groups in a single pass, so the order is load-bearing.
 
     It starts a new group at each ``sub=False`` row and appends every ``sub=True`` row
     to the group in progress — meaning a sub that appears before any parent would be
@@ -198,7 +215,7 @@ async def test_render_reflects_db_state() -> None:
     await schemas.AutoPostSettings.set_enabled("lost_sector", True)
     await schemas.AutoPostSettings.set_enabled("xur", False)
 
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
 
     # An enabled row renders a checked box; a disabled row renders unchecked.
     assert 'data-slug="lost_sector" checked' in html_out
@@ -218,13 +235,13 @@ async def test_render_reflects_db_state() -> None:
 
 @pytest.mark.integration
 async def test_render_shows_a_header_for_each_general_settings_category() -> None:
-    # Branding and Logging & Alerts are separate categories/boxes now, each with its own
-    # header — not one undifferentiated "general settings" blob, and not reusing the
-    # first row's own label as a fake group title.
-    html_out = await aps._render_html()
+    # Branding and Alerts are separate categories/cards, each with its own header — not
+    # one undifferentiated "general settings" blob, and not reusing the first row's own
+    # label as a fake group title.
+    html_out = await _render_both_pages()
 
     assert '<div class="groupheader">Branding</div>' in html_out
-    assert '<div class="groupheader">Logging &amp; Alerts</div>' in html_out
+    assert '<div class="groupheader">Alerts</div>' in html_out
     # A feed group gets no header — its toggle row already names it.
     assert html_out.count('class="groupheader"') == len(
         {s.category for s in aps._SETTINGS if s.category}
@@ -237,7 +254,7 @@ async def test_render_category_rows_are_flat_peers_not_indented() -> None:
     # start the group box — under an explicit category header every setting in it is a
     # peer, so none should get the ".sub" indented/dimmer treatment that would visually
     # single one out as if it were that category's "parent" row.
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
     by_slug = {s.slug: s for s in aps._SETTINGS}
 
     def _row_start(slug: str) -> str:
@@ -264,12 +281,12 @@ async def test_render_category_rows_are_flat_peers_not_indented() -> None:
 
 
 @pytest.mark.integration
-async def test_render_category_rows_are_all_dark_under_a_light_header() -> None:
-    # A categorised group's rows are flat peers (see the test above), but they still
-    # need the same two-tone rhythm a feed group's light-parent/dark-subs gives it — the
-    # category header itself is the group's only "parent", so every one of its
-    # settings, including the one that must structurally start the group, is dark.
-    html_out = await aps._render_html()
+async def test_render_category_rows_all_carry_the_flat_marker() -> None:
+    # The flip side of the test above: EVERY row of a categorised card is marked flat,
+    # including the one that must structurally start it. The marker is what stops the
+    # first row of Branding reading as Branding's parent — it is a peer of the four
+    # under it, and the header is the only parent the card has.
+    html_out = await _render_both_pages()
     by_slug = {s.slug: s for s in aps._SETTINGS}
 
     def _row_start(slug: str) -> str:
@@ -285,10 +302,10 @@ async def test_render_category_rows_are_all_dark_under_a_light_header() -> None:
         "disable_bad_channels",
         "alerts_channel_id",
     ):
-        assert 'class="row flat-alt' in _row_start(slug), f"{slug} row is not dark"
+        assert 'class="row flat-alt' in _row_start(slug), f"{slug} row is not flat"
 
-    # A feed group never gets .flat-alt — it uses .sub instead, and only for its subs;
-    # the parent toggle row itself (unlike a category header) is a real light setting.
+    # A feed card never gets .flat-alt — it uses .sub instead, and only for its subs;
+    # the parent toggle row itself (unlike a category header) is a real parent setting.
     assert 'class="row flat-alt' not in _row_start("lost_sector")
     assert 'class="row flat-alt' not in _row_start("lost_sector_details")
 
@@ -298,19 +315,113 @@ async def test_render_missing_row_is_unchecked() -> None:
     # No rows seeded → every toggle renders unchecked (producers treat None as off).
     # Matched against the toggles specifically: the send modal's publish checkbox is
     # also `checked` by default, and it is not a setting.
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
 
     assert not re.search(r'data-slug="[^"]+" checked', html_out)
 
 
 @pytest.mark.integration
-async def test_handle_get_returns_html_response() -> None:
-    resp = await aps._handle_get(_as_request(_FakeRequest(None)))
+async def test_handle_feeds_returns_html_response() -> None:
+    resp = await aps._handle_feeds(_as_request(_FakeRequest(None)))
 
     assert resp.status == 200
     assert resp.content_type == "text/html"
     assert resp.text is not None
     assert 'data-slug="lost_sector"' in resp.text
+
+
+@pytest.mark.integration
+async def test_handle_settings_returns_html_response() -> None:
+    resp = await aps._handle_settings(_as_request(_FakeRequest(None)))
+
+    assert resp.status == 200
+    assert resp.content_type == "text/html"
+    assert resp.text is not None
+    assert 'data-slug="embed_default_color"' in resp.text
+
+
+# --- the split ----------------------------------------------------------------------
+#
+# One page became two. What can go wrong is a row landing on the wrong one (or on both,
+# which would give the save two baselines for one slug), a section grouping a feed by
+# the wrong rule, and the old URL going dead under whoever has it bookmarked.
+
+
+@pytest.mark.integration
+async def test_the_two_pages_carry_disjoint_rows_covering_every_setting() -> None:
+    # Disjoint AND total. Overlap would render one slug twice — two fields, two
+    # baselines, and a save whose outcome depends on which page it came from — and a gap
+    # would leave a setting with no editor at all, which is how it used to be for the
+    # things that were env vars.
+    feeds_html = await aps._render_feeds_html()
+    settings_html = await aps._render_settings_html()
+
+    def _slugs(page: str) -> set[str]:
+        return set(re.findall(r'data-slug="([^"]+)"', page))
+
+    on_feeds, on_settings = _slugs(feeds_html), _slugs(settings_html)
+    assert not on_feeds & on_settings
+    assert on_feeds | on_settings == {s.slug for s in aps._SETTINGS}
+    # And the halves are the ones the pages are named after.
+    assert on_settings == {s.slug for s in aps._GENERAL_SETTINGS}
+
+
+async def test_feed_sections_are_the_three_the_page_promises() -> None:
+    sections = aps._feed_sections()
+
+    assert [s.heading for s in sections] == [
+        "Posted on a schedule",
+        "Written by you",
+        "Posted by someone else",
+    ]
+    # Every feed lands in exactly one section, and the catalog's order survives within
+    # each — the page is read top to bottom and a reshuffle would be noticed as churn.
+    listed = [f.slug for section in sections for f in section.feeds]
+    assert sorted(listed) == sorted(dd_feeds.FEEDS)
+    for section in sections:
+        assert list(section.feeds) == [
+            f for f in dd_feeds.FOLLOWABLES if f in section.feeds
+        ]
+
+
+async def test_written_by_you_is_exactly_the_feeds_with_a_registered_form() -> None:
+    """The one section split the catalog cannot supply.
+
+    Trials and Weekly Reset are ``UNSCHEDULED`` in ``dd.common.feeds`` alongside This
+    Week At Bungie and Free Games; what separates them is that anchor registers a
+    ``HybridPostSpec`` — and therefore a form — for them. Importing the two producers is
+    what fills that registry in a real process too, so this pins the wiring rather than
+    a hardcoded pair.
+    """
+    from dd.anchor.extensions import trials, weekly_reset  # noqa: F401
+
+    written = next(s for s in aps._feed_sections() if s.heading == "Written by you")
+
+    assert {f.slug for f in written.feeds} == {"trials", "weekly_reset"}
+    for feed in written.feeds:
+        assert not feed.has_toggle, "a form feed has no schedule to switch off"
+
+
+@pytest.mark.integration
+async def test_a_written_by_you_feed_links_to_its_form() -> None:
+    # The link and the grouping come off the same registration, so a feed cannot be
+    # listed under "Written by you" while pointing nowhere.
+    from dd.anchor.extensions import trials, weekly_reset  # noqa: F401
+
+    html_out = await aps._render_feeds_html()
+
+    for path in ("/trials", "/weekly_reset"):
+        assert f'<a class="row formlink" href="{path}">' in html_out
+    assert html_out.count('class="row formlink"') == 2
+
+
+async def test_the_old_url_redirects_to_feeds() -> None:
+    # Permanent, and to the feed half: the page had one address for its whole life and
+    # what it was mostly used for was feeds.
+    with pytest.raises(aiohttp.web.HTTPMovedPermanently) as excinfo:
+        await aps._handle_legacy_redirect(_as_request(_FakeRequest(None)))
+
+    assert str(excinfo.value.location) == "/feeds"
 
 
 # --- per-feed actions ---------------------------------------------------------------
@@ -343,7 +454,7 @@ def _registered_feed(monkeypatch: pytest.MonkeyPatch) -> t.Iterator[None]:
 async def test_feed_rows_carry_both_actions_with_hover_cards(
     _registered_feed: None,
 ) -> None:
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
 
     for action in ("preview", "send"):
         assert f'data-action="{action}" data-slug="lost_sector"' in html_out, (
@@ -360,7 +471,7 @@ async def test_sub_settings_and_url_rows_get_no_actions(
 ) -> None:
     # `lost_sector_details` refines its parent and has no producer of its own, and the
     # eververse image URL is a value, not a feed — neither can be previewed or sent.
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
 
     assert 'data-slug="lost_sector_details"' in html_out  # the row still renders
     for slug in ("lost_sector_details", "xur_default_image", "eververse_image_url"):
@@ -368,11 +479,48 @@ async def test_sub_settings_and_url_rows_get_no_actions(
 
 
 @pytest.mark.integration
+async def test_an_unavailable_action_is_dimmed_and_explained_not_removed(
+    _registered_feed: None,
+) -> None:
+    """A vanished control reads as a missing feature; a dim one reads as a state.
+
+    Two states, and they differ: a feed whose producer is not loaded in this process can
+    build nothing at all, while one with no channel yet has nowhere to *send* — so its
+    Preview stays live, because a post you cannot send yet is exactly one worth looking
+    at. Only lost_sector is registered here, so xur stands in for the first case.
+    """
+    html_out = await aps._render_feeds_html()
+
+    def _actions(slug: str) -> str:
+        start = html_out.index(
+            f'<div class="rowactions"><button type="button"'
+            f' class="feedaction small" data-action="preview"'
+            f' data-slug="{slug}"'
+        )
+        return html_out[start : html_out.index("</p>", start) + 4]
+
+    # Registered, but no channel row seeded: Send is disabled with a reason, Preview is
+    # not, and neither button is gone.
+    live = _actions("lost_sector")
+    assert 'data-action="preview" data-slug="lost_sector" title=' in live
+    assert 'data-action="send" data-slug="lost_sector" disabled' in live
+    assert 'class="note warn"' in live
+    assert "No channel set" in live
+
+    # Not registered at all: both disabled, and the note is an error rather than a
+    # state the operator can fix from this page.
+    dead = _actions("xur")
+    assert 'data-action="preview" data-slug="xur" disabled' in dead
+    assert 'data-action="send" data-slug="xur" disabled' in dead
+    assert 'class="note err"' in dead
+
+
+@pytest.mark.integration
 async def test_page_hosts_the_preview_and_send_modals() -> None:
     # The post is drawn in a modal by the shared renderer, so the page must load it and
     # its stylesheet, and the publish choice belongs in the send confirmation rather
     # than sitting pre-set on the page.
-    resp = await aps._handle_get(_as_request(_FakeRequest(None)))
+    resp = await aps._handle_feeds(_as_request(_FakeRequest(None)))
     assert resp.text is not None
     body = resp.text
 
@@ -433,7 +581,7 @@ async def test_render_shows_url_field_with_value() -> None:
         "https://example.com/banner.png"
     )
 
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
 
     # The URL setting renders a text input (not a switch) carrying its saved value.
     assert 'class="urlfield" data-slug="eververse_image_url"' in html_out
@@ -509,7 +657,7 @@ async def test_handle_save_rejects_non_object_settings() -> None:
 async def test_render_shows_color_field_with_value() -> None:
     await schemas.AutoPostSettings.set_value("embed_default_color", "#EC42A5")
 
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
 
     assert (
         'class="colorfield no-focus-ring" data-slug="embed_default_color"' in html_out
@@ -525,7 +673,7 @@ async def test_render_unset_color_shows_the_settings_default_not_black() -> None
     # The swatch (a native input[type=color], which cannot be blank) and the text
     # field's placeholder both have to show *that*, not black — the page previously
     # rendered #000000 here while the bots drew the brand pink.
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
     default_hex = settings.default_for("embed_default_color")
 
     assert default_hex == "#EC42A5"  # sanity: the brand pink, not black
@@ -544,7 +692,7 @@ async def test_render_unset_color_still_saves_as_untouched() -> None:
     # The rendered default is display-only: an operator who opens the page and saves
     # without touching the colour submits null (unchanged), which the server skips, so
     # the slug stays NULL rather than becoming an explicit copy of the default.
-    await aps._render_html()
+    await _render_both_pages()
 
     resp = await aps._handle_save(
         _as_request(_FakeRequest({"settings": {"embed_default_color": None}}))
@@ -595,7 +743,7 @@ async def test_handle_save_blank_color_clears_value() -> None:
 async def test_render_shows_select_field_with_current_option_selected() -> None:
     await schemas.AutoPostSettings.set_value("alert_min_level", "WARNING")
 
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
 
     assert 'class="selectfield" data-slug="alert_min_level"' in html_out
     assert '<option value="WARNING" selected>WARNING</option>' in html_out
@@ -609,7 +757,7 @@ async def test_render_select_defaults_to_settings_default_when_unset() -> None:
     # show "DEBUG" (alphabetically first) selected while the bot actually applies
     # dd.common.settings' real default (ERROR). Caught by driving this page in a real
     # browser: the DOM's default selection doesn't reduce to a string match in html_out.
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
 
     assert '<option value="ERROR" selected>ERROR</option>' in html_out
     assert await settings.get_alert_min_level() == "ERROR"  # the two must agree
@@ -642,7 +790,7 @@ async def test_handle_save_rejects_unknown_select_option() -> None:
 async def test_render_shows_channel_field_with_current_option() -> None:
     await schemas.AutoPostSettings.set_value("lost_sector_channel", "123456789")
 
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
 
     assert 'class="channelfield" data-slug="lost_sector_channel"' in html_out
     assert 'data-scope="kyber"' in html_out
@@ -656,7 +804,7 @@ async def test_render_shows_a_followable_with_no_row_as_unconfigured() -> None:
     # that way — the page is the only place it can be set from.
     settings.reset_cache_for_tests()
 
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
 
     assert 'data-slug="lost_sector_channel"' in html_out
     assert '<option value="42" selected>42</option>' not in html_out
@@ -667,14 +815,14 @@ async def test_render_shows_the_saved_row_for_a_followable() -> None:
     await schemas.AutoPostSettings.set_value("lost_sector_channel", "99")
     settings.reset_cache_for_tests()
 
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
 
     assert '<option value="99" selected>99</option>' in html_out
 
 
 @pytest.mark.integration
 async def test_render_alerts_channel_scope_is_kyber_control() -> None:
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
 
     assert 'data-slug="alerts_channel_id" data-scope="kyber_control"' in html_out
 
@@ -687,7 +835,7 @@ async def test_render_followable_channels_are_announce_only_log_alerts_are_not()
     # only allows from an announcement channel — a plain text channel can't be followed
     # at all. alerts_channel_id is never followed (the bot just sends there), so any
     # postable channel is fine for it.
-    html_out = await aps._render_html()
+    html_out = await _render_both_pages()
 
     assert 'data-slug="lost_sector_channel"' in html_out
     assert (
@@ -1291,8 +1439,17 @@ async def test_handle_channels_before_bot_ready(
 # --- homepage card ----------------------------------------------------------------
 
 
-async def test_card_is_registered() -> None:
-    titles = [card.title for card in web.registered_cards()]
-    assert "Autopost Settings" in titles
-    card = next(c for c in web.registered_cards() if c.title == "Autopost Settings")
-    assert card.href == "/autopost_settings"
+async def test_both_cards_are_registered_in_order() -> None:
+    # Two rows in "Set up and admin", Feeds first: what posts where is asked far more
+    # often than what colour it comes out in. Neither is destructive — Shut down is the
+    # only card on the whole panel that is.
+    cards = {c.title: c for c in web.registered_cards()}
+
+    assert cards["Feeds"].href == "/feeds"
+    assert cards["Appearance & alerts"].href == "/settings"
+    for title in ("Feeds", "Appearance & alerts"):
+        assert cards[title].group is web.CardGroup.ADMIN
+        assert not cards[title].danger
+    assert cards["Feeds"].order < cards["Appearance & alerts"].order
+    # The old title is gone with the old URL; a stale card would point at the redirect.
+    assert "Autopost Settings" not in cards

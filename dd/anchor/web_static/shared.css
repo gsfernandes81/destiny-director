@@ -45,8 +45,11 @@
   --text-muted: #8b9096;  /* placeholders, bullets, small print */
   --text-faint: #9aa0a6;  /* muted captions, backlinks, descriptions */
 
-  /* Feedback. */
+  /* Feedback. Three levels and no more: --ok for a thing that worked, --warn for a
+     state the reader can fix (a feed with no channel yet), --err for something broken.
+     A fourth would need a rule for when to use it, and there isn't one. */
   --ok: #7ee787;
+  --warn: #e3b341;
   --err: #ff7b72;
   --danger-surface: #3a1e1e;  /* danger button fill */
   --danger-text: #ff9d97;
