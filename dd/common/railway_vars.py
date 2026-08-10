@@ -183,11 +183,23 @@ def _platform(name: str) -> bool:
 
 
 def beacon_only(anchor: dict[str, str], beacon: dict[str, str]) -> list[str]:
-    """Names beacon holds and anchor does not, minus the ones that mean nothing."""
+    """Names beacon has a value for and anchor does not.
+
+    **Empty counts as absent on anchor, and it has to.** Presence alone would pass a
+    variable anchor holds as ``""``, which is the worse of the two states rather than a
+    safer one: ``settings_import`` branches on ``os.environ.get(var) is None``, so an
+    empty variable is *not* "not set in the environment" — it reaches ``_change`` and,
+    into the fresh database a cutover writes, is written. An empty
+    ``DISABLE_BAD_CHANNELS`` silently stores ``False`` where beacon said ``True``, which
+    is exactly the failure this exists to catch. Railway allows an empty value,
+    :func:`fetch` renders a JSON ``null`` as one, and both restore paths can write one,
+    so the state is reachable — and by this module.
+    """
     return sorted(
         name
-        for name in beacon
-        if name not in anchor
+        for name, value in beacon.items()
+        if value
+        and not anchor.get(name)
         and not _platform(name)
         and _SERVICE_SCOPED.get(name) != "beacon"
     )

@@ -283,9 +283,27 @@ def test_a_variable_on_anchor_only_is_not_reported() -> None:
     assert rv.beacon_only({"PORT": "8080", "SOMETHING_ELSE": "x"}, {}) == []
 
 
-def test_values_are_not_compared() -> None:
-    # Presence only. A differing value is not the question this answers.
+def test_a_differing_value_is_not_a_finding() -> None:
+    # Both bots holding a value is the state this is checking for. Which value is a
+    # different question, and not this one.
     assert rv.beacon_only({"FOO": "a"}, {"FOO": "b"}) == []
+
+
+def test_an_empty_value_on_anchor_counts_as_absent() -> None:
+    # Presence alone would pass this, and it is the worse of the two states rather than
+    # a safer one: settings_import branches on `os.environ.get(var) is None`, so an
+    # empty variable is not "not set in the environment" — it reaches _change and, into
+    # the fresh database a cutover writes, is written. An empty DISABLE_BAD_CHANNELS
+    # stores False where beacon said True, which is exactly what this catches.
+    assert rv.beacon_only(
+        {"DISABLE_BAD_CHANNELS": ""}, {"DISABLE_BAD_CHANNELS": "true"}
+    ) == ["DISABLE_BAD_CHANNELS"]
+
+
+def test_an_empty_value_on_beacon_is_not_a_finding() -> None:
+    # Nothing to lose: anchor's absence resolves to the same default beacon's empty
+    # value would, so reporting it would be noise in a check whose point is not to be.
+    assert rv.beacon_only({}, {"FOO": ""}) == []
 
 
 def test_beacons_own_gateway_token_is_not_a_finding() -> None:
