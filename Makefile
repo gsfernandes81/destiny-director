@@ -37,6 +37,19 @@ prod:
 # a global one, and `railway --environment production up` is an arg-parse error.
 TARGET_ENV_FLAG := --environment $(TARGET_ENV)
 
+# Railway's own documented switch (docs.railway.com/cli/autoupdate), not one of ours —
+# the opposite case to TARGET_ENV above, and the distinction is the whole point: setting
+# a variable the CLI actually defines is correct, inventing one that merely looks like it
+# belongs is what broke mysql-to-postgres. The dev container pins RAILWAY_VERSION in
+# Dockerfile.dev, so a CLI that updates itself would silently drift off the pin.
+#
+# It stops the CLI updating. If the "New version available" notice still appears, that is
+# a separate, per-version thing: `railway autoupdate skip` silences the pending version,
+# and `railway autoupdate disable` sets the local preference for good. Neither is done
+# here — both write to the operator's CLI config, which a build file has no business
+# doing on their behalf.
+export RAILWAY_NO_AUTO_UPDATE := 1
+
 # The service whose variables the cutover targets borrow. anchor because it is the one
 # with both the old MYSQL_URL and the new DATABASE_URL in scope.
 RAILWAY_SERVICE ?= anchor
@@ -434,14 +447,36 @@ cutover-verify:
 # There is no confirmation prompt. The gate is EXECUTE=1 plus the word `prod`, both of
 # which have to be typed on the same line — and a rehearsal against dev is a different
 # command from the real thing by exactly one word, which is the property worth having.
+# The five steps run in ONE shell rather than one recipe line each, so a failure can be
+# reported rather than merely happening: make's own `*** [Makefile:431: dump-mysql]
+# Error 2` scrolls past in a screen full of mysqldump and Railway output, and the single
+# thing an operator must know at the end of a cutover is whether it finished. Every step
+# announces itself; the run ends in exactly one line, OK or NOT OK, and NOT OK names the
+# step that failed and says nothing after it ran.
+#
+# Colour only when stdout is a terminal — this gets piped to a file often enough (`| tee
+# cutover.log`) that a log full of escape sequences would be a poor trade for it.
 mysql-to-postgres:
-	@echo "==> environment: $(TARGET_ENV)$(if $(WRITE), (EXECUTE=1 — this writes), (rehearsal))"
-	@$(MAKE) --no-print-directory TARGET_ENV=$(TARGET_ENV) cutover-backup
-	@$(MAKE) --no-print-directory TARGET_ENV=$(TARGET_ENV) cutover-schema
-	@$(MAKE) --no-print-directory TARGET_ENV=$(TARGET_ENV) EXECUTE=$(EXECUTE) TRUNCATE=$(TRUNCATE) cutover-copy
-	@$(MAKE) --no-print-directory TARGET_ENV=$(TARGET_ENV) EXECUTE=$(EXECUTE) OVERWRITE=$(OVERWRITE) cutover-settings
-	@$(if $(WRITE),$(MAKE) --no-print-directory TARGET_ENV=$(TARGET_ENV) cutover-verify,:)
-	@echo "==> done. $(if $(WRITE),Rows copied and settings written; check cutover-verify above.,Backup taken and the schema is at head on $(TARGET_ENV); NO rows were copied and NO settings were written. Re-run with EXECUTE=1.)"
+	@set -u; \
+	if [ -t 1 ]; then \
+		g=$$(printf '\033[1;32m'); r=$$(printf '\033[1;31m'); o=$$(printf '\033[0m'); \
+	else g=; r=; o=; fi; \
+	step() { \
+		printf '%s==> make %s%s\n' "$$g" "$$1" "$$o"; \
+		if ! $(MAKE) --no-print-directory TARGET_ENV=$(TARGET_ENV) "$$@"; then \
+			printf '%sNOT OK%s  %s failed — nothing after it ran.\n' "$$r" "$$o" "$$1"; \
+			exit 1; \
+		fi; \
+	}; \
+	printf '%s==> environment: %s (%s)%s\n' \
+		"$$g" "$(TARGET_ENV)" "$(if $(WRITE),EXECUTE=1 — this writes,rehearsal)" "$$o"; \
+	step cutover-backup; \
+	step cutover-schema; \
+	step cutover-copy EXECUTE=$(EXECUTE) TRUNCATE=$(TRUNCATE); \
+	step cutover-settings EXECUTE=$(EXECUTE) OVERWRITE=$(OVERWRITE); \
+	$(if $(WRITE),step cutover-verify,:); \
+	printf '%sOK%s  %s\n' "$$g" "$$o" \
+		"$(if $(WRITE),Rows copied and settings written; check cutover-verify above.,Backup taken and the schema is at head on $(TARGET_ENV). NO rows were copied and NO settings were written — re-run with EXECUTE=1.)"
 
 # conftest.py is named alongside `dd` in all three: it is the one Python file outside
 # the package tree (repo-root, where pytest's session DB fixture and its non-local-DB

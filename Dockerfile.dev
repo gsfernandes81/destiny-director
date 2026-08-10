@@ -95,7 +95,13 @@ RUN if ! getent group "${USER_GID}" >/dev/null; then \
 # HISTFILE points bash history into the persisted .local/share volume. The entrypoint
 # publishes all of these to SSH sessions via ~/.ssh/environment (it dumps `env`), so no
 # entrypoint edit is needed.
+# RAILWAY_NO_AUTO_UPDATE is Railway's own documented switch, and it belongs here
+# because RAILWAY_VERSION above PINS the CLI: a binary that updates itself would drift
+# off the pin on somebody's first command, and the version that fixed or broke something
+# would no longer be the one the image says it installed. Set as an ENV rather than in
+# the Makefile alone so it also covers an interactive `railway ...` over SSH.
 ENV TZ=Etc/UTC \
+    RAILWAY_NO_AUTO_UPDATE=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=0 \
