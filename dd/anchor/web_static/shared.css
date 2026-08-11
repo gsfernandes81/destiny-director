@@ -23,7 +23,16 @@
   --surface-2: #1b212c;   /* fieldsets, cards, dropdowns */
   --surface-3: #222937;   /* inputs, secondary buttons, control chrome */
 
-  --border: #333c4d;
+  /* Lifted alongside the surfaces, not left where it was: a border's job is measured
+     against the surfaces either side of it, and darkening those without touching this
+     quietly cost every card and input edge some of its definition. At #374154 each edge
+     is a little MORE legible than before the palette moved (a card against the page
+     1.59:1 -> 1.73:1, an input against a card 1.49:1 -> 1.57:1).
+
+     Still short of WCAG 1.4.11's 3:1 for a control boundary, as it was before — closing
+     that needs roughly #5c6a85, which is a visibly light edge on every card and a design
+     decision rather than a palette fix. Recorded in plans/web_panel_followups.md. */
+  --border: #374154;
   --border-hover: #8a5a72;   /* muted rose hover border */
 
   /* Accent split by role:

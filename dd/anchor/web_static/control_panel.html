@@ -103,15 +103,20 @@
 
          The hover swaps fill and border rather than underlining — a chip that underlines
          reads as a link wearing a box — and the press restates shared.css's button dip,
-         which reaches <button> only and so misses the anchors here. */
+         which reaches <button> only and so misses the anchors here.
+
+         No `transition` of its own, deliberately. shared.css transitions background,
+         border-colour, colour AND transform for every interactive element, and `.qlink`
+         at (0,1,0) out-specifies that rule's (0,0,1) — so a shorter list here does not
+         add to the shared one, it REPLACES it. A hand-written
+         `background, border-color` pair silently dropped the transform, and the chips
+         pressed instantly while the rows above them eased. */
       .qlink {
         display: inline-flex; align-items: center; min-height: 40px;
         padding: .5rem .85rem; border-radius: var(--radius-sm);
         background: var(--surface-2); border: 1px solid var(--border);
         color: var(--link); font: inherit; font-size: .95rem;
         text-decoration: none; cursor: pointer;
-        transition: background var(--dur-fast) var(--ease-out),
-                    border-color var(--dur-fast) var(--ease-out);
       }
       .qlink:hover {
         text-decoration: none;

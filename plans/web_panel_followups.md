@@ -145,6 +145,22 @@ onto its own line when the group wraps.
 - "Ada-1" wraps to "Ada- / 1" in the featured row at 390px.
 - The rotation index says "(legacy)" in the title *and* on all nine links.
 
+### 12. Control boundaries are below the 3:1 non-text floor
+
+Found by sweeping every token pair after the palette change, not by looking — a border this
+quiet is invisible as a *defect* precisely because it is doing its job as decoration.
+
+WCAG 1.4.11 wants 3:1 between a control's boundary and what is either side of it. Ours is
+**1.73:1** for a card edge against the page and **1.57:1** for an input edge against a card,
+and the fills barely differ either (`--surface-3` on `--surface-2` is 1.11:1), so an input on
+a card is genuinely hard to locate without hovering it.
+
+This is **pre-existing** — the numbers were 1.59:1 and 1.49:1 before the palette moved, and the
+lift to `--border: #374154` made every edge better than it was, not worse. Closing the gap
+properly needs about `#5c6a85`, which is a visibly light edge on every card and every input in
+the app: a design decision about how present the chrome should be, not a palette fix, and not
+one to make silently. Worth putting in front of the owner with a screenshot of both.
+
 ## Confirmed good — do not touch
 
 The information architecture and the errand ordering (it holds at 390px — the filled-card versus
