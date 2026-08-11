@@ -25,10 +25,24 @@
   background: transparent; color: var(--text-1); -webkit-text-fill-color: var(--text-1);
 }
 .ts-control input::placeholder, .ts-control > .ts-placeholder { color: var(--text-muted); }
-.ts-wrapper.focus .ts-control, .ts-control.focus { border-color: var(--accent); box-shadow: none; }
-/* The control already turns accent-coloured on focus (rule above), so shared.css's ring
-   on the inner typing input would draw a second indicator inside the first. Tom Select
-   builds that input itself, so it cannot carry .no-focus-ring — hence the rule. */
+/* The focus indicator, and the ONLY one these pickers get.
+
+   This was a border-colour swap, and it never painted: Tom Select adds `input-active`
+   (and `dropdown-active`) on focus, and its own `.ts-wrapper.single.input-active
+   .ts-control` rule is (0,3,1) against this rule's (0,2,1) — so the accent border lost
+   every time and twelve pickers on /feeds had no focus state at all. An `outline` is not
+   in that fight, and it draws the same ring as every other control in the app. The
+   `.focus`-class variants are matched too so the specificity cannot drift back. */
+.ts-wrapper.focus .ts-control,
+.ts-wrapper.focus.input-active .ts-control,
+.ts-wrapper.focus.dropdown-active .ts-control,
+.ts-control.focus {
+  border-color: var(--accent); box-shadow: none;
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+/* The wrapper above now draws the ring, so ringing the inner typing input as well would
+   put a second indicator inside the first. Tom Select builds that input itself and it
+   cannot carry .no-focus-ring, hence the rule rather than the marker class. */
 .ts-control input:focus-visible { outline: none; }
 .ts-wrapper.disabled .ts-control { opacity: .55; }
 
@@ -38,9 +52,16 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, .45); margin-top: .2rem; z-index: 30;
 }
 .ts-dropdown .option { padding: .4rem .55rem; }
-/* The highlighted option. --surface-3 rather than a literal, so it keeps its one step of
-   separation from the --surface-2 dropdown when the palette moves. */
-.ts-dropdown .active { background: var(--surface-3); color: var(--text-1); }
+/* The highlighted option — the only cue that says which row the arrow keys are on.
+   Mixed rather than taken straight from --surface-3: one surface step is 1.11:1 against
+   the dropdown, below the 1.17:1 the old hand-picked literal managed, and at that
+   distance the active row is not distinguishable from its neighbours. --border is the
+   token that already sits a visible step above the surfaces, so the mix rides with the
+   palette instead of pinning another literal. */
+.ts-dropdown .active {
+  background: color-mix(in srgb, var(--border) 70%, var(--surface-2));
+  color: var(--text-1);
+}
 .ts-dropdown .option.selected { color: var(--link); }
 .ts-dropdown .no-results { color: var(--text-faint); padding: .4rem .55rem; }
 

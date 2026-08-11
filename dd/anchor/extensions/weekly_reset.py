@@ -773,7 +773,7 @@ def validate_post(ctx: WeeklyResetContext) -> list[str]:
         problems.append("Image URL must start with http:// or https://.")
     if not settings.get_followable_channel_sync("weekly_reset"):
         problems.append(
-            "No 'weekly_reset' channel configured (Autopost Settings) — nowhere to "
+            "Weekly Reset has no channel to post to yet — pick one on the Feeds page. "
             "publish."
         )
     return problems

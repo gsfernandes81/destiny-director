@@ -178,7 +178,7 @@
       tile("Remaining", remaining, remaining ? "pend" : ""),
       tile("Cancelled", run.cancelled, run.cancelled ? "muted" : ""),
       tile(
-        "Pushed out",
+        "Re-published",
         `${run.crosspost_done}${run.crosspost_pending ? `+${run.crosspost_pending}…` : ""}`,
       ),
       tile("Attempts", run.max_attempts),
@@ -265,11 +265,11 @@
       `<div class="stat-label">${label}</div></div>`;
     els.overviewStats.innerHTML = [
       tile("Messages", runs.length),
-      tile("Changes", ops.length),
+      tile("Actions", ops.length),
       tile("Delivered", s.delivered, "ok"),
       tile("Failed", s.failed, s.failed ? "bad" : ""),
       tile("Success", successPct + "%", s.failed ? "" : "ok"),
-      tile("Pushed out", s.crosspost_done),
+      tile("Re-published", s.crosspost_done),
     ].join("");
     els.overviewBar.innerHTML = progressBar(s, true);
     // A per-op-type failure line, only when there are failures (op-type breakdown earns
@@ -287,11 +287,11 @@
     if (!by.create && !by.update && !by.delete) return "";
     const parts = ["create", "update", "delete"]
       .filter((tp) => by[tp])
-      .map((tp) => `${by[tp]} ${OP_LABEL[tp].toLowerCase()}`);
+      .map((tp) => `${by[tp]} ${OP_GERUND[tp]}`);
     return `failures: ${esc(parts.join(" · "))}`;
   }
 
-  // Channels delivered per day, split into create / update / delete series — an edit
+  // Channels delivered to per day, split by posted / edited / removed — an edit
   // storm and a posting spike look identical collapsed, distinct here. Reuses DDCharts.
   function renderOverviewChart(runs) {
     if (!window.DDCharts || !els.overviewChart) return;
@@ -325,7 +325,7 @@
     });
   }
 
-  // A "Jump to source ↗" button for the mirrored message, when we know its source guild
+  // An "Open the original ↗" button for the mirrored message, when we know its source guild
   // (from the latest captured snapshot). Empty for sources predating the capture deploy.
   function sourceButton(run) {
     if (!run.src_guild_id) return "";
@@ -340,6 +340,9 @@
   // caption already named them. One map, so the chart legend, the op chips and the
   // failure line cannot drift from each other or from the caption again.
   const OP_LABEL = { create: "Posted", update: "Edited", delete: "Removed" };
+  // The same three, for a sentence about what FAILED. Past tense there reads as a
+  // success report — "failures: 3 posted" says three things posted.
+  const OP_GERUND = { create: "posting", update: "editing", delete: "removing" };
 
   function opDurationSecs(op) {
     const s = op.started_at ? new Date(op.started_at).getTime() : 0;
@@ -451,7 +454,7 @@
     });
     return (
       `<div class="versions">` +
-      `<div class="version-head"><span class="version-label">Operations</span>` +
+      `<div class="version-head"><span class="version-label">Versions</span>` +
       control +
       jump +
       `</div><div class="vcols">${cols.join("")}</div></div>`
@@ -546,7 +549,7 @@
     const msgHref = g ? `${DISCORD}/${g}/${run.src_ch_id}/${run.src_msg_id}` : null;
     const channel = chHref
       ? `<a href="${esc(chHref)}" target="_blank" rel="noopener" ` +
-        `title="Open source channel">${esc(name)}</a>`
+        `title="Open the channel it was written in">${esc(name)}</a>`
       : esc(name);
     const msgLink = msgHref
       ? `<a class="src-msg-link" href="${esc(msgHref)}" target="_blank" ` +
@@ -612,7 +615,10 @@
       }
     }
     if (![...seen.keys()].includes(selectedSrc)) selectedSrc = "";
-    const opts = ['<option value="">All source channels</option>'];
+    // Kept in step with the pre-JS <option> in mirror_log.html by hand — this line
+    // is what actually renders, since the block below replaces the select's innerHTML
+    // on the first data load.
+    const opts = ['<option value="">All channels</option>'];
     for (const [id, label] of [...seen.entries()].sort((a, b) =>
       a[1].localeCompare(b[1]),
     )) {

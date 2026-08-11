@@ -441,7 +441,8 @@ def validate_post(ctx: TrialsContext) -> list[str]:
         problems.append("Image URL must start with http:// or https://.")
     if not settings.get_followable_channel_sync("trials"):
         problems.append(
-            "No 'trials' channel configured (Autopost Settings) — nowhere to publish."
+            "Trials of Osiris has no channel to post to yet — pick one on the Feeds "
+            "page."
         )
     return problems
 

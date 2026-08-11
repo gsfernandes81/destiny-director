@@ -562,7 +562,7 @@ def follow_control_command_maker(feed: str, autoposts_desc: str):
             if not followable_channel:
                 logger.critical(
                     "%s has no channel set — /autopost %s answered 'unavailable'. "
-                    "Pick one on the Autopost Settings page.",
+                    "Pick one on the Feeds page.",
                     autoposts_friendly_name,
                     autoposts_name,
                 )

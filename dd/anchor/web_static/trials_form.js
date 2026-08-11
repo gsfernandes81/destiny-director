@@ -159,9 +159,8 @@ initPostForm({
     deleteDraft:
       "Delete the in-channel draft post? Your form data stays — Create re-creates it.",
     deletePublished:
-      "Delete the PUBLISHED Trials post? This removes it from the channel and propagates" +
-      " the deletion to every follower (beacon mirrors the removal too). Your form data" +
-      " stays — Create re-posts it.",
+      "Delete the PUBLISHED Trials post? This removes it from the channel and from" +
+      " every server that follows this feed. Your form data stays — Create re-posts it.",
     deleted: "Post deleted — reset to draft.",
   },
 });

@@ -204,9 +204,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
    1px search ring and turned its inset segmented-control ring outset. This selector stays
    at (0,1,1) — exactly what the `a:focus-visible` list it replaced measured.
 
-   Not universal: .cv2b input:focus (cv2_builder.css) and .filter-bar select:focus
-   (mirror_log.css) predate this and still colour a border instead. Left alone rather
-   than swept in with a motion change. */
+   Universal for these element types. The two sheets that used to opt out with
+   `:focus { outline: none }` — cv2_builder.css and mirror_log.css — now tint their
+   border on :focus-visible and let this ring through. tom_select_dark.css is the one
+   deliberate exception: its wrapper draws the ring, so the inner typing input does not
+   draw a second one inside it. */
 :is(a, button, summary, input, select, textarea):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -260,11 +262,15 @@ h1 { font-size: clamp(1.3rem, 1rem + .6vw, 1.75rem); margin: 0 0 .2rem; }
 p.nav { margin: 0 0 .4rem; }
 
 /* A status line whose message is a WAIT rather than a breakage — see shared.js's
-   `toneFor`. One rule for every page's status element, because each page declares its
-   own `.err` and copying a second colour eight times is how the first one drifted.
-   `.note.warn` is NOT in here: that is /feeds' dormant-feed sentence, which
-   feed_actions.css already owns. */
-.status.warn, .modalstatus.warn, #status.warn { color: var(--warn); }
+   `toneFor`. The send dialog's own status line is deliberately absent: feed_actions.css
+   owns it, and web_static/tests/asset_links.test.js fails the build on a second sheet
+   styling it, so that one confirmation cannot become two that disagree. The dormant-feed
+   sentence on /feeds is out for the same reason.
+
+   That test greps raw CSS text, so it cannot tell a rule from a comment: writing the
+   class name here — even to explain why it is NOT styled here — is itself enough to fail
+   the build. Hence the prose. */
+.status.warn, #status.warn { color: var(--warn); }
 
 /* --- the section heading ------------------------------------------------------------
    The micro-caps label that names a group of related controls. It was written out FIVE
@@ -340,10 +346,11 @@ p.nav { margin: 0 0 .4rem; }
   display: flex; flex-direction: column; gap: .5rem; margin: 0;
   background: var(--surface-2);
 }
-.form-page legend {
-  font-weight: 600; padding: 0 .45rem; color: var(--text-2);
-  text-transform: uppercase; letter-spacing: .03em; font-size: .8rem;
-}
+/* Box only. The type comes from the .sectionhead rule above, which names this selector
+   — the full declaration block that used to live here shadowed it at equal specificity
+   (later wins), so editing the primitive would have moved four consumers and left the
+   twenty legends behind, silently. */
+.form-page legend { padding: 0 .45rem; }
 
 .form-page .field { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
 .form-page .field > label { font-size: .85rem; color: var(--text-2); }

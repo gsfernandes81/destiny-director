@@ -517,14 +517,24 @@ def _render_row(
     # read aloud as "em dash" under some punctuation settings and swallowed under
     # others. The colour row's two halves are joined the same way.
     aria = f"{setting.label}, {group_label}" if group_label else setting.label
-    aria_attr = f' aria-label="{html.escape(aria)}"'
+    # The one-line explanation under each label is the only thing that says what a
+    # setting DOES, and an aria-label on the control replaces the accessible name
+    # outright — so without pointing at it, a screen reader gets the label and never the
+    # sentence. Described-by rather than folded into the name: a name should be short
+    # enough to re-hear on every focus, and these run to twenty words.
+    desc_id = f"desc-{setting.slug}"
+    aria_attr = (
+        f' aria-label="{html.escape(aria)}"'
+        f' aria-describedby="{html.escape(desc_id, quote=True)}"'
+    )
     base_class = "row flat-alt" if flat else "row sub" if setting.sub else "row"
 
     def _label_block(actions_html: str = "") -> str:
         return (
             '<div class="text">'
             f'<div class="name">{html.escape(setting.label)}</div>'
-            f'<div class="desc">{html.escape(setting.desc)}</div>'
+            f'<div class="desc" id="{html.escape(desc_id, quote=True)}">'
+            f"{html.escape(setting.desc)}</div>"
             f"{actions_html}"
             "</div>"
         )

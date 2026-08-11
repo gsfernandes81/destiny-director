@@ -44,7 +44,7 @@
         <div id="overviewBar"></div>
         <div id="overviewFails" class="overview-fails muted"></div>
         <div class="overview-chart-label muted">
-          Channels reached per day, split by posted / edited / removed
+          Channels delivered to per day, split by posted / edited / removed
         </div>
         <div id="overviewChart" class="chart"></div>
       </section>
@@ -59,18 +59,24 @@
         No deliveries from this channel in the last 30 days.
       </p>
 
+      <p class="muted tablenote">
+        <b>Re-published</b> counts the copies the bot delivered that were then published
+        in their own channel, so servers following <em>those</em> channels get them too.
+      </p>
+
       <!-- .table-scroll, because the runs table measures 395-414px inside a 390px
            viewport and was the one thing in the panel that scrolled the whole document
            sideways on a phone. The wrapper is inert when the table fits, and the table
            keeps its own .hidden toggle. -->
-      <div class="table-scroll">
+      <div class="table-scroll" tabindex="0" role="region"
+           aria-label="Recent deliveries">
         <table class="runs card hidden" id="runsTable">
           <thead>
             <tr>
               <th>Status</th>
               <th>Post</th>
               <th class="num">Results</th>
-              <th class="num" title="Discord's publish: one push that reaches every server following the channel it was written in.">Pushed out</th>
+              <th class="num">Re-published</th>
               <th>When</th>
             </tr>
           </thead>

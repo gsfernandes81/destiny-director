@@ -178,11 +178,16 @@ function reachSeriesFor(key) {
 }
 
 // One number per feed, not two. "Followers" and "Mirrors" are the two mechanisms by
-// which a post reaches a server — Discord's own channel-follow, and the bot posting a
-// copy — and which of the two carried it is the bot's business, not an admin's. The
-// question the page answers is "did this land, and is it growing?", so the row leads
-// with the total and keeps the split as a quieter second line for whoever wants it (a
-// mirror count that suddenly drops is still worth being able to see).
+// which a post reaches its destination — Discord's own channel-follow, and the bot
+// posting a copy — and which of the two carried it is the bot's business, not an
+// admin's. The question the page answers is "did this land, and is it growing?", so the
+// row leads with the total and keeps the split as a quieter second line for whoever
+// wants it (a copy count that suddenly drops is still worth being able to see).
+//
+// CHANNELS, not servers: both halves come from MirroredChannel.count_dests(), a count of
+// destination-channel rows. One server following a feed into two of its channels counts
+// twice, so calling this "servers" would overclaim. dest_server_id is on the table but
+// nullable, so a distinct-server count would undercount instead.
 function _feedRow(key, label, follows, mirrors) {
   const tr = document.createElement("tr");
   tr.dataset.feed = key;

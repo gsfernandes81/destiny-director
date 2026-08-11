@@ -619,3 +619,13 @@ tr.detail-row > td {
 .overview-fails:empty {
   display: none;
 }
+
+/* The one-line definition above the runs table. A newly-coined column name cannot have
+   its only explanation in a title= attribute: that never appears on touch, never appears
+   for a keyboard user, and is announced unreliably. */
+.tablenote { margin: 0 0 .5rem; font-size: .82rem; }
+
+/* The runs table's scroller is focusable (see mirror_log.html) so a keyboard can reach
+   the columns that overflow at phone width. A focusable region needs a visible focus
+   state like anything else; shared.css's ring only reaches interactive elements. */
+.table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
