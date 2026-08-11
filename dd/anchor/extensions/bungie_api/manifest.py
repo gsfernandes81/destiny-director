@@ -141,11 +141,6 @@ async def ensure_manifest(api_key: str) -> ManifestVersion:
     return await asyncio.shield(task)
 
 
-async def manifest_lookup(api_key: str) -> "ManifestLookup":
-    """A keyed lookup over the current manifest. See :class:`ManifestLookup`."""
-    return ManifestLookup((await ensure_manifest(api_key)).id)
-
-
 async def _current_version_fragment(api_key: str) -> str:
     """Bungie's path fragment for the manifest that is current *right now*."""
     async with (

@@ -34,7 +34,7 @@ import pytest_asyncio
 from dd.anchor.extensions.bungie_api import manifest as m
 from dd.common import schemas
 
-from .manifest_fixtures import FRAGMENT_PREFIX, install_fake_bungie, manifest_zip
+from .manifest_fixtures import install_fake_bungie
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
@@ -192,10 +192,3 @@ async def test_prewarm_is_a_no_op_without_an_api_key(
     calls = install_fake_bungie(monkeypatch, current="world_v1.content")
     await m.prewarm_manifest("")
     assert calls == []
-
-
-def test_the_fixture_zip_really_contains_the_version_named_file() -> None:
-    # Guards the fixtures themselves: the loader opens ``<workdir>/<version>``, so a zip
-    # whose member is named anything else would make every test above vacuous.
-    assert manifest_zip("world_v1.content")
-    assert FRAGMENT_PREFIX.endswith("/")

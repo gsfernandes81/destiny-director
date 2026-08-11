@@ -1,6 +1,6 @@
 """Bungie.net API integration for the anchor bot.
 
-Handles the Destiny 2 manifest download/caching, OAuth token management, and the
+Handles the Destiny 2 manifest (stored in Postgres), OAuth token management, and the
 authenticated vendor/profile API calls used to build the Xûr and Eververse posts.
 
 This package is the discovered lightbulb extension: it owns ``loader`` and the
@@ -36,7 +36,6 @@ from .manifest import (
     build_in_thread,
     ensure_manifest,
     hashes_by_field_prefix,
-    manifest_lookup,
     prewarm_manifest,
     scan_projection,
 )
@@ -79,7 +78,6 @@ __all__ = [
     "build_in_thread",
     "ensure_manifest",
     "hashes_by_field_prefix",
-    "manifest_lookup",
     "prewarm_manifest",
     "scan_projection",
     "APIOffline",
@@ -136,8 +134,9 @@ async def _prewarm_manifest_on_start(_event: h.StartedEvent) -> None:
     happened to be loaded. That warm still runs and coalesces onto this one rather than
     downloading twice.
 
-    Fire-and-forget: ``StartedEvent`` listeners run before the bot is fully up, and this
-    can take minutes on a cold volume.
+    Fire-and-forget: ``StartedEvent`` listeners run before the bot is fully up, and on
+    the one boot in a fortnight where Bungie has shipped a new manifest this downloads
+    and loads it, which takes minutes. Every other boot it is two queries.
     """
     task = asyncio.create_task(prewarm_manifest(schemas.BungieCredentials.api_key))
     _prewarm_tasks.add(task)
