@@ -375,9 +375,9 @@ async def test_feed_sections_are_the_three_the_page_promises() -> None:
     sections = aps._feed_sections()
 
     assert [s.heading for s in sections] == [
-        "Posted on a schedule",
-        "Written by you",
-        "Posted by someone else",
+        "Posted on schedule",
+        "Posted with data from you",
+        "Posted manually",
     ]
     # Every feed lands in exactly one section, and the catalog's order survives within
     # each — the page is read top to bottom and a reshuffle would be noticed as churn.
@@ -400,7 +400,9 @@ async def test_written_by_you_is_exactly_the_feeds_with_a_registered_form() -> N
     """
     from dd.anchor.extensions import trials, weekly_reset  # noqa: F401
 
-    written = next(s for s in aps._feed_sections() if s.heading == "Written by you")
+    written = next(
+        s for s in aps._feed_sections() if s.heading == "Posted with data from you"
+    )
 
     assert {f.slug for f in written.feeds} == {"trials", "weekly_reset"}
     for feed in written.feeds:
@@ -410,7 +412,7 @@ async def test_written_by_you_is_exactly_the_feeds_with_a_registered_form() -> N
 @pytest.mark.integration
 async def test_a_written_by_you_feed_links_to_its_form() -> None:
     # The link and the grouping come off the same registration, so a feed cannot be
-    # listed under "Written by you" while pointing nowhere.
+    # listed under "Posted with data from you" while pointing nowhere.
     from dd.anchor.extensions import trials, weekly_reset  # noqa: F401
 
     html_out = await aps._render_feeds_html()

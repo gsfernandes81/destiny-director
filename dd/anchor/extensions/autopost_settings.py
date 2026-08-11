@@ -756,21 +756,26 @@ class _FeedSection(t.NamedTuple):
     feeds: tuple[dd_feeds.Followable, ...]
 
 
+#: The three sections, and the sentence each needs. The headings name HOW a post gets
+#: made, not who makes it: an earlier set said "Written by you" and "Posted by someone
+#: else", and the third was simply wrong — those feeds are posted by hand, by the same
+#: person, using Discord's own component and embed builders. All three open with the
+#: same verb on purpose, so the difference lands on the words that differ.
 _SECTION_COPY: tuple[tuple[str, str], ...] = (
     (
-        "Posted on a schedule",
+        "Posted on schedule",
         "The bot builds these itself and posts them on a timer. Preview one to see "
         "what it would post right now, or send it early.",
     ),
     (
-        "Written by you",
-        "You write these on a form and press publish yourself — nothing goes out until "
-        "you send it, so there is no switch here.",
+        "Posted with data from you",
+        "You fill in a form and the bot builds the post from it. Nothing goes out "
+        "until you publish it yourself, so there is no switch here.",
     ),
     (
-        "Posted by someone else",
-        "Somebody else writes these straight into the channel. The bot only needs to "
-        "know where to read them from.",
+        "Posted manually",
+        "You write these straight into the channel yourself. The bot does not make "
+        "them — it only needs to know where to read them from.",
     ),
 )
 
@@ -781,7 +786,8 @@ def _feed_sections() -> tuple[_FeedSection, ...]:
     Two of the three splits come off the catalog: a feed with a produce toggle is one
     anchor runs on a schedule (``Followable.has_toggle``), and everything else is not.
 
-    The third does not, and cannot. "Written by you" is Trials and Weekly Reset, which
+    The third does not, and cannot. "Posted with data from you" is Trials and Weekly
+    Reset, which
     :class:`~dd.common.feeds.FeedKind` calls ``UNSCHEDULED`` alongside This Week At
     Bungie and Free Games — the catalog has no field that tells them apart, and adding
     one would be storing an anchor fact in a module beacon imports too. What actually
@@ -818,7 +824,7 @@ def _feed_sections() -> tuple[_FeedSection, ...]:
 
 
 def _form_link(form_path: str) -> str:
-    """The "Open the form →" row closing a *Written by you* feed's group.
+    """The "Open the form →" row closing a *Posted with data from you* feed's group.
 
     Inside the group box rather than beside the heading: the section holds two feeds
     with two different forms, so a link at section level could only be ambiguous.
