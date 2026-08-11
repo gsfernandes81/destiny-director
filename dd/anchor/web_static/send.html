@@ -1,0 +1,117 @@
+<!doctype html>
+<!--
+  /send — send one of the scheduled posts right now. Served by
+  dd.anchor.extensions.send_page; the GET handler substitutes the __FEEDS__ placeholder
+  with one server-rendered row per feed the bot produces on a schedule, and the
+  __FEED_MODALS__ placeholder with the shared preview/send dialogs (feed_modals.html).
+
+  A chooser, not a new capability: every row's two buttons are the same pair the /feeds
+  rows carry, driving the same two endpoints through the same two dialogs
+  (feed_actions.js). It exists because the landing row promised somewhere to go, and a
+  row that opens a page of twelve toggles is a row that lied.
+
+  There is deliberately NO primary button on this page. Six filled buttons is a page
+  shouting at itself; the one filled button in this flow is Send now inside the
+  confirmation dialog, which is where the single irreversible click actually is.
+
+  Auth is the shared OAuth middleware (web_auth), same as every other page.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Send a post now — Destiny Director</title>
+    <link rel="stylesheet" href="/static/shared.css" />
+    <!-- The buttons, the sentence under a dimmed one, and the two dialogs — shared with
+         /feeds, and paired with feed_actions.js below by asset_links.test.js. -->
+    <link rel="stylesheet" href="/static/feed_actions.css" />
+    <!-- cv2_preview.css styles what cv2_render.js draws; the pair must be loaded
+         together (asset_links.test.js enforces it). Both are here for the post preview
+         drawn inside the two dialogs. -->
+    <link rel="stylesheet" href="/static/cv2_preview.css" />
+    <style>
+      /* Base/reset/theme/motion lives in shared.css (linked above), and everything about
+         the ACTIONS is feed_actions.css's; only this page's row anatomy is here.
+
+         No motion of this page's own: the rows arrive with main's shared page-entry
+         rise, and the dialogs ride the shared dialog motion. A stagger would be six
+         things to watch assemble on a page whose whole job is one click. */
+      main { margin: 1.1rem 0 0; display: flex; flex-direction: column; gap: .4rem; }
+
+      /* One card per feed, with a gap — not one box with hairline dividers. Same
+         anatomy as a feed's card on /feeds, one level simpler: nothing here is editable,
+         so a row is a name, where it goes, and the two things you can do with it. */
+      .feed {
+        background: var(--surface-2); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: .8rem .9rem;
+      }
+      .feed .head {
+        display: flex; align-items: center; gap: .9rem; flex-wrap: wrap;
+      }
+      .feed .name {
+        flex: 1 1 14rem; min-width: 0; font-size: 1rem; font-weight: 600;
+        color: var(--text-1);
+      }
+      .feed .desc {
+        display: block; font-weight: 400; font-size: .85rem;
+        color: var(--text-faint); margin-top: .1rem;
+      }
+
+      /* The destination, as a field rather than as prose: it is the one fact on the row
+         the operator is checking before pressing anything, and every other surface here
+         puts a value in a --surface-3 box. Empty says what is absent, in italic muted
+         text — a blank would be indistinguishable from a field that failed to load. */
+      .field {
+        flex: none; background: var(--surface-3); border: 1px solid var(--border);
+        border-radius: var(--radius-sm); padding: .3rem .6rem;
+        font-size: .85rem; color: var(--text-2); max-width: 100%;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .field.empty { color: var(--text-muted); font-style: italic; }
+
+      /* On /feeds the pair sits under the label; here it is the end of the row. */
+      .head .rowactions { margin-top: 0; }
+
+      /* A feed that is switched off. NOT a .note: those are two levels and no more —
+         --warn for a state to fix, --err for something broken — and this is neither.
+         Being switched off is exactly when a manual push is wanted, so it is a fact
+         about the row stated quietly, and Send stays live. */
+      .offnote {
+        margin: .4rem 0 0; font-size: .8rem; color: var(--text-faint); max-width: 60ch;
+      }
+
+      /* Where a started send reports, after both dialogs have closed. */
+      .status { color: var(--text-faint); font-size: .85rem; margin: .9rem 0 0; }
+      .status.err { color: var(--err); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <p class="nav"><a href="/" class="backlink">← Home</a></p>
+      <h1>Send a post now</h1>
+      <p class="muted">
+        Builds the post from live data — exactly as the schedule would — and posts it to
+        the feed's channel. Nothing here is a draft; Preview first if you're unsure.
+      </p>
+    </header>
+
+    <main>
+      <!--__FEEDS__-->
+    </main>
+
+    <!-- role="status" so a screen reader hears the send start without the focus moving.
+         It sits outside main because it survives the dialog that caused it. -->
+    <p class="status" id="status" role="status"></p>
+
+    <!--__FEED_MODALS__-->
+
+    <!-- Order is the dependency graph: cv2_model before cv2_render (which reads
+         window.CV2Model at definition time), shared.js (window.api/say/busy) before
+         feed_actions.js, which uses all three to draw a post into the dialogs above. -->
+    <script src="/static/cv2_model.js" defer></script>
+    <script src="/static/cv2_render.js" defer></script>
+    <script src="/static/shared.js" defer></script>
+    <script src="/static/feed_actions.js" defer></script>
+  </body>
+</html>

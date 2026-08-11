@@ -20,6 +20,9 @@
     <title>Feeds — Destiny Director</title>
     <link rel="stylesheet" href="/static/shared.css" />
     <link rel="stylesheet" href="/static/settings_page.css" />
+    <!-- The Preview / Send now pair and the two dialogs behind it, shared with /send.
+         The sheet pairs with feed_actions.js below (asset_links.test.js enforces it). -->
+    <link rel="stylesheet" href="/static/feed_actions.css" />
     <!-- cv2_preview.css styles what cv2_render.js draws; the pair must be loaded
          together (asset_links.test.js enforces it). Both are here for the post
          preview shown inside this page's modals. -->
@@ -49,49 +52,23 @@
         <span id="status"></span>
       </div>
     </main>
-    <dialog class="feedmodal" id="previewDialog">
-      <h2 id="previewTitle">Preview</h2>
-      <div class="modalpreview cv2-preview" id="previewBox"></div>
-      <p class="modalstatus" id="previewStatus"></p>
-      <div class="modal-actions">
-        <button type="button" id="previewClose">Close</button>
-      </div>
-    </dialog>
+    <!-- The preview and send dialogs, spliced in by autopost_settings.py from
+         web_static/feed_modals.html — the same markup /send carries, because the send
+         confirmation is one surface and not one per page. -->
+    <!--__FEED_MODALS__-->
 
-    <dialog class="feedmodal" id="sendDialog">
-      <h2 id="sendTitle">Send this post?</h2>
-      <p class="lede" id="sendBody"></p>
-      <!-- The post being sent, so the confirmation shows WHAT is going out, not just
-           where. This is the preview; the row deliberately stays a list of toggles. -->
-      <div class="modalpreview cv2-preview" id="sendPreview"></div>
-      <!-- Two status lines, not one. The preview build and the send are deliberately
-           independent — send stays available while the preview builds and even if it
-           fails — so they must not share a slot: a preview resolving after a failed
-           send used to clear the error, leaving a blank line and an armed button. Both
-           can also be true at once ("Iron Banner is not running" AND "Send failed"),
-           and both are worth reading. -->
-      <p class="modalstatus" id="sendPreviewStatus"></p>
-      <p class="modalstatus" id="sendStatus"></p>
-      <label class="publish"
-        ><input type="checkbox" id="publish" checked /> Also push to every server that
-        follows this feed</label
-      >
-      <div class="modal-actions">
-        <button type="button" id="sendCancel">Cancel</button>
-        <button type="button" class="primary" id="sendConfirm">Send now</button>
-      </div>
-    </dialog>
-
-    <!-- shared.js (deferred) defines window.api; defer preserves order, so it is
-         ready before autopost_settings.js runs. cv2_model must precede cv2_render,
-         which draws the post preview inside the modals above. Tom Select (vendored, no
-         build step, same as weekly_reset_form.html) and ts_single.js (its
-         tsWithCurrentOption, also shared with weekly_reset_form.js) must both precede
-         autopost_settings.js, which turns each .channelfield <select> into a picker
-         with them. -->
+    <!-- shared.js (deferred) defines window.api/say/busy; defer preserves order, so
+         it is ready before the two page scripts run. cv2_model must precede cv2_render,
+         which draws the post preview inside the modals above for feed_actions.js. Tom
+         Select (vendored, no build step, same as weekly_reset_form.html) and ts_single.js
+         (its tsWithCurrentOption, also shared with weekly_reset_form.js) must both
+         precede autopost_settings.js, which turns each .channelfield <select> into a
+         picker with them. feed_actions.js wires itself off the modals above and shares
+         nothing with autopost_settings.js, so its position among these is free. -->
     <script src="/static/cv2_model.js" defer></script>
     <script src="/static/cv2_render.js" defer></script>
     <script src="/static/shared.js" defer></script>
+    <script src="/static/feed_actions.js" defer></script>
     <script src="/static/vendor/tom-select.complete.min.js" defer></script>
     <script src="/static/ts_single.js" defer></script>
     <script src="/static/autopost_settings.js" defer></script>

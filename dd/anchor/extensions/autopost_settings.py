@@ -73,8 +73,8 @@ from ...common import (
     settings as dd_settings,
 )
 from .. import web
-from ..autopost import registered_feeds
 from ..hybrid_post_core import registered_specs
+from . import feed_actions
 
 logger = logging.getLogger(__name__)
 
@@ -392,12 +392,10 @@ _CHANNEL_SETTINGS: dict[str, _Setting] = {
 # all still reads as 0/dormant on a fresh install, which beacon's dormancy sweep
 # (``dd.beacon.utils.sweep_dormant_feeds``) pages for until one is picked here.
 _UNCLEARABLE_CHANNEL_SLUGS = frozenset(dd_settings.FOLLOWABLE_SLUGS.values())
-# What an unset channel field says. A sentence, not a blank: an empty control is
-# indistinguishable from one that failed to load, and "no channel" is a real state a
-# feed can be in rather than an absence of information. Rendered italic/muted by
-# settings_page.css, and reused as the picker's placeholder (autopost_settings.js).
-_NO_CHANNEL_LABEL = "No channel set"
-_NO_CHANNEL_OPTION = f'<option value="">{_NO_CHANNEL_LABEL}</option>'
+# What an unset channel field says — the same words the /send row's destination field
+# uses, which is why they live in feed_actions rather than here. Rendered italic/muted
+# by settings_page.css, and reused as the picker's placeholder (autopost_settings.js).
+_NO_CHANNEL_OPTION = f'<option value="">{feed_actions.NO_CHANNEL_LABEL}</option>'
 
 
 # One validator per non-toggle kind (a toggle just needs bool(), handled inline in
@@ -465,78 +463,6 @@ _VALIDATORS: dict[str, _ValueValidator] = {
 }
 
 
-def _note(text: str, level: str) -> str:
-    """One explanatory line under a row: a bullet and a sentence.
-
-    ``level`` is ``"warn"`` for a state the operator can fix here and ``"err"`` for
-    something broken. There is no third level; a note that is neither is not a note.
-    """
-    return (
-        f'<p class="note {level}">'
-        '<span class="bullet" aria-hidden="true">•</span> '
-        f"{html.escape(text)}</p>"
-    )
-
-
-def _feed_actions(slug: str, *, channel_set: bool) -> str:
-    """The Preview / Send now pair for a scheduled feed's head row.
-
-    The replacement for the old ``/<feed> show`` and ``send`` commands. They live on the
-    row rather than a per-feed page: a feed has no state a page could show that this row
-    does not already, so a page would be a click in the way. The rendered post appears
-    in this page's modals (see autopost_settings.js), not in the row.
-
-    An unavailable action is **dimmed and explained, never removed**. A missing button
-    reads as a feature this build does not have; a dim one under a sentence reads as a
-    state, which is what it is — and both of these states are ones the operator can act
-    on. Preview survives a missing channel deliberately: building the post needs no
-    destination, and a feed you cannot send yet is exactly one worth looking at.
-    """
-    live = slug in registered_feeds()
-
-    def _button(action: str, label: str, title: str, *, enabled: bool) -> str:
-        return (
-            f'<button type="button" class="feedaction small" data-action="{action}"'
-            f' data-slug="{html.escape(slug)}"'
-            f"{'' if enabled else ' disabled'}"
-            f' title="{title}">{label}</button>'
-        )
-
-    notes = ""
-    if not live:
-        notes += _note(
-            "This feed's producer isn't loaded in this process, so there's nothing to "
-            "build or send.",
-            "err",
-        )
-    elif not channel_set:
-        notes += _note(
-            "No channel set, so there's nowhere to send it — pick one below. Preview "
-            "still works.",
-            "warn",
-        )
-    return (
-        '<div class="rowactions">'
-        + _button(
-            "preview",
-            "Preview",
-            "Builds the post exactly as the producer would right now, and shows it."
-            " Nothing is sent. The data comes from the live API, so this can take a few"
-            " seconds.",
-            enabled=live,
-        )
-        + _button(
-            "send",
-            "Send now",
-            "Posts to this feed&#39;s channel immediately, and (unless you say"
-            " otherwise) pushes it out to every server that follows the feed.",
-            enabled=live and channel_set,
-        )
-        + "</div>"
-        + notes
-    )
-
-
 def _render_row(
     setting: _Setting,
     state: bool | str | None,
@@ -556,7 +482,8 @@ def _render_row(
     render with the same indent/smaller-name styling as a feed's actual parent toggle,
     implying a hierarchy among the category's settings that isn't there.
 
-    ``actions`` is the caller's Preview/Send block (see :func:`_feed_actions`), passed
+    ``actions`` is the caller's Preview/Send block (see
+    :func:`dd.anchor.extensions.feed_actions.actions_html`), passed
     in rather than derived here: whether Send is available depends on the feed's
     *channel*, which lives in a different row of the same card and so is only known one
     level up.
@@ -861,16 +788,25 @@ def _render_feed_section(
         # "0" is an explicit clear, None a slug that was never written — both mean the
         # feed has nowhere to post, which is what Send's availability turns on.
         channel = rows.get(feed.channel_key, (None, None))[1]
+        actions = (
+            feed_actions.actions_html(
+                feed.slug,
+                label=feed.display_name,
+                channel_set=channel not in (None, "", "0"),
+                # The picker is a row further down this very card.
+                fix_channel_here=True,
+            )
+            if feed.has_toggle
+            else None
+        )
         groups.append(
             _wrap_group(
                 entries,
                 entries[0][0].category,
                 footer=_form_link(spec.form_path) if spec else "",
-                head_actions=_feed_actions(
-                    feed.slug, channel_set=channel not in (None, "", "0")
-                )
-                if feed.has_toggle
-                else "",
+                # Buttons then reason, stacked: a row here is a block of copy with its
+                # controls in it, so the sentence simply follows them.
+                head_actions=actions.buttons + actions.notes if actions else "",
             )
         )
     return (
@@ -886,9 +822,12 @@ async def _render_feeds_html() -> str:
     """Render ``/feeds``: the twelve feed groups, under three section headings."""
     rows = await schemas.AutoPostSettings.get_all_rows()
     sections = "".join(_render_feed_section(s, rows) for s in _feed_sections())
-    return _FEEDS_HTML_PATH.read_text(encoding="utf-8").replace(
+    shell = _FEEDS_HTML_PATH.read_text(encoding="utf-8").replace(
         _TOGGLES_PLACEHOLDER, sections
     )
+    # The preview/send dialogs are shared with /send, so the page carries a placeholder
+    # for them rather than its own copy of the markup.
+    return feed_actions.splice_modals(shell)
 
 
 async def _render_settings_html() -> str:

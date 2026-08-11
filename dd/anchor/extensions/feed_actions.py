@@ -15,12 +15,21 @@
 
 """Per-feed actions — the web replacement for ``/<feed> send`` and ``show``.
 
-**Two endpoints and no page.** The actions live on each feed's row on
-``/autopost_settings``, and the rendered post appears in that page's modals: a feed has
-no state a page could show that the row does not, so a page was only ever a click in the
-way. What is deliberately not here is anything beyond the two actions — no toggle (it
-stays solely on ``/autopost_settings``, so one row has one write path) and no status or
-health, which is the deferred observability work in ``plans/anchor_web_ia.md`` §4.
+**Two endpoints and no page of its own.** The actions live on a feed's row — on
+``/feeds``, and on the ``/send`` chooser (:mod:`dd.anchor.extensions.send_page`) — and
+the rendered post appears in a modal there: a feed has no state a *per-feed* page could
+show that its row does not, so such a page was only ever a click in the way. What is
+deliberately not here is anything beyond the two actions — no toggle (it stays solely on
+``/feeds``, so one row has one write path) and no status or health, which is the
+deferred observability work in ``plans/anchor_web_ia.md`` §4.
+
+Two pages carry them, so this module owns the **markup** of the pair as well as the
+endpoints behind it: :func:`actions_html` renders the buttons and the sentence under a
+dimmed one, and :func:`splice_modals` puts the shared dialogs
+(``web_static/feed_modals.html``, driven by ``web_static/feed_actions.js``) into a
+page's shell. The send confirmation is where the one irreversible click on the panel
+is armed; a second copy of it on the second page would be a second set of words about
+what sending means, and it would drift.
 
 Routes (both behind the shared Discord-OAuth middleware in ``web_auth``, which also
 Origin-checks the POST, so there is no auth code here):
@@ -45,8 +54,10 @@ background task and returns. Delivery is observable in the mirror log.
 """
 
 import asyncio
+import html
 import logging
 import typing as t
+from pathlib import Path
 
 import aiohttp.web
 import lightbulb as lb
@@ -67,6 +78,152 @@ logger = logging.getLogger(__name__)
 # and the bot comes from web.require_bot() — but load_extensions_strict requires every
 # extension module to expose a Loader, so it stays.
 loader = lb.Loader()
+
+# --- the shared markup ---------------------------------------------------------------
+
+_MODALS_PATH = (
+    Path(__file__).resolve().parent.parent / "web_static" / "feed_modals.html"
+)
+#: What a page carrying the Preview/Send pair marks the spot with.
+MODALS_PLACEHOLDER = "<!--__FEED_MODALS__-->"
+
+#: What an unset channel says, wherever one is shown. A sentence, not a blank: an empty
+#: control is indistinguishable from one that failed to load, and "no channel" is a real
+#: state a feed can be in rather than an absence of information. Used by the feeds
+#: page's picker (its pre-JS ``<option>`` and its placeholder, see
+#: autopost_settings.js) and by the /send row's destination field — the same fact twice.
+NO_CHANNEL_LABEL = "No channel set"
+
+#: Where a feed's channel is actually set — the one page that can fix a row whose Send
+#: is dimmed for want of one.
+FEEDS_PATH = "/feeds"
+
+
+def splice_modals(shell: str) -> str:
+    """Put the preview/send dialogs into ``shell`` at :data:`MODALS_PLACEHOLDER`.
+
+    Read per request like every other template here, so an edited partial shows up on a
+    refresh rather than at the next restart.
+    """
+    return shell.replace(
+        MODALS_PLACEHOLDER, _MODALS_PATH.read_text(encoding="utf-8"), 1
+    )
+
+
+def note_html(text: str, level: str, *, link: tuple[str, str] | None = None) -> str:
+    """One explanatory line under a row: a bullet and a sentence.
+
+    ``level`` is ``"warn"`` for a state the operator can fix and ``"err"`` for something
+    broken. There is no third level; a note that is neither is not a note.
+
+    ``link`` is an optional ``(href, sentence)`` closing the note, for when the fix is
+    on a different page than the one being read. It is a whole sentence rather than a
+    word mid-text because that is what survives being read as a link out of context.
+    """
+    tail = ""
+    if link is not None:
+        href, label = link
+        tail = f' <a href="{html.escape(href)}">{html.escape(label)}</a>'
+    return (
+        f'<p class="note {level}">'
+        '<span class="bullet" aria-hidden="true">•</span> '
+        f"<span>{html.escape(text)}{tail}</span></p>"
+    )
+
+
+class FeedActions(t.NamedTuple):
+    """The two halves of a feed's action markup, so each page can place them.
+
+    They come off one call and never separately: the pair's whole rule is that an
+    unavailable button is dimmed **and explained**, and a function that handed out only
+    the buttons would let a page render a dimmed control with no sentence under it. What
+    differs between the pages is only where the sentence goes — beside the row's other
+    copy on /feeds, on its own line under the row on /send, where the buttons sit in a
+    horizontal head that a paragraph has no business joining.
+    """
+
+    #: The Preview / Send now pair, for wherever the row puts its controls.
+    buttons: str
+    #: The reason one of them is dim, or "" when both are live.
+    notes: str
+
+
+def actions_html(
+    slug: str, *, label: str, channel_set: bool, fix_channel_here: bool
+) -> FeedActions:
+    """The Preview / Send now pair for one feed, and the reason either is unavailable.
+
+    The replacement for the old ``/<feed> show`` and ``send`` commands. They live on the
+    feed's row rather than a per-feed page: a feed has no state such a page could show
+    that the row does not already, so it would be a click in the way. The rendered post
+    appears in the shared modals (see :func:`splice_modals`), not in the row.
+
+    An unavailable action is **dimmed and explained, never removed**. A missing button
+    reads as a feature this build does not have; a dim one under a sentence reads as a
+    state, which is what it is — and both of these states are ones the operator can act
+    on. Preview survives a missing channel deliberately: building the post needs no
+    destination, and a feed you cannot send yet is exactly one worth looking at.
+
+    ``label`` is the feed's display name, carried on the button rather than looked up in
+    the DOM: the two pages that render these buttons draw the name into different
+    markup, and the script driving them should not have to know both shapes.
+
+    ``fix_channel_here`` says whether the page being rendered is the one where a channel
+    is chosen. It decides only where the "no channel" note points — at the picker
+    further down this page, or at :data:`FEEDS_PATH` — never whether the note appears.
+    """
+    live = slug in registered_feeds()
+
+    def _button(action: str, text: str, title: str, *, enabled: bool) -> str:
+        return (
+            f'<button type="button" class="feedaction small" data-action="{action}"'
+            f' data-slug="{html.escape(slug)}"'
+            f"{'' if enabled else ' disabled'}"
+            f' title="{title}"'
+            f' data-label="{html.escape(label)}">{text}</button>'
+        )
+
+    notes = ""
+    if not live:
+        notes += note_html(
+            "This feed's producer isn't loaded in this process, so there's nothing to "
+            "build or send.",
+            "err",
+        )
+    elif not channel_set:
+        notes += note_html(
+            "No channel set, so there's nowhere to send it"
+            + (
+                " — pick one below. Preview still works."
+                if fix_channel_here
+                else ". Preview still works."
+            ),
+            "warn",
+            link=None
+            if fix_channel_here
+            else (FEEDS_PATH, "Pick one on the Feeds page."),
+        )
+    buttons = (
+        '<div class="rowactions">'
+        + _button(
+            "preview",
+            "Preview",
+            "Builds the post exactly as the producer would right now, and shows it."
+            " Nothing is sent. The data comes from the live API, so this can take a few"
+            " seconds.",
+            enabled=live,
+        )
+        + _button(
+            "send",
+            "Send now",
+            "Posts to this feed&#39;s channel immediately, and (unless you say"
+            " otherwise) pushes it out to every server that follows the feed.",
+            enabled=live and channel_set,
+        )
+        + "</div>"
+    )
+    return FeedActions(buttons, notes)
+
 
 # Feeds with a send in flight, so a double-click or a second tab can't fire two posts.
 # `send_message`'s own dedupe only guards retry-races within one send — it does not stop
