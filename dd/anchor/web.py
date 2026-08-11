@@ -84,6 +84,11 @@ class Card(t.NamedTuple):
     renders as rows — the errand groups below it are a list of links, where a button
     per line would be four buttons saying "Open". Most rows want the default; a row
     whose verb is genuinely different ("Choose", "Start") says so.
+
+    ``featured`` gives a row the tinted surface. It marks the rows that *are* the
+    errand rather than a way to reach one: the two posts somebody sits down and writes,
+    as against the rows that open a chooser. Tinting the whole group would flatten that
+    distinction back out, which is the same mistake as tinting nothing.
     """
 
     title: str
@@ -93,6 +98,7 @@ class Card(t.NamedTuple):
     order: int = 100
     danger: bool = False
     action: str = "Open"
+    featured: bool = False
 
 
 # Homepage cards contributed by feature modules at import time (mirrors

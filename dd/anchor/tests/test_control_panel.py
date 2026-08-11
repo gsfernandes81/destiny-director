@@ -207,6 +207,21 @@ async def test_a_danger_card_is_the_only_one_rendered_red(clean_cards: None) -> 
     assert '<a class="qlink" href="/quiet">' in html_out
 
 
+async def test_only_a_featured_row_gets_the_tinted_surface(clean_cards: None) -> None:
+    # The tint separates the two posts somebody sits down and writes from the rows that
+    # merely open a chooser. Tinting every row in the group flattens that back out,
+    # which is the same mistake as tinting none of them.
+    web.register_card(
+        web.Card("Write it", "", "/write", web.CardGroup.SEND, 10, featured=True)
+    )
+    web.register_card(web.Card("Choose one", "", "/choose", web.CardGroup.SEND, 20))
+
+    html_out = await control_panel._render_panel_html()
+
+    assert '<a class="row featured" href="/write">' in html_out
+    assert '<a class="row" href="/choose">' in html_out
+
+
 async def test_the_send_group_renders_rows_and_the_rest_render_links(
     clean_cards: None,
 ) -> None:

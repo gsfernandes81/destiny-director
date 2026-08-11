@@ -719,6 +719,7 @@ web.register_card(
         "/trials",
         web.CardGroup.SEND,
         20,
+        featured=True,
     )
 )
 

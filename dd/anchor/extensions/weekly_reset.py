@@ -1523,6 +1523,7 @@ web.register_card(
         "/weekly_reset",
         web.CardGroup.SEND,
         10,
+        featured=True,
     )
 )
 

@@ -68,10 +68,11 @@
          the brand blue ever moves, and falls back to the plain border everywhere the
          function is missing because the shorthand above already set one.
 
-         Groups 2-4 stay legible but recede: unfilled, so they read as a list of links
-         in boxes rather than as things competing with group 1. */
-      .group-send .rows .row {
-        padding: .85rem .9rem;
+         The tint marks the rows that ARE the errand — the two posts somebody sits down
+         and writes — not every row in the group. The other two open a chooser, and
+         tinting them too would flatten the distinction back out. */
+      .group-send .rows .row { padding: .85rem .9rem; }
+      .group-send .rows .row.featured {
         background: color-mix(in srgb, var(--accent-strong) 7%, var(--surface-2));
         border-color: color-mix(in srgb, var(--accent-strong) 26%, var(--border));
       }

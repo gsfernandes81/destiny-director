@@ -110,6 +110,7 @@ def _row(
     danger: bool = False,
     quiet: bool = False,
     action: str = "Open",
+    featured: bool = False,
 ) -> str:
     """One landing row: an ``<a>`` when it goes somewhere, a ``<button>`` when it acts.
 
@@ -119,7 +120,12 @@ def _row(
     next in a way a chevron does not, and the verbs differ per row.
     """
     classes = " ".join(
-        ["row", *(["danger"] if danger else []), *(["quiet"] if quiet else [])]
+        [
+            "row",
+            *(["featured"] if featured else []),
+            *(["danger"] if danger else []),
+            *(["quiet"] if quiet else []),
+        ]
     )
     inner = (
         '<span class="row-text">'
@@ -197,6 +203,7 @@ async def _render_panel_html() -> str:
                     danger=card.danger,
                     quiet=iron_banner_on and card.href == _TRIALS_HREF,
                     action=card.action,
+                    featured=card.featured,
                 )
                 for card in cards
             ]
