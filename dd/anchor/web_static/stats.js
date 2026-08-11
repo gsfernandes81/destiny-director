@@ -340,8 +340,12 @@ function renderAutopostsChart() {
   DDCharts.lineChart(_byId("autopostsChart"), {
     resolution: res,
     series: [
+      // --accent and --link, not --accent and --accent-strong: a chart series is a
+      // DATA encoding, and the two must be told apart at a glance. Since the fills went
+      // pink those two tokens are both pink, which is a fine pair of buttons and a
+      // useless pair of lines.
       { name: "Following", color: cssVar("--accent"), points: DDCharts.bucketByResolution(s.follow, res, "last") },
-      { name: "Sent a copy", color: cssVar("--accent-strong"), points: DDCharts.bucketByResolution(s.mirror, res, "last") },
+      { name: "Sent a copy", color: cssVar("--link"), points: DDCharts.bucketByResolution(s.mirror, res, "last") },
     ],
   });
 }

@@ -69,11 +69,12 @@
 
       /* Three weights, descending with how often the errand happens.
 
-         Group 1 is what people come here to do, so its rows are filled and carry a
-         blue-leaning border — the page's only tinted surface. The tint is derived from
+         Group 1 is what people come here to do, so its rows are filled and carry an
+         accent-leaning border — the page's only tinted surface. The tint is derived from
          --accent-strong rather than being a new colour: `color-mix` keeps it in step if
-         the brand blue ever moves, and falls back to the plain border everywhere the
-         function is missing because the shorthand above already set one.
+         the fill colour ever moves (it has once already, from blue to pink), and falls
+         back to the plain border everywhere the function is missing because the
+         shorthand above already set one.
 
          The tint marks the rows that ARE the errand — the two posts somebody sits down
          and writes — not every row in the group. The other two open a chooser, and

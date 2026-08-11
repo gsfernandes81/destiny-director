@@ -39,12 +39,23 @@
      - --accent: the full-strength Kyber brand pink (#EC42A5), used bright on small
        interaction states — the toggle fill, focus rings and selection borders — so it
        pops as a brand accent without dominating the chrome.
-     - --accent-strong: the original blue (#2e5bff) for solid button/chip/tag fills that
-       carry white text, so primary actions read as they always did.
-     Links use the blue --link. Does NOT change per post. */
+     - --accent-strong: a deeper pink for solid button/chip/tag fills that carry white
+       text. It was the original blue (#2e5bff); the panel is Kyber's and its primary
+       actions had no reason to be a different brand's colour.
+
+       Deeper rather than the brand pink itself, for two reasons. White on #EC42A5 is
+       3.57:1 and fails AA outright, and dropping to dark ink instead would collide with
+       the active-tab treatment, which is already bright-pink-with-dark-ink and means
+       something else. And --accent is the focus ring: a filled button in the very colour
+       that rings it has no visible focus state. At #c9257f white lands on 5.18:1 —
+       exactly what it was on the blue, so the swap costs no contrast anywhere — and the
+       fill still clears the 3:1 non-text floor against both the page (3.43) and a card
+       (3.12), which a darker pink would not.
+     Links stay the blue --link: a link is not a button, and one accent doing both jobs
+     leaves nothing to tell them apart. Does NOT change per post. */
   --accent: #EC42A5;              /* toggle fill, focus rings, form-control focus, selection, active tab */
   --accent-ink: #14161a;          /* dark text on the bright --accent fill (e.g. active tab) */
-  --accent-strong: #2e5bff;       /* button/chip/tag fills (original blue; white text AA) */
+  --accent-strong: #c9257f;       /* button/chip/tag fills (deep pink; white text AA) */
   --accent-tint: #2b1420;         /* selected-row background wash */
   --accent-text-strong: #ffffff;  /* text on --accent-strong fills */
   --link: #9fb4ff;                /* link + selected-option text (the original blue) */

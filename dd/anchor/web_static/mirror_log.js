@@ -305,7 +305,9 @@
       m.set(d.getTime(), (m.get(d.getTime()) || 0) + o.delivered);
     }
     const colors = {
-      create: cssVar("--accent-strong"),
+      // See stats.js: series colours have to be distinguishable from each other, so
+      // they do not follow the button fill. --accent-strong and --accent are both pink.
+      create: cssVar("--link"),
       update: cssVar("--accent"),
       delete: cssVar("--text-muted"),
     };
