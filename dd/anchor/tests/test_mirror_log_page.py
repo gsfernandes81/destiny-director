@@ -176,7 +176,7 @@ async def test_page_shell_served() -> None:
     assert resp.status == 200
     assert resp.content_type == "text/html"
     body = _text(resp)
-    assert "Mirror logs" in body
+    assert "Delivery log" in body
     assert "/static/mirror_log.js" in body
 
 
