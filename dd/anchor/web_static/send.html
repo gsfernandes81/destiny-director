@@ -73,6 +73,25 @@
       /* On /feeds the pair sits under the label; here it is the end of the row. */
       .head .rowactions { margin-top: 0; }
 
+      /* Phone: name, then destination, then the pair — always, on every card.
+
+         The head is a wrapping flex row, so where it broke depended on how wide the
+         channel's NAME happened to be: "Unknown channel (9001)" is 192px and pushed the
+         buttons onto a third line, while "No channel set" is narrower and let them sit
+         beside it. Two different row anatomies down one page, decided by a string
+         length. Worse, on the cards where they shared a line the destination sat flush
+         against the buttons at the same height and read as a third button.
+
+         Full-width basis on both makes the break a rule instead of an accident. The
+         field keeps its own width — a --surface-3 box stretched across the card is a
+         text input, and this is a value you read. */
+      @media (max-width: 34rem) {
+        .feed .head { row-gap: .55rem; }
+        .feed .name { flex: 1 1 100%; }
+        .feed .field { flex: 0 0 auto; margin-right: auto; }
+        .head .rowactions { flex: 1 1 100%; }
+      }
+
       /* A feed that is switched off. NOT a .note: those are two levels and no more —
          --warn for a state to fix, --err for something broken — and this is neither.
          Being switched off is exactly when a manual push is wanted, so it is a fact
@@ -96,7 +115,7 @@
       </p>
     </header>
 
-    <main>
+    <main class="sendpage">
       <!--__FEEDS__-->
     </main>
 

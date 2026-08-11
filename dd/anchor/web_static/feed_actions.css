@@ -19,6 +19,47 @@
    sentence underneath is doing the explaining and the button only has to look inert. */
 .feedaction:disabled { opacity: .4; }
 
+/* Send is not Preview. One builds a post and shows it to you; the other posts to Discord
+   and pushes it out to every following server, and there is no undoing that. Shipped as
+   identical buttons sitting 6px apart, which is the pair you least want to be twins.
+
+   The DIFFERENCE is carried by Preview stepping back rather than by Send shouting: the
+   panel keeps at most one filled button per surface (shared.css's `.primary`), and on
+   /feeds the filled one is Save. So Preview goes transparent — still a full-size,
+   full-contrast target, just no longer a raised control — and Send keeps the standard
+   button chrome. Two clearly different things, one filled button, no new colour.
+
+   Send's outline is --accent-strong, the same hue its filled form uses on /send — so the
+  two pages tell one story (Send is the accented one; on the page whose purpose IS
+  sending, it is filled) rather than two. Deliberately NOT --border-hover, which every
+  other surface uses to mean "the pointer is on this" — a static control wearing the
+  hover colour reads as permanently hovered.
+
+  `:not(:disabled)` on the border swap so a dimmed Send does not advertise itself. */
+.feedaction[data-action="preview"] {
+  background: transparent;
+  border-color: var(--border);
+}
+.feedaction[data-action="preview"]:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+.feedaction[data-action="send"]:not(:disabled) {
+  border-color: var(--accent-strong);
+}
+
+/* On /send the page exists to do exactly this, so Send takes the filled treatment there
+   — it is that page's one primary action, and nothing else on it is filled. Scoped by
+   the page's own main, and kept in THIS sheet because asset_links.test.js reserves every
+   .feedaction rule to it (one confirmation, one look, one file). */
+main.sendpage .feedaction[data-action="send"]:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: var(--accent-text-strong);
+}
+main.sendpage .feedaction[data-action="send"]:hover:not(:disabled) {
+  border-color: var(--accent-text-strong);
+}
+
 /* One explanatory line under the row it belongs to: a bullet and a sentence. --warn is a
    state the reader can fix, --err is something broken. Nothing else gets one — a note
    that is neither is a description, and descriptions live with the row's own copy. */
