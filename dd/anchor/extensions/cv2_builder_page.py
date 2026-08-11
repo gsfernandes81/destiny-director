@@ -16,14 +16,25 @@
 """The web Components-V2 builder's HTTP surface — the replacement for ``/post
 components``' in-Discord builder.
 
-A Discord command writes a :class:`Cv2Draft` and replies with a link here; the page
-loads the draft, autosaves as the author edits, and publishes when they confirm. The
-draft row carries **what publishing means** (post / edit / send a copy), so
-the browser never supplies a target it could tamper with — it only ever sends nodes.
+A draft (:class:`Cv2Draft`) is minted with a target, and the page loads it, autosaves as
+the author edits, and publishes when the author confirms. Two things mint one: a Discord
+command (``posts.py``, which decides the target from the invocation), and — for a
+one-off custom post started from the control panel — ``POST /cv2-builder/new``, where
+the browser names the target channel and the **server independently vets it** before
+it is stored (see :func:`_handle_new`). Either way the row carries **what publishing
+means** (post / edit / send a copy) and where it lands.
 
-Routes (all behind the shared Discord OAuth middleware, and all additionally scoped to
-the draft's creator — see :meth:`Cv2Draft.get_for_user`):
+``GET /custom-post`` (``web_static/custom_post.html``) is the browser's half of that
+second path: one channel picker and one button, whose only job is to produce the
+``channel_id`` the mint route will vet. It is a separate page and not a step inside the
+builder because the target is fixed at mint and immutable afterwards — the question has
+to be asked before the draft exists.
 
+Routes (all behind the shared Discord OAuth middleware; every draft-scoped one is
+additionally scoped to the draft's creator — see :meth:`Cv2Draft.get_for_user`):
+
+- ``GET  /custom-post``                  pick the channel; the doorway to the two below
+- ``POST /cv2-builder/new``              vet a channel, mint a draft, return its path
 - ``GET  /cv2-builder/{draft}``          the static page shell
 - ``GET  /cv2-builder/{draft}/data``     seed nodes, action copy, guild emoji
 - ``POST /cv2-builder/{draft}/save``     autosave the node list
@@ -37,6 +48,15 @@ load-bearing. ``/publish`` re-runs :func:`cv2_nodes.validate` and sends through
 :class:`RawComponentBuilder` from the node list *it* was given, so a tampered or stale
 client cannot post something the server did not independently accept.
 
+The target is the other half of that boundary. A browser names one **exactly once, at
+mint**, and only through :func:`_handle_new`, which refuses anything
+:func:`autopost_settings.check_channel` won't vouch for — right guild, postable type,
+bot fully permitted there — and stores the guild id it resolved itself rather than one
+the client also sent. From then on the target is a property of the row:
+:func:`_handle_publish` reads ``target_channel_id`` off the draft and **never** off the
+request, so a later request cannot redirect an existing draft at a channel that was
+never vetted.
+
 What ``/preview`` is *for* changed with that, and the distinction is worth keeping
 straight. It used to return server-rendered HTML, which made the confirmation dialog a
 second, independent implementation of the render — a client-side bug was visible there
@@ -47,6 +67,9 @@ the server vouched for, and it differs from the canvas exactly where
 seeing. What replaces the lost cross-check is the golden corpus in
 ``dd/anchor/preview_fixtures``, which holds the renderer to a pinned output from both
 languages. See ``docs/architecture.md``, "Rendering a message on the web".
+
+Drafts are scratch space, so this module also owns their disposal: :func:`_prune_drafts`
+runs once at boot and again on a daily cron (see :func:`_on_started`).
 """
 
 import logging
@@ -54,6 +77,7 @@ import typing as t
 import uuid
 from pathlib import Path
 
+import aiocron
 import aiohttp.web
 import hikari as h
 import lightbulb as lb
@@ -63,12 +87,23 @@ from ...common.schemas import Cv2Draft
 from ...common.utils import fetch_emoji_dict
 from .. import cv2_nodes, web
 from ..cv2_raw import RawComponentBuilder
+from . import autopost_settings
 from .web_auth import authed_user_id
 
 loader = lb.Loader()
 
 _PAGE_HTML_PATH = (
     Path(__file__).resolve().parent.parent / "web_static" / "cv2_builder.html"
+)
+
+# The channel-picking doorway in front of the builder (``GET /custom-post``). A page of
+# its own rather than a step inside the builder because a draft's target is fixed at
+# mint — :func:`_handle_new` vets it once and stores what it resolved, and
+# :func:`_handle_publish` reads it off the row and never off the request. That is what
+# makes a later request unable to redirect an existing draft; the cost is that the
+# question has to be answered before there is a draft to answer it on.
+_CUSTOM_POST_HTML_PATH = (
+    Path(__file__).resolve().parent.parent / "web_static" / "custom_post.html"
 )
 
 # Emoji dicts are a REST round-trip per guild; the builder asks for one on every page
@@ -135,6 +170,11 @@ def _message_link(guild_id: int | None, channel_id: int, message_id: int) -> str
     return f"https://discord.com/channels/{guild_id or '@me'}/{channel_id}/{message_id}"
 
 
+def _builder_path(draft_id: str) -> str:
+    """The same-origin path a draft's editor lives at."""
+    return f"/cv2-builder/{draft_id}"
+
+
 # Column attributes read off an ORM instance are plain ints at runtime, but the query
 # layer types them as `Column[Unknown]`. Coercing at the boundary keeps the Discord call
 # sites honestly typed instead of suppressing the whole module in ty.toml.
@@ -154,6 +194,18 @@ async def _handle_page(request: aiohttp.web.Request) -> aiohttp.web.Response:
     # friendly in-page message instead of a bare 404 document.
     return aiohttp.web.Response(
         text=_PAGE_HTML_PATH.read_text(encoding="utf-8"), content_type="text/html"
+    )
+
+
+async def _handle_custom_post_page(
+    request: aiohttp.web.Request,
+) -> aiohttp.web.Response:
+    # Static shell, like the builder's own. The channel list is fetched by the page from
+    # ``/autopost_settings/channels``, so a bot that is still starting renders a page
+    # that says so rather than a route that refuses to render at all.
+    return aiohttp.web.Response(
+        text=_CUSTOM_POST_HTML_PATH.read_text(encoding="utf-8"),
+        content_type="text/html",
     )
 
 
@@ -271,10 +323,10 @@ async def _handle_publish(request: aiohttp.web.Request) -> aiohttp.web.Response:
     )
 
 
-# --- draft creation (used by the Discord commands) ----------------------------------
+# --- draft creation ------------------------------------------------------------------
 
 
-async def new_draft(
+async def new_draft_id(
     *,
     user_id: int,
     action: str,
@@ -283,10 +335,14 @@ async def new_draft(
     channel_id: int | None = None,
     message_id: int | None = None,
 ) -> str:
-    """Create a draft and return the URL the author should open.
+    """Create a draft and return its id.
 
-    Called from ``posts.py``: the Discord side decides the target, the web side only
-    ever edits nodes.
+    Split out from :func:`new_draft` because the two callers want different things back.
+    The Discord side needs an absolute URL to put in a message; a web caller wants the
+    same-origin path (:func:`_builder_path`) and must not go through
+    ``cfg.public_base_url``, which is legitimately empty on a local dev box — an
+    absolute URL built from it would be a dead link on the one deployment where the
+    whole flow is most likely to be exercised.
     """
     draft_id = uuid.uuid4().hex
     await Cv2Draft.create(
@@ -298,30 +354,160 @@ async def new_draft(
         target_channel_id=channel_id,
         target_message_id=message_id,
     )
-    return f"{cfg.public_base_url.rstrip('/')}/cv2-builder/{draft_id}"
+    return draft_id
+
+
+async def new_draft(
+    *,
+    user_id: int,
+    action: str,
+    nodes: list[cv2_nodes.Node] | None = None,
+    guild_id: int | None = None,
+    channel_id: int | None = None,
+    message_id: int | None = None,
+) -> str:
+    """Create a draft and return the absolute URL the author should open.
+
+    Called from ``posts.py``: the Discord side decides the target, the web side only
+    ever edits nodes. The reply is read in a Discord client, which has no origin to
+    resolve a relative path against, so this one is absolute.
+    """
+    draft_id = await new_draft_id(
+        user_id=user_id,
+        action=action,
+        nodes=nodes,
+        guild_id=guild_id,
+        channel_id=channel_id,
+        message_id=message_id,
+    )
+    return f"{cfg.public_base_url.rstrip('/')}{_builder_path(draft_id)}"
+
+
+async def _handle_new(request: aiohttp.web.Request) -> aiohttp.web.Response:
+    """Vet a browser-supplied target channel, mint a draft for it, return its path.
+
+    This is the one place a browser gets to name a publish target, and the point of the
+    route is the vetting: :func:`autopost_settings.check_channel` is the same validator
+    the settings page's channel fields save through, run here with ``announce_only``
+    off (a one-off custom post is just a message — nothing follows it, so a plain text
+    channel is fine) and the guild scope a non-control-scoped field uses. It fails
+    closed, and its refusal is a sentence written to be shown, so it is passed straight
+    through rather than flattened into "that didn't work".
+
+    Returns a *relative* path and lets the page decide whether to navigate: a JSON
+    endpoint that answers 302 is a trap for the ``fetch()`` calling it, which follows
+    the redirect and hands its caller the builder's HTML instead of an answer.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return aiohttp.web.json_response({"error": "Expected a JSON body."}, status=400)
+
+    raw_channel_id = body.get("channel_id") if isinstance(body, dict) else None
+    try:
+        channel_id = int(str(raw_channel_id).strip())
+    except (TypeError, ValueError):
+        channel_id = 0
+    if channel_id <= 0:
+        return aiohttp.web.json_response(
+            {"error": "Pick a channel to post in."}, status=400
+        )
+
+    check = await autopost_settings.check_channel(
+        channel_id,
+        announce_only=False,
+        allowed_guild_ids=autopost_settings.allowed_guild_ids(),
+    )
+    if check.problem is not None or check.channel is None:
+        return aiohttp.web.json_response(
+            # The reason IS the payload — see check_channel. Only a lead-in is added.
+            {"error": f"Can't post in that channel: {check.problem}"},
+            status=400,
+        )
+
+    draft_id = await new_draft_id(
+        user_id=authed_user_id(request),
+        action=Cv2Draft.ACTION_POST,
+        # The guild the server resolved from the channel it fetched, not one the client
+        # was also trusted to name alongside the channel id.
+        guild_id=int(check.channel.guild_id),
+        channel_id=channel_id,
+    )
+    return aiohttp.web.json_response({"path": _builder_path(draft_id)})
 
 
 # --- registration --------------------------------------------------------------------
 
 
 def register_cv2_builder_routes(app: aiohttp.web.Application) -> None:
+    # Registered before the ``{draft}`` routes so the static path is the first candidate
+    # the router tries: "new" is a legal draft id as far as the dynamic pattern is
+    # concerned, and this way nothing rests on how aiohttp orders the two.
+    app.router.add_post("/cv2-builder/new", _handle_new)
     app.router.add_get("/cv2-builder/{draft}", _handle_page)
     app.router.add_get("/cv2-builder/{draft}/data", _handle_data)
     app.router.add_post("/cv2-builder/{draft}/save", _handle_save)
     app.router.add_post("/cv2-builder/{draft}/preview", _handle_preview)
     app.router.add_post("/cv2-builder/{draft}/publish", _handle_publish)
+    # The page that feeds /cv2-builder/new. Registered here rather than in a module of
+    # its own because it is one static shell whose only server-side contract is the mint
+    # route directly above it — splitting them would put the two halves of one flow in
+    # two files that have to agree.
+    app.router.add_get("/custom-post", _handle_custom_post_page)
 
 
 web.register_routes(register_cv2_builder_routes)
+web.register_card(
+    web.Card(
+        "Custom one-off post",
+        # The reviewed design's own wording for this row, taken verbatim rather than
+        # paraphrased — the landing page is a directory, and its descriptions were
+        # written together to sit at one register.
+        "Build a message from scratch and send it to a channel.",
+        "/custom-post",
+        web.CardGroup.SEND,
+        # After Weekly Reset (10) and Trials (20), and after "Send a scheduled post now"
+        # (30) — the group runs most-frequent errand first, and writing a post from
+        # nothing is the rarest of the four.
+        40,
+        # "Start", not the default "Open": this row does not open something that already
+        # exists. The reviewed design gives group 1 the verbs Open / Open / Choose /
+        # Start, and the differences are the point — four buttons all reading "Open"
+        # would say nothing about which is which.
+        action="Start",
+    )
+)
 
 
-@loader.listener(h.StartedEvent)
-async def _on_started(event: h.StartedEvent) -> None:
-    # Drop stale drafts once per boot — they are scratch space, not history. (The bot
-    # itself is stashed centrally in dd.anchor.web; the routes read it from there.)
+async def _prune_drafts() -> None:
+    """Drop drafts past :meth:`Cv2Draft.prune`'s retention. Never raises.
+
+    Contained the same way the boot pass always was: a prune is housekeeping on scratch
+    space, so a DB blip is worth a log line and nothing more — and on the cron path an
+    escaping exception would take the scheduled job down with it, so the next day's
+    sweep would not run either.
+    """
     try:
         removed = await Cv2Draft.prune()
         if removed:
             logging.info("CV2 builder: pruned %d stale draft(s)", removed)
     except Exception as e:
         logging.warning("CV2 builder: draft prune failed: %r", e)
+
+
+@loader.listener(h.StartedEvent)
+async def _on_started(event: h.StartedEvent) -> None:
+    # Drop stale drafts once per boot — they are scratch space, not history. (The bot
+    # itself is stashed centrally in dd.anchor.web; the routes read it from there.)
+    # This pass is what cleans up after a long outage; the cron below is what keeps a
+    # long-lived process from accumulating drafts between restarts, which matters now
+    # that a web button mints one per click rather than a Discord command per draft.
+    await _prune_drafts()
+
+    # 04:00 UTC: deliberately NOT 17:00, which is when every scheduled producer in this
+    # bot fires (lost_sector, eververse, portal_ops, iron_banner, xur, ada) — a delete
+    # has no reason to contend with the day's posting. 04:00 is otherwise unoccupied.
+    # Registered here rather than at import time so it only starts on a live bot.
+    @aiocron.crontab("0 4 * * *", start=True)
+    async def prune_cv2_drafts() -> None:
+        await _prune_drafts()

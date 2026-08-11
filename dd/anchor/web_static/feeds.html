@@ -1,0 +1,76 @@
+<!doctype html>
+<!--
+  /feeds — what each feed posts to, and whether it posts at all. Served by
+  dd.anchor.extensions.autopost_settings; the GET handler substitutes the __TOGGLES__
+  placeholder comment in <main> with three server-rendered <section>s, one per way a feed
+  gets written (on a schedule, by you on a form, by somebody else).
+
+  This and /settings were one page. They share a save endpoint, a channel-picker endpoint
+  and settings_page.css; what they do not share is a reader — nobody arrives wanting to
+  change an accent colour AND a feed's channel, and the eight colour/alert rows sat
+  between the reader and every feed on the page.
+
+  Auth is the shared OAuth middleware (web_auth), same as every other page.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Feeds — Destiny Director</title>
+    <link rel="stylesheet" href="/static/shared.css" />
+    <link rel="stylesheet" href="/static/settings_page.css" />
+    <!-- The Preview / Send now pair and the two dialogs behind it, shared with /send.
+         The sheet pairs with feed_actions.js below (asset_links.test.js enforces it). -->
+    <link rel="stylesheet" href="/static/feed_actions.css" />
+    <!-- cv2_preview.css styles what cv2_render.js draws; the pair must be loaded
+         together (asset_links.test.js enforces it). Both are here for the post
+         preview shown inside this page's modals. -->
+    <link rel="stylesheet" href="/static/cv2_preview.css" />
+    <!-- Tom Select (vendored, window.TomSelect) backs the channel pickers below — same
+         widget as weekly_reset_form.html. tom_select_dark.css must load after this
+         vendored sheet (not before, e.g. alongside shared.css), or the vendored light
+         theme cascades in after it and wins. -->
+    <link rel="stylesheet" href="/static/vendor/tom-select.min.css" />
+    <link rel="stylesheet" href="/static/tom_select_dark.css" />
+  </head>
+  <body>
+    <header>
+      <p class="nav"><a href="/" class="backlink">← Home</a></p>
+      <h1>Feeds</h1>
+      <p class="muted">
+        What posts where. Switches stop the bot writing a feed — they don't change which
+        servers follow it. Changes apply from the next post; no restart needed.
+      </p>
+    </header>
+    <main class="settings">
+      <form id="toggles">
+        <!--__TOGGLES__-->
+      </form>
+      <div class="actions">
+        <button type="button" class="primary" id="save">Save</button>
+        <span id="status"></span>
+      </div>
+    </main>
+    <!-- The preview and send dialogs, spliced in by autopost_settings.py from
+         web_static/feed_modals.html — the same markup /send carries, because the send
+         confirmation is one surface and not one per page. -->
+    <!--__FEED_MODALS__-->
+
+    <!-- shared.js (deferred) defines window.api/say/busy; defer preserves order, so
+         it is ready before the two page scripts run. cv2_model must precede cv2_render,
+         which draws the post preview inside the modals above for feed_actions.js. Tom
+         Select (vendored, no build step, same as weekly_reset_form.html) and ts_single.js
+         (its tsWithCurrentOption, also shared with weekly_reset_form.js) must both
+         precede autopost_settings.js, which turns each .channelfield <select> into a
+         picker with them. feed_actions.js wires itself off the modals above and shares
+         nothing with autopost_settings.js, so its position among these is free. -->
+    <script src="/static/cv2_model.js" defer></script>
+    <script src="/static/cv2_render.js" defer></script>
+    <script src="/static/shared.js" defer></script>
+    <script src="/static/feed_actions.js" defer></script>
+    <script src="/static/vendor/tom-select.complete.min.js" defer></script>
+    <script src="/static/ts_single.js" defer></script>
+    <script src="/static/autopost_settings.js" defer></script>
+  </body>
+</html>

@@ -110,17 +110,29 @@ def _req(
     )
 
 
-# --- GET /rotation (homepage) ----------------------------------------------------
+# --- GET /rotation (the world-activity index) -------------------------------------
 
 
-async def test_home_lists_all_rotation_types():
+async def test_home_lists_the_world_activity_pages_only():
     resp = await editor._handle_home_get(_req())
     assert resp.status == 200
     body = resp.text or ""
-    # Every registered rotation type is linked, and a friendly title renders.
-    for slug in rs.ROTATION_SCHEMAS:
+    # The nine world-activity pages are linked, and a friendly title renders.
+    for slug in rs.WORLD_ACTIVITY_SLUGS:
         assert f"type={slug}" in body
-    assert "Lost sector rotation" in body
+    assert "World activity pages (legacy)" in body
+    # The four that feed a post are reached by name from the landing page instead; an
+    # index in front of the thing somebody came for is the whole reason they moved.
+    for slug in rs.ROTATION_SCHEMAS:
+        if slug not in rs.WORLD_ACTIVITY_SLUGS:
+            assert f"type={slug}" not in body
+
+
+async def test_home_carries_no_slug_chips():
+    # Titles are unique on their own; `world_activity_pale_heart` beside one is
+    # engineer-facing noise on a page for the person editing the data.
+    body = (await editor._handle_home_get(_req())).text or ""
+    assert "<code>" not in body
 
 
 # --- GET /rotation/edit ----------------------------------------------------------
@@ -381,3 +393,31 @@ async def test_trials_loot_save_rejects_set_with_armor_key():
         _req(body={"type": "trials_loot", "data": bad})
     )
     assert resp.status == 400
+
+
+# --- the landing page's group 2 ------------------------------------------------------
+#
+# The editor contributes one row per *subject* rather than one row for itself, so an
+# admin who came to fix the lost sector schedule reaches it without passing through an
+# index first. That makes five hrefs whose `type=` has to stay real.
+
+
+async def test_data_cards_name_real_rotation_types() -> None:
+    # A renamed or mistyped slug would render a row that 404s on click, and nothing else
+    # in the suite would notice — the card registry is dev-authored copy, not data.
+    featured = [
+        href.split("type=", 1)[1]
+        for _slug, _title, _desc in editor._FEATURED_ROTATIONS
+        for href in [f"/rotation/edit?type={_slug}"]
+    ]
+
+    assert featured == ["lost_sector", "xur_location", "trials_loot", "iron_banner"]
+    for slug in featured:
+        assert slug in rs.ROTATION_SCHEMAS, slug
+
+
+async def test_the_featured_rotations_are_not_the_legacy_pile() -> None:
+    # The four are promoted precisely because they are not world-activity pages; if one
+    # ever were, it would be listed twice — once by name and once behind the last row.
+    for slug, _title, _desc in editor._FEATURED_ROTATIONS:
+        assert slug not in rs.WORLD_ACTIVITY_SLUGS, slug

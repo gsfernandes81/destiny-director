@@ -176,11 +176,14 @@ async def test_page_shell_served() -> None:
     assert resp.status == 200
     assert resp.content_type == "text/html"
     body = _text(resp)
-    assert "Mirror logs" in body
+    assert "Delivery log" in body
     assert "/static/mirror_log.js" in body
 
 
 async def test_card_is_registered() -> None:
-    card = next((c for c in web.registered_cards() if c.title == "Mirror logs"), None)
+    card = next((c for c in web.registered_cards() if c.title == "Delivery log"), None)
     assert card is not None
     assert card.href == "/mirror-logs"
+    # "Check what happened", not "Set up and admin": reading the log is a routine
+    # errand, and the default group would file it with the destructive one.
+    assert card.group is web.CardGroup.CHECK

@@ -1,65 +1,214 @@
 <!doctype html>
 <!--
-  Anchor web control panel — a card per web page/tool. Served by
-  dd.anchor.extensions.control_panel; the GET handler substitutes the __CARDS__
-  placeholder comment in <main> with the server-rendered card grid (one card per
-  web.register_card(...) contribution, sorted for display). Auth is the shared OAuth
-  middleware (web_auth), same as every other page.
+  Anchor web control panel — the front door. Served by
+  dd.anchor.extensions.control_panel; the GET handler substitutes the __GROUPS__
+  placeholder comment in <main> with the server-rendered groups (one section per
+  web.CardGroup, one row per web.register_card(...) contribution, plus this page's own
+  three admin rows). Auth is the shared OAuth middleware (web_auth), same as every other
+  page.
+
+  It is a grouped LIST, not a card grid. The grid sorted by title, which is a property of
+  the words rather than of the work: the two most frequent errands — writing the Weekly
+  Reset and Trials posts — sorted last. Rows in errand order fix that, and a row can carry
+  a one-line description without becoming a tile.
 -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex, nofollow" />
-    <title>Control Panel — Destiny Director</title>
+    <title>Destiny Director</title>
     <link rel="stylesheet" href="/static/shared.css" />
     <style>
-      /* Base/reset/theme lives in shared.css (linked above); only this page's own
+      /* Base/reset/theme/motion lives in shared.css (linked above); only this page's own
          styles are inlined here. */
-      main.cards {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-        gap: .8rem;
-        margin: 1rem 0;
+      main { margin: 1.1rem 0 0; display: flex; flex-direction: column; gap: 1.3rem; }
+
+      /* M2 group reveal. The four groups arrive one after another; the ROWS never do —
+         staggering seventeen rows takes half a second and charges it to every repeat
+         visit. `backwards` fill is what makes the delay a wait rather than a flash of
+         the finished state, and the delay is a multiple of the shared --dur-stagger
+         token so reduced motion collapses it with everything else. */
+      .group { animation: group-in var(--dur) var(--ease-out) backwards; }
+      .group:nth-of-type(2) { animation-delay: calc(1 * var(--dur-stagger)); }
+      .group:nth-of-type(3) { animation-delay: calc(2 * var(--dur-stagger)); }
+      .group:nth-of-type(4) { animation-delay: calc(3 * var(--dur-stagger)); }
+      @keyframes group-in { from { opacity: 0; transform: translateY(4px); } }
+
+      /* Type is shared.css's .sectionhead; only the box is this page's. The hairline is
+         structural, not decoration: it declares the group's full width regardless of how
+         little follows it, so a heading over one short link still owns an 840px-wide
+         object instead of floating above a stray phrase. Without it the three link groups
+         read as footnotes to the first one, and their four different ragged right edges
+         have nothing in common. It was in the approved design and was dropped on the way
+         here. */
+      .group h2 {
+        margin: 0 0 .45rem;
+        padding-bottom: .35rem; border-bottom: 1px solid var(--border);
       }
-      a.card {
-        display: block;
-        border: 1px solid var(--border); border-radius: var(--radius); padding: .8rem 1rem;
-        text-decoration: none; color: inherit; background: var(--surface-3);
+
+      /* Rows are DISCRETE cards with a gap, not one shared box with hairline dividers.
+         The shared box was tried and read wrong: it gives all four groups the same
+         weight, so the page becomes a uniform wall and the eye has nothing to land on.
+         Separate cards also let each row own its border, which is what makes
+         --border-hover work as a hover affordance the way it does everywhere else. */
+      .rows { display: flex; flex-direction: column; gap: .4rem; }
+      .rows form { margin: 0; display: block; }
+
+      /* Selector deliberately `.rows .row` and not `.row`: three of these rows are
+         <button>s, and shared.css's button variants are (0,1,1) — `button.danger` would
+         out-specify a bare `.row` and fill the Shut down row edge to edge with
+         --danger-surface. A row is a row first; what it does is said by its title. */
+      .rows .row {
+        display: flex; align-items: center; gap: .9rem; width: 100%;
+        padding: .7rem .9rem; text-align: left; font: inherit;
+        color: inherit; text-decoration: none; cursor: pointer;
+        background: var(--surface-2); border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
       }
-      a.card:hover { border-color: var(--border-hover); }
-      a.card .title {
-        color: var(--link); font-size: 1.05rem; font-weight: 600;
+
+      /* Three weights, descending with how often the errand happens.
+
+         Group 1 is what people come here to do, so its rows are filled and carry a
+         blue-leaning border — the page's only tinted surface. The tint is derived from
+         --accent-strong rather than being a new colour: `color-mix` keeps it in step if
+         the brand blue ever moves, and falls back to the plain border everywhere the
+         function is missing because the shorthand above already set one.
+
+         The tint marks the rows that ARE the errand — the two posts somebody sits down
+         and writes — not every row in the group. The other two open a chooser, and
+         tinting them too would flatten the distinction back out. */
+      .group-send .rows .row { padding: .85rem .9rem; }
+      .group-send .rows .row.featured {
+        background: color-mix(in srgb, var(--accent-strong) 7%, var(--surface-2));
+        border-color: color-mix(in srgb, var(--accent-strong) 26%, var(--border));
       }
-      a.card:hover .title { text-decoration: underline; }
-      a.card .desc { color: var(--text-faint); font-size: .85rem; margin-top: .25rem; }
-      p.empty { color: var(--text-faint); }
-      /* Bot administration, below the card grid. Deliberately quiet: it is two
-         buttons, one of which stops the process. */
-      .botadmin { margin: 1.6rem 0 0; }
-      .botadmin h2 { font-size: .95rem; margin: 0 0 .5rem; color: var(--text-faint); }
-      .botactions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
-      .status { color: var(--text-faint); font-size: .85rem; }
-      .status.err { color: var(--danger, #d9534f); }
+
+      /* Groups 2-4 are a wrapped list of links, not a stack of rows. Rows everywhere
+         gave every group the same weight, which made the ordering say nothing — if the
+         last group looks exactly like the first, putting one of them first is
+         decoration. These are destinations, not things to weigh up.
+
+         Deliberately no group heading is quoted in these comments: the render tests
+         search the raw HTML for heading text, and a comment mentioning one is found
+         before the heading itself. */
+      .links { display: flex; flex-wrap: wrap; gap: .5rem; }
+      .links form { margin: 0; display: contents; }
+      /* Chips, not bare text. As plain links these were 21px tall — fine with a mouse,
+         a coin-toss with a thumb, and the only targets on the site below the 24px WCAG
+         2.5.8 floor. Padding alone lands on 40px; the min-height holds it there if the
+         type scale ever moves, and `inline-flex` centring is what makes a chip whose
+         label has a descender the same height as one whose label does not (otherwise a
+         wrapped row rides up and down).
+
+         The hover swaps fill and border rather than underlining — a chip that underlines
+         reads as a link wearing a box — and the press restates shared.css's button dip,
+         which reaches <button> only and so misses the anchors here.
+
+         No `transition` of its own, deliberately. shared.css transitions background,
+         border-colour, colour AND transform for every interactive element, and `.qlink`
+         at (0,1,0) out-specifies that rule's (0,0,1) — so a shorter list here does not
+         add to the shared one, it REPLACES it. A hand-written
+         `background, border-color` pair silently dropped the transform, and the chips
+         pressed instantly while the rows above them eased. */
+      .qlink {
+        display: inline-flex; align-items: center; min-height: 40px;
+        padding: .5rem .85rem; border-radius: var(--radius-sm);
+        background: var(--surface-2); border: 1px solid var(--border);
+        color: var(--link); font: inherit; font-size: .95rem;
+        text-decoration: none; cursor: pointer;
+      }
+      .qlink:hover {
+        text-decoration: none;
+        background: var(--surface-3); border-color: var(--border-hover);
+      }
+      .qlink:active { transform: translateY(1px); }
+      /* Every box property is restated, not just the colours. `.qlink` is (0,1,0) and
+         shared.css's `button.danger` is (0,1,1), so the base rule loses the fill, the
+         border and the padding to it — as plain links that arrived as a filled danger
+         pill among bare text, and as chips it would arrive as a chip of the wrong size.
+         The chrome has to be won back either way. */
+      .qlink.danger {
+        display: inline-flex; align-items: center; min-height: 40px;
+        padding: .5rem .85rem; border-radius: var(--radius-sm);
+        background: var(--danger-bg); border: 1px solid var(--danger-border);
+        color: var(--danger-text);
+      }
+      .qlink.danger:hover {
+        background: var(--danger-surface); border-color: var(--danger-text);
+      }
+
+      .row-text { min-width: 0; }
+      .row-title {
+        display: block; color: var(--link); font-size: 1.05rem; font-weight: 600;
+      }
+      .row-desc {
+        display: block; color: var(--text-faint); font-size: .85rem; margin-top: .1rem;
+      }
+      /* Decorative: the row is already the target. A verb says what happens next in a
+         way a chevron cannot, and these verbs differ — Open, Choose, Start. */
+      .row-action {
+        margin-left: auto; flex: none;
+        font-size: .8rem; font-weight: 600; color: var(--text-2);
+        padding: .35rem .75rem; border-radius: var(--radius-sm);
+        background: var(--surface-3); border: 1px solid var(--border);
+      }
+      /* Filled on the two featured rows only, as approved. A row is title-left,
+         control-right with ~450px of nothing between them at 1920 — the eye crosses that
+         gap because there is something bright at the far end. Shipped grey-on-grey, the
+         right half of the row was both text-less and target-less, and the pair read as
+         two things that had lost each other. Exactly two, deliberately: filling Choose
+         and Start as well would flatten the featured distinction the tint exists for. */
+      .row.featured .row-action {
+        background: var(--accent-strong); border-color: var(--accent-strong);
+        color: var(--accent-text-strong);
+      }
+      .row:hover:not(:disabled) .row-action { border-color: var(--border-hover); }
+      .row.featured:hover:not(:disabled) .row-action {
+        border-color: var(--accent-text-strong);
+      }
+
+      .row:hover:not(:disabled) {
+        background: var(--surface-3); border-color: var(--border-hover);
+      }
+      .row:hover:not(:disabled) .row-title { text-decoration: underline; }
+      /* M4 press. The shared rule in shared.css reaches <button> only; three of these
+         rows are anchors, so the landing rows restate it against .row. */
+      .row:not(:disabled):active { transform: translateY(1px); }
+
+      /* The one destructive row on the page. Nothing else here is red, and that scarcity
+         is the mechanism: one red row says which action is unlike the others. */
+      .row.danger .row-title { color: var(--danger-text); }
+      .row.danger:hover:not(:disabled) { background: var(--danger-bg); }
+
+      /* De-emphasised: still a link, still clickable, just not this week's errand (the
+         Trials row during an Iron Banner week). A hint, not a gate. */
+      .row.quiet .row-title { color: var(--text-faint); }
+
+      .status { color: var(--text-faint); font-size: .85rem; margin: .8rem 0 0; }
+      .status.err { color: var(--err); }
 
       dialog.panelmodal {
         border: 1px solid var(--border); border-radius: var(--radius);
         background: var(--surface-3); color: var(--text-1); padding: 1.1rem;
         max-width: 34rem; width: calc(100% - 2rem);
       }
-      dialog.panelmodal::backdrop { background: rgba(0, 0, 0, .55); }
       /* The destructive one is bordered and backdropped harder, so it does not look
-         like the information dialog it sits next to. */
-      dialog.panelmodal.danger { border-color: var(--danger-border, #d9534f); }
-      dialog.panelmodal.danger::backdrop { background: rgba(60, 0, 0, .7); }
-      dialog.panelmodal.danger h2 { color: var(--danger-text, #f0a0a0); }
+         like the information dialog it sits next to. Both open and close with the shared
+         dialog motion in shared.css; `consequence` is what slows the OPENING of this one
+         (--dur-slow), because arriving at it should take a beat. Only the [open] backdrop
+         colour is set here — the closed state is the shared transparent one, and pinning
+         it unconditionally is what stops a backdrop from fading. */
+      dialog.panelmodal.danger { border-color: var(--danger-border); }
+      dialog.panelmodal.danger[open]::backdrop { background: rgba(60, 0, 0, .7); }
+      dialog.panelmodal.danger h2 { color: var(--danger-text); }
       dialog.panelmodal h2 { margin: 0 0 .6rem; font-size: 1.05rem; }
       dialog.panelmodal p.lede {
-        margin: 0 0 .8rem; font-size: .92rem; color: var(--muted);
+        margin: 0 0 .8rem; font-size: .92rem; color: var(--text-3);
       }
       .modal-actions { display: flex; justify-content: flex-end; gap: .6rem; }
       .modalstatus { color: var(--text-faint); font-size: .85rem; }
-      .modalstatus.err { color: var(--danger, #d9534f); }
+      .modalstatus.err { color: var(--err); }
       /* The config dump: a definition list, monospace values so ids are scannable. */
       #infoBody dl { margin: 0; display: grid; grid-template-columns: auto 1fr;
         gap: .3rem .8rem; font-size: .88rem; }
@@ -70,33 +219,20 @@
   </head>
   <body>
     <header>
-      <h1>Control Panel</h1>
+      <h1>Destiny Director</h1>
       <p class="muted">
-        Pick a tool below. You're signed in via Discord — no need to re-run a command
-        between visits.
+        Everything the bot posts, and the switches behind it. You're signed in with
+        Discord — no need to sign in again between visits.
       </p>
     </header>
-    <main class="cards">
-      <!--__CARDS__-->
+    <main>
+      <!--__GROUPS__-->
     </main>
 
-    <!-- Bot administration: the web replacement for /anchor info and /anchor stop. On
-         the panel itself rather than a page of its own — it is two actions and a
-         read-only dump, and this is already the bot's front door. -->
-    <section class="botadmin">
-      <h2>Bot</h2>
-      <div class="botactions">
-        <button type="button" id="infoBtn"
-                title="Which channel each feed posts to, plus the control server and test environment.">
-          Configured channels
-        </button>
-        <button type="button" class="danger" id="stopBtn"
-                title="Shuts the bot down cleanly. The panel runs inside the bot, so this takes this page down too — recovery is a Railway redeploy.">
-          Shut down
-        </button>
-        <span class="status" id="botStatus"></span>
-      </div>
-    </section>
+    <!-- Shutting down takes this page with it, so its outcome is reported here rather
+         than on a page we could navigate to. role="status" so a screen reader hears it
+         without the focus moving. -->
+    <p class="status" id="botStatus" role="status"></p>
 
     <dialog class="panelmodal" id="infoDialog">
       <h2>Configured channels</h2>
@@ -106,7 +242,7 @@
       </div>
     </dialog>
 
-    <dialog class="panelmodal danger" id="stopDialog">
+    <dialog class="panelmodal danger consequence" id="stopDialog">
       <h2>⚠️ Shut the bot down?</h2>
       <p class="lede">
         <strong>Everything stops.</strong> No feeds post, nothing mirrors to any
@@ -120,7 +256,9 @@
       </p>
       <p class="modalstatus" id="stopStatus"></p>
       <div class="modal-actions">
-        <button type="button" id="stopCancel">Cancel</button>
+        <!-- autofocus on Cancel: the dialog opens with the safe button focused, so a
+             stray Enter closes it rather than confirming it. -->
+        <button type="button" id="stopCancel" autofocus>Cancel</button>
         <button type="button" class="danger" id="stopConfirm">Shut down</button>
       </div>
     </dialog>

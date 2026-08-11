@@ -58,7 +58,7 @@ _parser.add_argument(
     "--surface",
     default="all",
     help="which flow to drive: all (default), home, rotation, weekly_reset, trials, "
-    "builder, mirror_log. Repeatable as a comma list.",
+    "builder, mirror_log, feeds, settings, send. Repeatable as a comma list.",
 )
 _parser.add_argument("--port", type=int, default=8813)
 _parser.add_argument(
@@ -164,6 +164,15 @@ async def _seed() -> None:
     await schemas.Cv2Draft.create(
         id=DRAFT_ID, created_by=USER_ID, action="post", nodes=DRAFT_NODES
     )
+    # /feeds and /send are mostly a set of per-row STATES, and a database where every
+    # feed looks alike shows one of them. Give two feeds a channel and switch one of
+    # those off, so a run covers "sendable", "switched off but still sendable" and
+    # "no channel, so Send is dimmed" (Portal Ops and Iron Banner ship that way) in one
+    # screenshot.
+    await schemas.AutoPostSettings.set_value("lost_sector_channel", "9001")
+    await schemas.AutoPostSettings.set_enabled("lost_sector", True)
+    await schemas.AutoPostSettings.set_value("xur_channel", "9002")
+    await schemas.AutoPostSettings.set_enabled("xur", False)
 
 
 async def main() -> int:
@@ -181,13 +190,30 @@ async def main() -> int:
     # empty, because the auth middleware is the app's only security boundary.
     from dd.anchor import web
     from dd.anchor.extensions import (  # noqa: F401
+        autopost_settings,
         control_panel,
         cv2_builder_page,
+        feed_actions,
         mirror_log,
         rotation_editor,
+        send_page,
         trials,
         web_auth,
         weekly_reset,
+    )
+
+    # The producer modules, imported for their `register_feed` side effect alone: it is
+    # what decides whether a feed's Preview/Send buttons are live on /feeds and /send,
+    # and without them every row renders in the "this build has no producer" state,
+    # which is the one state those pages are NOT usually in. Safe at import: their
+    # crontabs are created inside a StartedEvent listener, and no gateway runs here.
+    from dd.anchor.extensions import (  # noqa: F401
+        ada,
+        eververse,
+        iron_banner,
+        lost_sector,
+        portal_ops,
+        xur,
     )
 
     await _seed()
@@ -293,6 +319,63 @@ async def main() -> int:
 
         if want("mirror_log"):
             await go("/mirror-logs", "06_mirror_log")
+
+        # The two settings pages. Both hydrate their channel pickers from a fetch that
+        # needs the live bot, which there is none of here — the pickers fall back to
+        # their rendered <select>, which is exactly the state worth seeing, and the
+        # 503 that fetch gets is expected rather than a problem.
+        if want("feeds"):
+            await go("/feeds", "07_feeds")
+        if want("settings"):
+            await go("/settings", "08_settings")
+
+        # The chooser. Its rows are a set of states rather than a set of controls, so
+        # what is worth checking is which buttons came out live — by attribute, not by
+        # eye — and that both dialogs still open over them.
+        if want("send"):
+            await go("/send", "09_send")
+            states = await page.evaluate(
+                """() => Object.fromEntries(
+                    [...document.querySelectorAll(".feedaction")].map((b) => [
+                      b.dataset.slug + ":" + b.dataset.action,
+                      b.disabled ? "dimmed" : "live",
+                    ]),
+                )"""
+            )
+            print(f"  /send buttons: {states}")
+            # Portal Ops ships with no channel: Send has nowhere to go, but building the
+            # post costs nothing, so Preview must stay live.
+            for key, want_state in (
+                ("portal_ops:preview", "live"),
+                ("portal_ops:send", "dimmed"),
+                ("lost_sector:send", "live"),
+                # Switched off, and still sendable by hand — that is the whole point of
+                # the row rendering normally.
+                ("xur:send", "live"),
+            ):
+                if states.get(key) != want_state:
+                    problems.append(
+                        f"/send: {key} is {states.get(key)}, expected {want_state}"
+                    )
+            # A preview opens and draws (a live Bungie fetch fails here, so what is
+            # asserted is the dialog, not the post).
+            await page.click('.feedaction[data-slug="lost_sector"][data-action="preview"]')
+            await page.wait_for_timeout(1200)
+            await page.screenshot(path=str(SHOTS / "10_send_preview.png"), full_page=True)
+            if not await page.evaluate("() => previewDialog.open"):
+                problems.append("/send: the preview dialog did not open")
+            await page.click("#previewClose")
+            await page.wait_for_timeout(400)
+            # And the send confirmation opens over the row, then closes without sending.
+            await page.click('.feedaction[data-slug="lost_sector"][data-action="send"]')
+            await page.wait_for_timeout(1200)
+            await page.screenshot(path=str(SHOTS / "11_send_confirm.png"), full_page=True)
+            if not await page.evaluate("() => sendDialog.open"):
+                problems.append("/send: the send dialog did not open")
+            await page.click("#sendCancel")
+            await page.wait_for_timeout(400)
+            if await page.evaluate("() => sendDialog.open"):
+                problems.append("/send: the send dialog did not close on Cancel")
 
         await browser.close()
 

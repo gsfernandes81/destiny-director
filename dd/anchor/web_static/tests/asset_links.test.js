@@ -80,6 +80,94 @@ test("cv2_render.js is loaded after the model it consumes", () => {
   );
 });
 
+test("the Tom Select dark theme is loaded after the sheet it overrides", () => {
+  // Same class of failure as the cv2_model/cv2_render order above, but in CSS, where it
+  // is quieter still: nothing is undefined and nothing throws — the vendored LIGHT theme
+  // simply cascades in last and wins, so the picker renders dark-on-white inside an
+  // otherwise dark page. tom_select_dark.css's own header says "link this file AFTER the
+  // vendored sheet"; a comment is not a guard, and there are three pages relying on it.
+  const VENDOR = "/static/vendor/tom-select.min.css";
+  const DARK = "/static/tom_select_dark.css";
+  const wrong = pages()
+    .filter((p) => p.text.includes(VENDOR) || p.text.includes(DARK))
+    .filter((p) => {
+      const vendor = p.text.indexOf(VENDOR);
+      const dark = p.text.indexOf(DARK);
+      return vendor === -1 || dark === -1 || vendor > dark;
+    })
+    .map((p) => p.name);
+  assert.deepEqual(
+    wrong,
+    [],
+    "load the vendored Tom Select sheet first, then tom_select_dark.css",
+  );
+});
+
+test("a page with a Tom Select picker loads the widget and its styles", () => {
+  // The pairing in the other direction: the sheets style what the vendored script builds,
+  // so either half alone is wrong — markup with no widget, or a widget with no theme.
+  const SCRIPT = "/static/vendor/tom-select.complete.min.js";
+  const DARK = "/static/tom_select_dark.css";
+  const mismatched = pages()
+    .filter((p) => p.text.includes(SCRIPT) !== p.text.includes(DARK))
+    .map((p) => p.name);
+  assert.deepEqual(
+    mismatched,
+    [],
+    "tom-select.complete.min.js and tom_select_dark.css must be loaded together",
+  );
+});
+
+test("a page with the feed actions loads the script, the styles and the modals", () => {
+  // Preview / Send now is four files that only work together: the buttons (rendered by
+  // feed_actions.py), the script that drives them, the sheet that dims an unavailable
+  // one, and the dialogs the script reaches for by id. Two pages carry the set now, and
+  // a page missing one piece fails quietly in a different way each time — buttons that
+  // do nothing, a "disabled" button that looks pressable, or a TypeError on the first
+  // getElementById. The modals arrive through a server-side placeholder rather than in
+  // the shell, so that is what a page is checked for.
+  const SCRIPT = "/static/feed_actions.js";
+  const SHEET = "/static/feed_actions.css";
+  const MODALS = "<!--__FEED_MODALS__-->";
+  const broken = pages()
+    .filter((p) => p.text.includes(SCRIPT) || p.text.includes(SHEET))
+    .filter(
+      (p) =>
+        !(
+          p.text.includes(SCRIPT) &&
+          p.text.includes(SHEET) &&
+          p.text.includes(MODALS)
+        ),
+    )
+    .map((p) => p.name);
+  assert.deepEqual(
+    broken,
+    [],
+    "feed_actions.js, feed_actions.css and the __FEED_MODALS__ placeholder go together",
+  );
+});
+
+test("the feed action styles live only in feed_actions.css", () => {
+  // The same rule as the chart chrome below, for the surface that was just split out of
+  // settings_page.css: a second page restyling the buttons or the send dialog is how the
+  // one confirmation becomes two that disagree.
+  const OWNED = ["feedaction", "feedmodal", "modalpreview", "modalstatus"];
+  const sheets = fs
+    .readdirSync(STATIC_DIR)
+    .filter((n) => n.endsWith(".css") && n !== "feed_actions.css");
+
+  const offenders = [];
+  for (const name of sheets) {
+    const text = fs.readFileSync(path.join(STATIC_DIR, name), "utf8");
+    for (const cls of OWNED) {
+      if (new RegExp(`\\.${cls}\\b[^;{]*\\{`).test(text)) {
+        offenders.push(`${name}: .${cls}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], "move these into feed_actions.css rather than restating them");
+});
+
 test("charts.css is not loaded by pages that draw no charts", () => {
   // The reverse direction, so the sheet does not quietly become a second shared.css.
   const pointless = pages()

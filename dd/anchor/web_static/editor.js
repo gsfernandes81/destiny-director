@@ -843,7 +843,7 @@ async function runPreview() {
               children: posts.map((item) =>
                 R.el("article", "post-wall-item", {
                   children: [
-                    R.el("h3", "post-wall-label", { text: item.label }),
+                    R.el("h3", "sectionhead post-wall-label", { text: item.label }),
                     R.el("div", "cv2-preview", {
                       children: [R.nodesSpec(item.nodes || [])],
                     }),

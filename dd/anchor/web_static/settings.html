@@ -1,0 +1,57 @@
+<!doctype html>
+<!--
+  /settings — the bot-wide look of every post, and where problems get reported. Served by
+  dd.anchor.extensions.autopost_settings; the GET handler substitutes the __TOGGLES__
+  placeholder comment in <main> with the two server-rendered groups (Branding, Alerts).
+
+  The sibling of /feeds: same rows-in-boxes surface, same save endpoint, same
+  settings_page.css. It loads neither the post renderer nor its stylesheet — nothing on
+  this page previews a post — but it does load Tom Select, for the one channel picker
+  (the alerts channel).
+
+  Auth is the shared OAuth middleware (web_auth), same as every other page.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Appearance &amp; alerts — Destiny Director</title>
+    <link rel="stylesheet" href="/static/shared.css" />
+    <link rel="stylesheet" href="/static/settings_page.css" />
+    <!-- Tom Select (vendored, window.TomSelect) backs the alerts-channel picker.
+         tom_select_dark.css must load after this vendored sheet (not before, e.g.
+         alongside shared.css), or the vendored light theme cascades in after it and
+         wins. -->
+    <link rel="stylesheet" href="/static/vendor/tom-select.min.css" />
+    <link rel="stylesheet" href="/static/tom_select_dark.css" />
+  </head>
+  <body>
+    <header>
+      <p class="nav"><a href="/" class="backlink">← Home</a></p>
+      <h1>Appearance &amp; alerts</h1>
+      <p class="muted">
+        Default colours and links for every post, and where problems get reported.
+        Changes apply immediately.
+      </p>
+    </header>
+    <main class="settings">
+      <form id="toggles">
+        <!--__TOGGLES__-->
+      </form>
+      <div class="actions">
+        <button type="button" class="primary" id="save">Save</button>
+        <span id="status"></span>
+      </div>
+    </main>
+
+    <!-- shared.js (deferred) defines window.api; defer preserves order, so it is ready
+         before autopost_settings.js runs. Tom Select and ts_single.js (its
+         tsWithCurrentOption) must both precede autopost_settings.js, which turns the
+         .channelfield <select> into a picker with them. -->
+    <script src="/static/shared.js" defer></script>
+    <script src="/static/vendor/tom-select.complete.min.js" defer></script>
+    <script src="/static/ts_single.js" defer></script>
+    <script src="/static/autopost_settings.js" defer></script>
+  </body>
+</html>

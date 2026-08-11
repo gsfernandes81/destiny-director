@@ -17,7 +17,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex, nofollow" />
-    <title>Mirror logs — Destiny Director</title>
+    <title>Delivery log — Destiny Director</title>
     <link rel="stylesheet" href="/static/shared.css" />
     <link rel="stylesheet" href="/static/cv2_preview.css" />
     <link rel="stylesheet" href="/static/charts.css" />
@@ -25,19 +25,19 @@
   </head>
   <body>
     <header>
-      <p class="nav"><a href="/" class="backlink">← Control panel</a></p>
-      <h1>Mirror logs</h1>
+      <p class="nav"><a href="/" class="backlink">← Home</a></p>
+      <h1>Delivery log</h1>
       <p class="muted">
-        How each mirrored announcement fanned out to its follower channels, read live
-        from the delivery ledger. Click a run for its stats and the mirrored message (with
-        version diffs). History reaches back <span id="windowDays">30</span> days.
+        How each post reached the servers that follow it. Click a run for its stats and
+        the message as delivered, with version diffs. History reaches back
+        <span id="windowDays">30</span> days.
       </p>
     </header>
 
     <main class="mirror-log">
       <p id="loading" class="muted">Loading…</p>
       <p id="error" class="err hidden"></p>
-      <p id="empty" class="muted hidden">No mirror runs in the log window.</p>
+      <p id="empty" class="muted hidden">No deliveries in the last 30 days.</p>
 
       <section id="overview" class="overview hidden">
         <div id="overviewStats" class="stat-tiles"></div>
@@ -55,7 +55,9 @@
           <option value="">All</option>
         </select>
       </div>
-      <p id="noMatches" class="muted hidden">No runs for this source channel.</p>
+      <p id="noMatches" class="muted hidden">
+        No deliveries from this channel in the last 30 days.
+      </p>
 
       <table class="runs card hidden" id="runsTable">
         <thead>

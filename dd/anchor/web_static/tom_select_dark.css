@@ -2,7 +2,7 @@
   Tom Select dark theme — overrides the vendored light stylesheet
   (/static/vendor/tom-select.min.css) to match this site's dark palette. Colours come
   from shared.css's tokens. Shared by every page that uses Tom Select (currently
-  weekly_reset_form.html, autopost_settings.html): link this file AFTER the vendored
+  weekly_reset_form.html, feeds.html, settings.html): link this file AFTER the vendored
   sheet, or the vendored light theme cascades in after it and wins. No build step —
   served as-is, same as every other stylesheet here.
 */
@@ -22,7 +22,7 @@
    overrides forced/night-mode text recolouring on Chromium/Samsung Internet). */
 .ts-control, .ts-control input, .ts-control input::placeholder { color: var(--text-1); }
 .ts-control input {
-  background: transparent; color: var(--text-1); -webkit-text-fill-color: #e6e6e6;
+  background: transparent; color: var(--text-1); -webkit-text-fill-color: var(--text-1);
 }
 .ts-control input::placeholder, .ts-control > .ts-placeholder { color: var(--text-muted); }
 .ts-wrapper.focus .ts-control, .ts-control.focus { border-color: var(--accent); box-shadow: none; }
@@ -38,7 +38,9 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, .45); margin-top: .2rem; z-index: 30;
 }
 .ts-dropdown .option { padding: .4rem .55rem; }
-.ts-dropdown .active { background: #2a2f37; color: #fff; }
+/* The highlighted option. --surface-3 rather than a literal, so it keeps its one step of
+   separation from the --surface-2 dropdown when the palette moves. */
+.ts-dropdown .active { background: var(--surface-3); color: var(--text-1); }
 .ts-dropdown .option.selected { color: var(--link); }
 .ts-dropdown .no-results { color: var(--text-faint); padding: .4rem .55rem; }
 

@@ -15,12 +15,20 @@
 
 """Web control panel for the anchor process (anchor).
 
-A card-based landing page at ``/`` listing every web page/tool. Cards are contributed by
-each feature module at import time via :func:`web.register_card` (mirroring how routes
-are contributed via :func:`web.register_routes`), so a new page appears here without
-editing this module. Authentication is handled centrally by the Discord-OAuth middleware
-in ``web_auth.py`` — it protects every non-allowlisted route by default, so ``/`` is
-gated with no extra code here. ``/control_panel`` gives the owner a button to the panel.
+The landing page at ``/``: every web page/tool as a **grouped list of rows**, ordered by
+errand rather than by name. Rows are contributed by each feature module at import time
+via :func:`web.register_card` (mirroring how routes are contributed via
+:func:`web.register_routes`), so a new page appears here without editing this module;
+:func:`web.grouped_cards` decides the grouping and the order. Authentication is handled
+centrally by the Discord-OAuth middleware in ``web_auth.py`` — it protects every
+non-allowlisted route by default, so ``/`` is gated with no extra code here.
+``/control_panel`` gives the owner a button to the panel.
+
+Three rows are this page's own rather than another page's link — Configured channels and
+Shut down open a dialog here, and Sign out posts a form — so they are appended to the
+last group by :func:`_panel_rows` instead of being registered as cards. That keeps
+:class:`web.Card` meaning "a page you can navigate to", which is what every other module
+contributes.
 
 The page also carries **bot administration** — the web replacement for ``/anchor info``
 and ``/anchor stop``. It lives on the panel itself rather than a page of its own: it is
@@ -46,7 +54,7 @@ import aiohttp.web
 import hikari as h
 import lightbulb as lb
 
-from ...common import cfg, lifecycle, settings
+from ...common import cfg, feeds, iron_banner, lifecycle, settings
 from ...common.components import cv2_error, cv2_notice, respond_cv2
 from .. import web
 
@@ -57,29 +65,175 @@ loader = lb.Loader()
 _PANEL_HTML_PATH = (
     Path(__file__).resolve().parent.parent / "web_static" / "control_panel.html"
 )
-_CARDS_PLACEHOLDER = "<!--__CARDS__-->"
+_GROUPS_PLACEHOLDER = "<!--__GROUPS__-->"
+
+#: The Trials row, by the only handle this module has on it: a card is contributed by
+#: ``trials.py`` and identified here by where it points. Matching on href rather than
+#: title because the href is the route contract — the title is copy, and copy is exactly
+#: the thing this branch is allowed to rewrite.
+_TRIALS_HREF = "/trials"
+
+#: What the Trials row says during an Iron Banner week. The row stays clickable: Trials
+#: not running is a fact about the weekend, not a reason to lock the form.
+_IRON_BANNER_NOTE = "Not running this week — Iron Banner is on."
 
 
-def _render_panel_html() -> str:
-    """Render the control panel, substituting the card grid for the placeholder."""
-    cards = sorted(web.registered_cards())
-    if cards:
-        items = "".join(
-            f'<a class="card" href="{html.escape(card.href)}">'
-            f'<div class="title">{html.escape(card.title)}</div>'
-            f'<div class="desc">{html.escape(card.description)}</div>'
-            "</a>"
-            for card in cards
+async def _iron_banner_is_on() -> bool:
+    """Whether an Iron Banner event is live right now — **failing open**.
+
+    The schedule is the operator-editable one the Iron Banner post itself publishes from
+    (``RotationData['iron_banner']``), so the panel and the post can never disagree.
+
+    Any exception answers "no" and renders the row normally, and the breadth of that
+    ``except`` is deliberate: ``load_rotation`` raises ``RuntimeError`` when the store
+    is unreadable *and* nothing has loaded in this process yet — i.e. on a cold start
+    during a database blip, which is precisely when someone is trying to open the panel
+    to find out what is wrong. Rotation data must never take down the front door.
+
+    One PK SELECT on a page that otherwise does no database work at all, so it ships
+    uncached; if the panel ever grows a second query, they should share a cache rather
+    than each get their own.
+    """
+    try:
+        return (await iron_banner.load_rotation()).active_event() is not None
+    except Exception:
+        logger.exception("Iron Banner lookup failed; rendering the Trials row normally")
+        return False
+
+
+def _row(
+    title: str,
+    description: str,
+    *,
+    href: str | None = None,
+    element_id: str | None = None,
+    danger: bool = False,
+    quiet: bool = False,
+    action: str = "Open",
+    featured: bool = False,
+) -> str:
+    """One landing row: an ``<a>`` when it goes somewhere, a ``<button>`` when it acts.
+
+    The whole row is the control — a row whose link is only its title gives the
+    pointer a two-word target on a full-width surface. The trailing label is decorative
+    (the row is already the target); it is there because a verb tells you what happens
+    next in a way a chevron does not, and the verbs differ per row.
+    """
+    classes = " ".join(
+        [
+            "row",
+            *(["featured"] if featured else []),
+            *(["danger"] if danger else []),
+            *(["quiet"] if quiet else []),
+        ]
+    )
+    inner = (
+        '<span class="row-text">'
+        f'<span class="row-title">{html.escape(title)}</span>'
+        f'<span class="row-desc">{html.escape(description)}</span>'
+        "</span>"
+        f'<span class="row-action">{html.escape(action)}</span>'
+    )
+    if href is not None:
+        return f'<a class="{classes}" href="{html.escape(href)}">{inner}</a>'
+    ident = f' id="{html.escape(element_id)}"' if element_id else ""
+    return f'<button type="button" class="{classes}"{ident}>{inner}</button>'
+
+
+def _link(
+    title: str,
+    *,
+    href: str | None = None,
+    element_id: str | None = None,
+    danger: bool = False,
+) -> str:
+    """One entry in an errand list — a plain link, or a button that looks like one.
+
+    Groups 2-4 are lists of destinations, not things to weigh up: rendering them as
+    full rows gave every group on the page the same weight and made the ordering say
+    nothing. A wrapped list of links reads as "and these are the other places you can
+    go", which is what they are.
+    """
+    classes = " ".join(["qlink", *(["danger"] if danger else [])])
+    label = html.escape(title)
+    if href is not None:
+        return f'<a class="{classes}" href="{html.escape(href)}">{label}</a>'
+    ident = f' id="{html.escape(element_id)}"' if element_id else ""
+    return f'<button type="button" class="{classes}"{ident}>{label}</button>'
+
+
+def _panel_links() -> list[str]:
+    """This page's own rows, appended to the last group.
+
+    Sign out is a ``<form method="post">`` and not a link, which is load-bearing:
+    ``web_auth`` made ``/auth/logout`` POST-only and origin-checked precisely because a
+    ``GET`` logout is triggerable cross-site by an ``<img>`` or a prefetch. A styled
+    anchor here would reopen the hole that closed.
+    """
+    return [
+        _link("Configured channels", element_id="infoBtn"),
+        '<form method="post" action="/auth/logout">'
+        '<button type="submit" class="qlink">Sign out</button></form>',
+        _link("Shut down", element_id="stopBtn", danger=True),
+    ]
+
+
+async def _render_panel_html() -> str:
+    """Render the landing page: one section per group, in the enum's declaration order.
+
+    Async because of the Iron Banner check — the only reason this page touches the
+    database at all.
+    """
+    iron_banner_on = await _iron_banner_is_on()
+    by_group = dict(web.grouped_cards())
+
+    sections: list[str] = []
+    for group in web.CardGroup:
+        cards = by_group.get(group, [])
+        # Group 1 is a stack of rows; the rest are lists of links. Weight descends with
+        # how often the errand happens — see the note in the page's stylesheet.
+        if group is web.CardGroup.SEND:
+            entries = [
+                _row(
+                    card.title,
+                    _IRON_BANNER_NOTE
+                    if (iron_banner_on and card.href == _TRIALS_HREF)
+                    else card.description,
+                    href=card.href,
+                    danger=card.danger,
+                    quiet=iron_banner_on and card.href == _TRIALS_HREF,
+                    action=card.action,
+                    featured=card.featured,
+                )
+                for card in cards
+            ]
+            body = f'<div class="rows">{"".join(entries)}</div>'
+        else:
+            entries = [
+                _link(card.title, href=card.href, danger=card.danger) for card in cards
+            ]
+            # The last group also holds the three actions that live on this page.
+            if group is web.CardGroup.ADMIN:
+                entries.extend(_panel_links())
+            body = f'<div class="links">{"".join(entries)}</div>'
+        if not entries:
+            continue
+        sections.append(
+            f'<section class="group group-{group.name.lower()}">'
+            f'<h2 class="sectionhead">{html.escape(group.value)}</h2>'
+            f"{body}"
+            "</section>"
         )
-    else:
-        items = '<p class="empty">No web tools are available.</p>'
+
     return _PANEL_HTML_PATH.read_text(encoding="utf-8").replace(
-        _CARDS_PLACEHOLDER, items
+        _GROUPS_PLACEHOLDER, "".join(sections)
     )
 
 
 async def _handle_panel(request: aiohttp.web.Request) -> aiohttp.web.Response:
-    return aiohttp.web.Response(text=_render_panel_html(), content_type="text/html")
+    return aiohttp.web.Response(
+        text=await _render_panel_html(), content_type="text/html"
+    )
 
 
 async def _channel_entry(feed: str, channel_id: int | None) -> dict[str, str | None]:
@@ -90,9 +244,16 @@ async def _channel_entry(feed: str, channel_id: int | None) -> dict[str, str | N
     returns the assembled row rather than the pieces. Resolution is best-effort and
     per-channel: the bot may not be in the guild, the channel may be deleted, or it may
     simply not be up yet, none of which should cost the whole panel its config dump.
+
+    The feed travels as its **display name** (``dd.common.feeds`` is the one place those
+    are decided): the dialog should say "Lost Sector", not ``lost_sector``. A slug with
+    no catalog entry falls back to itself rather than vanishing — that would be a feed
+    configured in the database and nowhere else, which is exactly the state an operator
+    opens this dialog to discover.
     """
+    followable = feeds.FEEDS.get(feed)
     row: dict[str, str | None] = {
-        "feed": feed,
+        "feed": followable.display_name if followable else feed,
         "channelId": str(channel_id) if channel_id else None,
         "channelName": None,
         "url": None,

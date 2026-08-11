@@ -1485,6 +1485,7 @@ async def _handle_delete(request: aiohttp.web.Request) -> aiohttp.web.Response:
 _SPEC = HybridPostSpec(
     followable_key="weekly_reset",
     post_noun="weekly-reset post",
+    form_path="/weekly_reset",
     current_reset_ts=_now_reset_ts,
     render=_render_for_spec,
     validate=validate_post,
@@ -1512,11 +1513,17 @@ def register_weekly_reset_routes(app: aiohttp.web.Application) -> None:
 
 
 web.register_routes(register_weekly_reset_routes)
+# Also tells the feeds page that this feed is one a human writes — see
+# hybrid_post_core.register_spec.
+hybrid_post_core.register_spec(_SPEC)
 web.register_card(
     web.Card(
         "Weekly Reset",
-        "Compose & publish the weekly-reset post",
+        "Write this week's reset post and publish it.",
         "/weekly_reset",
+        web.CardGroup.SEND,
+        10,
+        featured=True,
     )
 )
 

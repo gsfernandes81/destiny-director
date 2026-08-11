@@ -116,8 +116,9 @@ tr.run.open td {
   padding: 0.3rem 0.5rem;
   font: inherit;
 }
-.filter-bar select:focus {
-  outline: none;
+/* Border tint only; the ring comes from shared.css. Same fix as cv2_builder.css — the
+   old `:focus { outline: none }` left this filter with no keyboard focus indicator. */
+.filter-bar select:focus-visible {
   border-color: var(--accent);
 }
 

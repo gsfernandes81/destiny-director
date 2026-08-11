@@ -679,6 +679,7 @@ async def _handle_delete(request: aiohttp.web.Request) -> aiohttp.web.Response:
 _SPEC = HybridPostSpec(
     followable_key="trials",
     post_noun="Trials post",
+    form_path="/trials",
     current_reset_ts=_now_reset_ts,
     render=_render_for_spec,
     validate=validate_post,
@@ -708,11 +709,17 @@ def register_trials_routes(app: aiohttp.web.Application) -> None:
 
 
 web.register_routes(register_trials_routes)
+# Also tells the feeds page that this feed is one a human writes — see
+# hybrid_post_core.register_spec.
+hybrid_post_core.register_spec(_SPEC)
 web.register_card(
     web.Card(
-        "Trials",
-        "Compose & publish the Trials of Osiris post",
+        "Trials of Osiris",
+        "Write this weekend's Trials post and publish it.",
         "/trials",
+        web.CardGroup.SEND,
+        20,
+        featured=True,
     )
 )
 

@@ -41,7 +41,14 @@ button.danger { background: var(--danger-surface); }
 .panel { display: none; }
 .panel.active { display: block; }
 details > summary { cursor: pointer; color: var(--text-faint); margin: .3rem 0; }
-.card { border: 1px solid var(--border); border-radius: var(--radius); padding: .6rem .8rem; margin: .5rem 0; }
+/* The transition is stated here rather than inherited: shared.css's interaction-feedback
+   rule keys on interactive ELEMENTS (a, button, input, …), and a card is a <div>. Same
+   reason .set-card and the autopost .group carry their own. */
+.card {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: .6rem .8rem; margin: .5rem 0;
+  transition: border-color var(--dur-fast) ease;
+}
 .card:hover { border-color: var(--border-hover); }
 .card .card-head { display: flex; gap: .5rem; align-items: center; }
 .toolbar { display: flex; gap: .6rem; align-items: center; margin-top: 1rem;

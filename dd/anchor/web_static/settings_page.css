@@ -1,0 +1,217 @@
+/*
+  The look shared by the two settings pages — /feeds and /settings.
+
+  They are separate errands (what posts where; what everything looks like) but they are
+  the same KIND of surface: a stack of cards, one control per row, one Save at the bottom.
+  That was one page's inline <style> until the split; a sheet is what stops it becoming
+  two copies that drift, which is exactly what happened to the chart chrome before
+  asset_links.test.js started watching.
+
+  The vocabulary is the landing page's, one level down: a feed is a CARD, not a row in a
+  shared box. Cards are what let a group own its border — which is what makes
+  --border-hover a hover affordance here the way it is everywhere else — and what keeps
+  the section headings meaning something, since three sections in one undifferentiated
+  wall of hairlines say nothing about why a feed is in one of them.
+
+  Base/reset/theme/motion — including the dialog open/close motion the feed modals ride —
+  live in shared.css, which every page linking this one also links.
+*/
+
+main.settings { margin: 1rem 0; }
+form#toggles { display: flex; flex-direction: column; gap: .6rem; }
+
+/* --- /feeds sections ---------------------------------------------------------------
+   Three headings, each over the feeds that are alike in the one way that decides what an
+   admin can do with them. A title in sentence case with a line under it, not a micro-caps
+   label: the heading alone does not say why Trials is under "Written by you" and This
+   Week At Bungie is not, and that sentence is the whole reason the sections exist. */
+.section + .section { margin-top: 1.5rem; }
+.section h2 {
+  margin: 0 0 .2rem; font-size: 1rem; font-weight: 600; color: var(--text-1);
+}
+.section .sectiondesc {
+  margin: 0 0 .7rem; font-size: .85rem; color: var(--text-faint); max-width: 62ch;
+}
+.section .groups { display: flex; flex-direction: column; gap: .6rem; }
+
+/* A card: one feed, or one category of general settings. Its sub-rows sit inside it,
+   separated by a hairline WITHIN the card — that is the hierarchy, and it only reads as
+   one because the card has an edge of its own.
+
+   NOT `overflow: hidden`, however tempting: a channel row's Tom Select dropdown is
+   absolutely positioned below its control, so a clipping ancestor cuts the list off at
+   the box edge — the shorter the card, the less of it survives. The rounded corners
+   overflow was buying are bought instead by rounding the first and last child. */
+.group {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius);
+  /* Its own, because shared.css's interaction transition keys on interactive elements
+     and a card is a <div>. Without it the hover border snapped while every button on
+     the same page eased. */
+  transition: border-color var(--dur-fast) ease;
+}
+.group > :first-child {
+  border-top-left-radius: inherit; border-top-right-radius: inherit;
+}
+.group > :last-child {
+  border-bottom-left-radius: inherit; border-bottom-right-radius: inherit;
+}
+.group:hover { border-color: var(--border-hover); }
+/* A general (non-feed) card's title — a feed card needs none, since its own toggle row
+   already names it (see autopost_settings.py's _wrap_group). Type comes from shared.css's
+   .sectionhead, which it also carries; only the inset from the card edge is its own. */
+.groupheader { padding: .55rem .9rem .3rem; }
+.row {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: .7rem .9rem;
+}
+/* Sub-options live in the same card, set off by a hairline and an indent so they read as
+   "part of this feed, not a feed of their own". No second background: the card is the
+   surface, and tinting rows inside it re-introduces the shared-box look the cards
+   replaced. */
+.row + .row { border-top: 1px solid var(--border); }
+.row.sub { padding-left: 1.7rem; }
+.row.sub .name { font-size: .88rem; }
+/* Rows in a categorised card (Branding, Alerts, ...) carry `.flat-alt` and DELIBERATELY
+   get no declarations here: the marker's whole job is to be the class the server writes
+   INSTEAD of `.sub`, so the row that must structurally start such a card does not render
+   as its parent (see autopost_settings.py's _render_row docs). It used to carry a dimmer
+   background, which the cards made wrong — tinting rows inside a card rebuilds the
+   shared-box look the cards replaced. Kept as a marker because the DOM should say which
+   rule it took. */
+.row .text { min-width: 0; flex: 1; }
+.row .name { font-size: .95rem; }
+.row .desc { color: var(--text-faint); font-size: .8rem; margin-top: .15rem; }
+
+/* Per-feed actions, inline on the row: the pair sits between the label and the toggle,
+   so the switch stays where the eye expects it down the right edge. The buttons' own
+   look — and the sentence under a dimmed one — is feed_actions.css's, shared with /send,
+   which is nothing but that pair. Only their PLACEMENT on these rows is this page's. */
+.rowactions { margin-top: .5rem; }
+
+/* The last row of a "Written by you" card: the way to the form that writes the post.
+   Inside the card because the link belongs to that feed, not to the section — two feeds
+   in the section means a section-level link could only be ambiguous. A quiet row rather
+   than a button: it is navigation sitting among controls, and a primary here would
+   out-shout the Save at the bottom of the page. */
+.row.formlink {
+  display: flex; justify-content: space-between; align-items: center;
+  color: var(--link); text-decoration: none; font-size: .9rem; font-weight: 600;
+}
+.row.formlink:hover { background: var(--surface-3); text-decoration: underline; }
+.row.formlink .go { color: var(--text-muted); }
+/* Inset: the card rounds its last child, so an outset ring is sliced by the corner. */
+.row.formlink:focus-visible { outline-offset: -2px; }
+
+/* The modals the Preview / Send now pair opens are NOT here — they are shared with
+   /send and live in feed_actions.css, alongside the buttons that open them. */
+
+/* --- fields ------------------------------------------------------------------------
+   Every editable value is a --surface-3 box on the card's --surface-2, so "this is the
+   part you change" is legible before reading a word of it. */
+
+/* A URL setting stacks its full-width text input below the label instead of
+   placing a switch on the right. */
+.row.urlrow { flex-direction: column; align-items: stretch; gap: .5rem; }
+.urlfield {
+  width: 100%; box-sizing: border-box; padding: .45rem .6rem;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface-3); color: var(--text-1); font-size: .9rem;
+}
+.urlfield:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent);
+}
+/* An empty field says what is missing, in the same italic muted voice as an unset
+   channel, rather than being a blank box that could equally be a failed load. */
+.urlfield::placeholder { font-style: italic; color: var(--text-muted); }
+
+/* Colour setting: a native swatch + its hex text, side by side on the right (the
+   row stays the label-left/control-right shape, unlike .urlrow). Swatch styling
+   mirrors cv2_builder.css's .cv2b-row > input[type="color"] (the only other place
+   this app picks a colour) so the two pages agree. */
+.colorpicker { display: flex; align-items: center; gap: .5rem; flex: none; }
+.colorswatch {
+  width: 2.1rem; height: 1.9rem; padding: 0; flex: none;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface-3);
+}
+.colorfield {
+  width: 7rem; box-sizing: border-box; padding: .45rem .6rem;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface-3); color: var(--text-1); font-size: .9rem;
+  font-family: monospace;
+}
+.colorfield:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent);
+}
+
+/* Alert-level setting: a plain native dropdown (a fixed 5-item enum needs no
+   search widget — Tom Select is reserved for the channel pickers below). */
+.selectfield {
+  padding: .4rem .55rem; border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3); color: var(--text-1); font-size: .9rem;
+}
+.selectfield:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent);
+}
+
+/* Channel setting: Tom Select (see the script tag at the bottom of each page) turns
+   .channelfield into a searchable single-item picker; the plain <select> beneath is only
+   the pre-JS fallback markup. min-width keeps it from collapsing to nothing next to a
+   long label on a narrow viewport, while still fitting beside it on desktop. */
+.row.channelrow { flex-wrap: wrap; }
+.channelfield { min-width: 14rem; flex: 1 1 14rem; }
+/* A name wider than the control ends in an ellipsis rather than being sliced
+   mid-glyph: Tom Select gives both the chosen item and the dropdown rows
+   `overflow: hidden` but neither `white-space` nor `text-overflow`, so a long one
+   (a deep thread name, or the synthetic "Unknown channel (<id>)" for an id the bot
+   can no longer see) is cut off with nothing to say it was. One line per option,
+   because the list is scanned rather than read. */
+.ts-wrapper.single .ts-control > .item,
+.ts-dropdown .option {
+  max-width: 100%; text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
+}
+/* "No channel set" is a state, not an absence — italic and muted, and never a blank
+   control. Scoped to these pages: the Trials/weekly-reset forms use the same widget for
+   pickers where an empty one means something else. */
+.channelrow .ts-control > input::placeholder,
+.channelrow .ts-control > .ts-placeholder {
+  font-style: italic; color: var(--text-muted); opacity: 1;
+}
+
+/* Toggle switch — a checkbox restyled as an iOS-style slider. The <input> stays a
+   checkbox (visually hidden) so nothing about the save/read path changes. */
+.switch {
+  position: relative; flex: none; width: 42px; height: 24px;
+}
+.switch input { position: absolute; opacity: 0; width: 100%; height: 100%;
+  margin: 0; cursor: pointer; }
+.switch .slider {
+  position: absolute; inset: 0; border-radius: 24px; background: var(--surface-3);
+  border: 1px solid var(--border);
+  transition: background var(--dur) ease, border-color var(--dur) ease;
+}
+.switch .slider::before {
+  content: ""; position: absolute; left: 2px; top: 2px; width: 18px; height: 18px;
+  border-radius: 50%; background: var(--text-muted);
+  transition: transform var(--dur) ease, background var(--dur) ease;
+}
+.switch input:checked + .slider {
+  background: var(--accent); border-color: var(--accent);
+}
+/* Pure white knob on the pink fill (>=3:1 non-text contrast; #e6e6e6 would be 2.9). */
+.switch input:checked + .slider::before { transform: translateX(18px); background: #fff; }
+/* The checkbox is visually hidden and stretched over the switch, so it carries
+   .no-focus-ring (see shared.css) and the slider wears the ring instead. */
+.switch input:focus-visible + .slider {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+
+/* Save: the one filled control on the page (shared.css's .primary), so "the change is
+   not made until you press this" needs no sentence. */
+.actions {
+  display: flex; align-items: center; gap: .8rem; margin-top: 1.1rem;
+}
+#status { color: var(--text-faint); font-size: .85rem; }
+#status.err { color: var(--err); }

@@ -115,11 +115,12 @@ async def test_page_shell_served() -> None:
     assert resp.status == 200
     assert resp.content_type == "text/html"
     body = _text(resp)
-    assert "Statistics" in body
+    assert "Reach &amp; usage" in body
     assert "/static/stats.js" in body
 
 
 async def test_card_is_registered() -> None:
-    card = next((c for c in web.registered_cards() if c.title == "Statistics"), None)
+    card = next((c for c in web.registered_cards() if c.title == "Reach & usage"), None)
     assert card is not None
     assert card.href == "/stats"
+    assert card.group is web.CardGroup.CHECK

@@ -13,13 +13,12 @@
 # You should have received a copy of the GNU Affero General Public License along with
 # destiny-director. If not, see <https://www.gnu.org/licenses/>.
 
-"""Autopost + general settings page for the anchor web control panel.
+"""The ``/feeds`` and ``/settings`` pages of the anchor web control panel.
 
-A single owner-only page (linked from the control-panel homepage via
-:func:`web.register_card`) that is now the sole editor for two things that used to be
-separate:
+Two owner-only pages (each a homepage row via :func:`web.register_card`), one module,
+one save endpoint. They are the sole editor for two things that used to be separate:
 
-- Every **global** autopost produce toggle — unchanged from before, one ``name`` row in
+- Every **global** produce toggle — one ``name`` row in
   :class:`~dd.common.schemas.AutoPostSettings` each. The scattered ``/<feed> auto``
   slash commands (plus ``/ls details`` and ``/xur default_image``) duplicated this and
   were removed 2026-08-04.
@@ -27,20 +26,30 @@ separate:
   alert level, the alerts channel, ``disable_bad_channels``, and every followable's
   post channel. These used to be env vars (``EMBED_DEFAULT_COLOR``, ``FOLLOWABLES``,
   ...) that needed a redeploy to change; they are now the same ``auto_post_settings``
-  table rows, just not tied to a feed toggle — and this page is their ONLY writer: no
+  table rows, just not tied to a feed toggle — and this module is their ONLY writer: no
   env fallback and no seeding path exists behind it, so every value in the DB got there
-  through the validation in :func:`_channel_problem` / :data:`_VALIDATORS`. A followable
-  with an existing feed toggle above gets its channel field folded into that feed's
-  group; the rest (beacon-only feeds with no toggle — twab, trials, weekly_reset,
-  weekly_nightfall, free_games, emblems_and_cosmetics) get their own single-row group.
+  through the validation in :func:`_channel_problem` / :data:`_VALIDATORS`.
 
-Scope is settings only — no "send now" / preview beyond the existing per-feed actions,
-and no per-guild follow management (that is end-user ``/autopost <feed>`` territory,
-stored as ``MirroredChannel`` rows). A missing toggle row reads as ``None``, which every
-producer treats as *off*, so the page renders ``bool(get_enabled(slug))`` and lets
-``set_enabled`` upsert on save. Authentication is handled centrally by the Discord-OAuth
-middleware in ``web_auth.py`` (it protects every non-allowlisted route, so this module
-needs no auth code).
+**Why two pages and one endpoint.** The single page they replaced opened with eight
+rows about colours and alert levels and then asked the reader to scroll past them to
+reach any feed — two errands with nothing in common sharing one scroll. ``/feeds``
+carries the twelve feed groups, ``/settings`` the eight general rows, and the old
+``/autopost_settings`` 301s to ``/feeds`` for whoever has it bookmarked. The **save**
+stays one route (:func:`_handle_save`) because the two pages' slug sets are disjoint and
+validation is per-slug (:data:`_VALIDATORS`): splitting it would duplicate the
+all-or-nothing transaction and the :func:`dd.common.settings.preload` refresh, and one
+copy would eventually drift.
+
+``/feeds`` groups its feeds three ways — produced on a schedule, written by a human on a
+form, written by someone else entirely. See :func:`_feed_sections` for where the second
+of those facts comes from and why it is not in the catalog.
+
+Scope is settings only — no per-guild follow management (that is end-user
+``/autopost <feed>`` territory, stored as ``MirroredChannel`` rows). A missing toggle
+row reads as ``None``, which every producer treats as *off*, so the page renders
+``bool(get_enabled(slug))`` and lets ``set_enabled`` upsert on save. Authentication is
+handled centrally by the Discord-OAuth middleware in ``web_auth.py`` (it protects every
+non-allowlisted route, so this module needs no auth code).
 """
 
 import asyncio
@@ -64,7 +73,8 @@ from ...common import (
     settings as dd_settings,
 )
 from .. import web
-from ..autopost import registered_feeds
+from ..hybrid_post_core import registered_specs
+from . import feed_actions
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +82,10 @@ logger = logging.getLogger(__name__)
 # extension module to expose a Loader, so define one.
 loader = lb.Loader()
 
-_PAGE_HTML_PATH = (
-    Path(__file__).resolve().parent.parent / "web_static" / "autopost_settings.html"
-)
+_WEB_STATIC = Path(__file__).resolve().parent.parent / "web_static"
+_FEEDS_HTML_PATH = _WEB_STATIC / "feeds.html"
+_SETTINGS_HTML_PATH = _WEB_STATIC / "settings.html"
+#: Both templates carry the same placeholder — each page substitutes its own groups.
 _TOGGLES_PLACEHOLDER = "<!--__TOGGLES__-->"
 
 _ALERT_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
@@ -139,7 +150,7 @@ _GENERAL_SETTINGS: tuple[_Setting, ...] = (
     _Setting(
         "embed_default_color",
         "Default accent colour",
-        "The accent bar on nearly every embed and CV2 post, when nothing else sets "
+        "The accent bar down the side of nearly every post, when nothing else sets "
         "one.",
         False,
         "color",
@@ -174,7 +185,7 @@ _GENERAL_SETTINGS: tuple[_Setting, ...] = (
         True,
         "url",
     ),
-    # --- Logging & Alerts: the ops pipeline that forwards records to Discord ---------
+    # --- Alerts: the ops pipeline that forwards records to Discord -------------------
     _Setting(
         "alert_min_level",
         "Alert level",
@@ -182,13 +193,12 @@ _GENERAL_SETTINGS: tuple[_Setting, ...] = (
         False,
         "select",
         options=_ALERT_LEVELS,
-        category="Logging & Alerts",
+        category="Alerts",
     ),
     _Setting(
         "disable_bad_channels",
-        "Auto-disable unreachable mirrors",
-        "Disable a legacy mirror destination once it stays unreachable past the grace "
-        "window.",
+        "Stop sending to unreachable servers",
+        "After a destination stays unreachable past the grace window, stop trying it.",
         True,
     ),
     _Setting(
@@ -267,17 +277,18 @@ _FEED_EXTRA_ROWS: dict[str, tuple[tuple[_Setting, ...], tuple[_Setting, ...]]] =
 _DORMANT_NOTE_SLUGS = frozenset({"portal_ops", "iron_banner"})
 _CHANNEL_DESC = "The Kyber channel this feed posts to."
 _DORMANT_NOTE = (
-    " Dormant until one is set; switch the feed off above to stop it after that."
+    " Nothing posts until a channel is picked. If it shouldn't post at all, switch the "
+    "feed off above."
 )
 
 
 def _as_group(rows: tuple[_Setting, ...], category: str = "") -> tuple[_Setting, ...]:
     """Stamp a group: the first row heads it, everything after hangs off it.
 
-    ``_render_html`` groups in a single pass on ``sub``, so "a parent precedes its subs"
-    has to hold or a row lands silently in the group above. Stamping it here makes that
-    structural — no caller writes a ``sub`` flag, so no caller can write a group that
-    opens with one.
+    ``_render_groups`` groups in a single pass on ``sub``, so "a parent precedes its
+    subs" has to hold or a row lands silently in the group above. Stamping it here makes
+    that structural — no caller writes a ``sub`` flag, so no caller can write a group
+    that opens with one.
     """
     head, *rest = rows
     return (
@@ -345,12 +356,18 @@ def _feed_rows(feed: dd_feeds.Followable) -> tuple[_Setting, ...]:
     )
 
 
-# Ordered for display: the global rows, then each feed's group. Generated rather than
-# written out, so the page cannot disagree with the catalog about which feeds exist or
-# what they are called — the job the old hand-sync test used to do by watching.
-_SETTINGS: tuple[_Setting, ...] = _GENERAL_SETTINGS + tuple(
+# Every feed's rows, in catalog order. Generated rather than written out, so the page
+# cannot disagree with the catalog about which feeds exist or what they are called — the
+# job the old hand-sync test used to do by watching.
+_FEED_SETTINGS: tuple[_Setting, ...] = tuple(
     itertools.chain.from_iterable(_feed_rows(f) for f in dd_feeds.FOLLOWABLES)
 )
+
+# Every row this module owns, across both pages. The two pages render disjoint halves of
+# it, but the SAVE is one endpoint over the whole set (see the module docstring), so the
+# slug sets below — what a save is allowed to write, and how each slug is validated —
+# are derived from the union rather than per page.
+_SETTINGS: tuple[_Setting, ...] = _GENERAL_SETTINGS + _FEED_SETTINGS
 
 # The slugs this page is allowed to write — a save request's keys are filtered against
 # this so an unknown/forged key can never create a stray AutoPostSettings row. Split by
@@ -375,7 +392,10 @@ _CHANNEL_SETTINGS: dict[str, _Setting] = {
 # all still reads as 0/dormant on a fresh install, which beacon's dormancy sweep
 # (``dd.beacon.utils.sweep_dormant_feeds``) pages for until one is picked here.
 _UNCLEARABLE_CHANNEL_SLUGS = frozenset(dd_settings.FOLLOWABLE_SLUGS.values())
-_NO_CHANNEL_OPTION = '<option value="">— none configured —</option>'
+# What an unset channel field says — the same words the /send row's destination field
+# uses, which is why they live in feed_actions rather than here. Rendered italic/muted
+# by settings_page.css, and reused as the picker's placeholder (autopost_settings.js).
+_NO_CHANNEL_OPTION = f'<option value="">{feed_actions.NO_CHANNEL_LABEL}</option>'
 
 
 # One validator per non-toggle kind (a toggle just needs bool(), handled inline in
@@ -448,19 +468,25 @@ def _render_row(
     state: bool | str | None,
     *,
     flat: bool = False,
+    actions: str = "",
 ) -> str:
     """Render one settings row: label + description, then its control.
 
     ``flat`` overrides the indented ".sub" styling ``setting.sub`` would otherwise
-    select, but keeps its dimmer background (via ``.flat-alt``). It's set by the caller
-    for every row in a *categorised* general group (Branding, Logging & Alerts, ...):
-    the category header is the group's only "parent" — a label, not a setting — so
-    every row under it is a dark "detail" row, unlike a feed group, where the toggle row
-    itself (e.g. ``lost_sector``) is a real light parent and only what follows
-    (``lost_sector_details``) is dark. Without ``flat``, the setting that has to
+    select. It's set by the caller for every row in a *categorised* general group
+    (Branding, Alerts, ...): the category header is the group's only "parent" — a label,
+    not a setting — so every row under it is a peer, unlike a feed card, where the
+    toggle row itself (e.g. ``lost_sector``) is a real parent and only what follows
+    (``lost_sector_details``) hangs off it. Without ``flat``, the setting that has to
     structurally start a category's group (``sub=False`` — something has to) would
     render with the same indent/smaller-name styling as a feed's actual parent toggle,
     implying a hierarchy among the category's settings that isn't there.
+
+    ``actions`` is the caller's Preview/Send block (see
+    :func:`dd.anchor.extensions.feed_actions.actions_html`), passed
+    in rather than derived here: whether Send is available depends on the feed's
+    *channel*, which lives in a different row of the same card and so is only known one
+    level up.
     """
     base_class = "row flat-alt" if flat else "row sub" if setting.sub else "row"
 
@@ -473,27 +499,6 @@ def _render_row(
             "</div>"
         )
 
-    # A top-level slug that names a registered feed gets its two actions inline — the
-    # replacement for the old `/<feed> show` and `send` commands. They live here rather
-    # than on a per-feed page: a feed has no state a page could show that this row does
-    # not already, so a page would be a click in the way. The rendered post appears in
-    # this page's modals (see autopost_settings.js), not in the row.
-    actions = (
-        '<div class="rowactions">'
-        f'<button type="button" class="feedaction small" data-action="preview"'
-        f' data-slug="{html.escape(setting.slug)}"'
-        ' title="Builds the post exactly as the producer would right now, and shows it.'
-        " Nothing is sent. The data comes from the live API, so this can take a few"
-        ' seconds.">Preview</button>'
-        f'<button type="button" class="feedaction small" data-action="send"'
-        f' data-slug="{html.escape(setting.slug)}"'
-        ' title="Posts to this feed&#39;s channel immediately, and (if publishing)'
-        ' crossposts it so beacon mirrors it to every following server.">Send now'
-        "</button>"
-        "</div>"
-    )
-    if setting.sub or setting.slug not in registered_feeds():
-        actions = ""
     label_block = _label_block(actions)
 
     def _row(kind_class: str, control_html: str, *, block: str = "") -> str:
@@ -625,37 +630,53 @@ def _current_state(
 
 
 def _wrap_group(
-    entries: list[tuple[_Setting, bool | str | None]], category: str
+    entries: list[tuple[_Setting, bool | str | None]],
+    category: str,
+    *,
+    footer: str = "",
+    head_actions: str = "",
 ) -> str:
-    # Every row in a categorised group renders flat (no .sub indent, but still dark) —
-    # see _render_row's `flat` docs: the category header is the group's only "parent",
-    # so every row under it — including whichever one happens to structurally start the
-    # list — is a dark "detail" row.
+    """One card: an optional category header, the rows, and an optional trailing link.
+
+    ``head_actions`` lands on the FIRST row only — a feed's Preview/Send pair belongs to
+    the feed, and the first row is the one that names it.
+    """
+    # Every row in a categorised group renders flat (no .sub indent) — see _render_row's
+    # `flat` docs: the category header is the group's only "parent", so every row under
+    # it, including whichever one happens to structurally start the list, is a peer.
     flat = bool(category)
-    rows = "".join(_render_row(setting, state, flat=flat) for setting, state in entries)
-    header = (
-        f'<div class="groupheader">{html.escape(category)}</div>' if category else ""
+    rows = "".join(
+        _render_row(
+            setting, state, flat=flat, actions=head_actions if index == 0 else ""
+        )
+        for index, (setting, state) in enumerate(entries)
     )
-    return f'<div class="group">{header}{rows}</div>'
+    header = (
+        f'<div class="sectionhead groupheader">{html.escape(category)}</div>'
+        if category
+        else ""
+    )
+    return f'<div class="group">{header}{rows}{footer}</div>'
 
 
-async def _render_html() -> str:
-    """Render the settings page with the current DB state substituted in.
+def _render_groups(
+    settings: t.Iterable[_Setting], rows: dict[str, tuple[bool | None, str | None]]
+) -> str:
+    """Group ``settings`` into ``.group`` boxes and render them.
 
     A top-level setting (``sub`` is False) and every sub-setting that follows it share
-    one ``.group`` box, so a feed and its content/channel/url sub-rows read as one
-    category. A parent always precedes its subs in ``_SETTINGS``, so a single pass
-    groups them. A general (non-feed) group's ``category`` (set on its first setting)
-    renders as an explicit header — a feed group needs none, since its own toggle row
-    already names it. Rows aren't rendered until their whole group is collected (see
+    one box, so a feed and its content/channel/url sub-rows read as one category. A
+    parent always precedes its subs (``_as_group`` makes that structural), so a single
+    pass groups them. A general group's ``category`` (set on its first setting) renders
+    as an explicit header — a feed group needs none, since its own toggle row already
+    names it. Rows aren't rendered until their whole group is collected (see
     ``_wrap_group``), since whether a row renders flat depends on the group's category,
     which isn't known until the group's first (``sub=False``) setting is reached.
     """
     groups: list[str] = []
     current: list[tuple[_Setting, bool | str | None]] = []
     current_category = ""
-    rows = await schemas.AutoPostSettings.get_all_rows()
-    for setting in _SETTINGS:
+    for setting in settings:
         state = _current_state(setting, rows)
         if setting.sub:
             current.append((setting, state))
@@ -666,14 +687,181 @@ async def _render_html() -> str:
             current_category = setting.category
     if current:
         groups.append(_wrap_group(current, current_category))
-    return _PAGE_HTML_PATH.read_text(encoding="utf-8").replace(
-        _TOGGLES_PLACEHOLDER, "".join(groups)
+    return "".join(groups)
+
+
+# --- /feeds: the three sections ------------------------------------------------------
+
+
+class _FeedSection(t.NamedTuple):
+    """One heading on the feeds page, and the feeds under it."""
+
+    heading: str
+    #: One line under the heading saying what these feeds have in common. It answers
+    #: "why is this feed in this pile", which is the only question a heading of three
+    #: words leaves open.
+    blurb: str
+    feeds: tuple[dd_feeds.Followable, ...]
+
+
+_SECTION_COPY: tuple[tuple[str, str], ...] = (
+    (
+        "Posted on a schedule",
+        "The bot builds these itself and posts them on a timer. Preview one to see "
+        "what it would post right now, or send it early.",
+    ),
+    (
+        "Written by you",
+        "You write these on a form and press publish yourself — nothing goes out until "
+        "you send it, so there is no switch here.",
+    ),
+    (
+        "Posted by someone else",
+        "Somebody else writes these straight into the channel. The bot only needs to "
+        "know where to read them from.",
+    ),
+)
+
+
+def _feed_sections() -> tuple[_FeedSection, ...]:
+    """The twelve feeds, split three ways, in catalog order within each section.
+
+    Two of the three splits come off the catalog: a feed with a produce toggle is one
+    anchor runs on a schedule (``Followable.has_toggle``), and everything else is not.
+
+    The third does not, and cannot. "Written by you" is Trials and Weekly Reset, which
+    :class:`~dd.common.feeds.FeedKind` calls ``UNSCHEDULED`` alongside This Week At
+    Bungie and Free Games — the catalog has no field that tells them apart, and adding
+    one would be storing an anchor fact in a module beacon imports too. What actually
+    separates them is that anchor has a **web form** wired to each: a
+    :class:`~dd.anchor.hybrid_post_core.HybridPostSpec` registered at import time, which
+    also carries the ``form_path`` this section's rows link to. So the grouping and the
+    link come from the same registration; a producer that appears cannot be listed
+    without its form, and one that is removed takes its row's promise with it.
+
+    Read at request time, never cached: the registry fills as extensions load, and this
+    module has no ordering relationship with the two producers that populate it.
+
+    An empty section is dropped rather than rendered as a heading over nothing — which
+    is also the honest render if the producers somehow did not load.
+    """
+    written_by_hand = set(registered_specs())
+    scheduled: list[dd_feeds.Followable] = []
+    written: list[dd_feeds.Followable] = []
+    elsewhere: list[dd_feeds.Followable] = []
+    for feed in dd_feeds.FOLLOWABLES:
+        if feed.has_toggle:
+            scheduled.append(feed)
+        elif feed.slug in written_by_hand:
+            written.append(feed)
+        else:
+            elsewhere.append(feed)
+    return tuple(
+        _FeedSection(heading, blurb, tuple(feeds))
+        for (heading, blurb), feeds in zip(
+            _SECTION_COPY, (scheduled, written, elsewhere), strict=True
+        )
+        if feeds
     )
 
 
-async def _handle_get(request: aiohttp.web.Request) -> aiohttp.web.Response:
+def _form_link(form_path: str) -> str:
+    """The "Open the form →" row closing a *Written by you* feed's group.
+
+    Inside the group box rather than beside the heading: the section holds two feeds
+    with two different forms, so a link at section level could only be ambiguous.
+    """
+    return (
+        f'<a class="row formlink" href="{html.escape(form_path)}">'
+        '<span class="name">Open the form</span>'
+        '<span class="go" aria-hidden="true">→</span>'
+        "</a>"
+    )
+
+
+def _render_feed_section(
+    section: _FeedSection, rows: dict[str, tuple[bool | None, str | None]]
+) -> str:
+    specs = registered_specs()
+    groups: list[str] = []
+    for feed in section.feeds:
+        entries = [(s, _current_state(s, rows)) for s in _feed_rows(feed)]
+        spec = specs.get(feed.slug)
+        # "0" is an explicit clear, None a slug that was never written — both mean the
+        # feed has nowhere to post, which is what Send's availability turns on.
+        channel = rows.get(feed.channel_key, (None, None))[1]
+        actions = (
+            feed_actions.actions_html(
+                feed.slug,
+                label=feed.display_name,
+                channel_set=channel not in (None, "", "0"),
+                # The picker is a row further down this very card.
+                fix_channel_here=True,
+            )
+            if feed.has_toggle
+            else None
+        )
+        groups.append(
+            _wrap_group(
+                entries,
+                entries[0][0].category,
+                footer=_form_link(spec.form_path) if spec else "",
+                # Buttons then reason, stacked: a row here is a block of copy with its
+                # controls in it, so the sentence simply follows them.
+                head_actions=actions.buttons + actions.notes if actions else "",
+            )
+        )
+    return (
+        '<section class="section">'
+        f"<h2>{html.escape(section.heading)}</h2>"
+        f'<p class="sectiondesc">{html.escape(section.blurb)}</p>'
+        f'<div class="groups">{"".join(groups)}</div>'
+        "</section>"
+    )
+
+
+async def _render_feeds_html() -> str:
+    """Render ``/feeds``: the twelve feed groups, under three section headings."""
+    rows = await schemas.AutoPostSettings.get_all_rows()
+    sections = "".join(_render_feed_section(s, rows) for s in _feed_sections())
+    shell = _FEEDS_HTML_PATH.read_text(encoding="utf-8").replace(
+        _TOGGLES_PLACEHOLDER, sections
+    )
+    # The preview/send dialogs are shared with /send, so the page carries a placeholder
+    # for them rather than its own copy of the markup.
+    return feed_actions.splice_modals(shell)
+
+
+async def _render_settings_html() -> str:
+    """Render ``/settings``: the general rows, as their two categorised groups."""
+    rows = await schemas.AutoPostSettings.get_all_rows()
+    return _SETTINGS_HTML_PATH.read_text(encoding="utf-8").replace(
+        _TOGGLES_PLACEHOLDER, _render_groups(_GENERAL_SETTINGS, rows)
+    )
+
+
+async def _handle_feeds(request: aiohttp.web.Request) -> aiohttp.web.Response:
     # Auth is enforced by the web_auth middleware; this just renders the page.
-    return aiohttp.web.Response(text=await _render_html(), content_type="text/html")
+    return aiohttp.web.Response(
+        text=await _render_feeds_html(), content_type="text/html"
+    )
+
+
+async def _handle_settings(request: aiohttp.web.Request) -> aiohttp.web.Response:
+    return aiohttp.web.Response(
+        text=await _render_settings_html(), content_type="text/html"
+    )
+
+
+async def _handle_legacy_redirect(request: aiohttp.web.Request) -> aiohttp.web.Response:
+    """``/autopost_settings`` → ``/feeds``, permanently.
+
+    A 301 rather than a deletion because this page has had one URL for its whole life
+    and the operator's bookmarks and muscle memory both point at it. It is the feed half
+    that inherits the address: that is what the page was mostly used for, and what the
+    name referred to.
+    """
+    raise aiohttp.web.HTTPMovedPermanently("/feeds")
 
 
 # Channel types a post can actually go to (text + announcement); voice/category/forum/
@@ -710,87 +898,142 @@ def _feed_guild_ids() -> set[int]:
     return {int(g) for g in guild_ids if g and g != -1}
 
 
-def _allowed_guild_ids(setting: _Setting) -> set[int]:
-    """The guild(s) ``setting``'s picker offers — and therefore the only guilds a saved
-    channel for it may live in. Mirrors autopost_settings.js's ``data-scope`` filter
-    and _handle_channels' own guild list; see _channel_problem on why the server
-    re-derives this rather than trusting the client's."""
+def allowed_guild_ids(*, include_control_server: bool = False) -> set[int]:
+    """The guild(s) a channel field's picker offers — and therefore the only guilds a
+    saved channel for it may live in. Mirrors autopost_settings.js's ``data-scope``
+    filter and _handle_channels' own guild list; see :func:`check_channel` on why the
+    server re-derives this rather than trusting the client's.
+
+    ``include_control_server`` is the ``"kyber_control"`` scope (the alerts channel,
+    which may legitimately sit in the control server). Public because the CV2 builder's
+    web-originated "custom post" flow validates its target against exactly the
+    non-control scope this returns by default — one definition of "where may this bot
+    post", not two that can drift.
+    """
     guild_ids = _feed_guild_ids()
     control_id = int(cfg.control_discord_server_id)
-    if setting.channel_scope == "kyber_control" and control_id and control_id != -1:
+    if include_control_server and control_id and control_id != -1:
         guild_ids = guild_ids | {control_id}
     return guild_ids
 
 
-async def _channel_problem(setting: _Setting, channel_id: int) -> str | None:
-    """``None`` if ``channel_id`` is a channel ``setting`` may actually use — right
-    guild, right type, and the bot can fully post there (view/send/embed/external-emoji)
-    — otherwise a human-readable reason to reject the save for.
+class ChannelCheck(t.NamedTuple):
+    """What :func:`check_channel` concluded about a channel.
+
+    ``problem`` is ``None`` exactly when the channel is usable, and otherwise the
+    human-readable reason to refuse. ``channel`` is the fetched channel on success, so a
+    caller that needs a fact off it (the CV2 mint route needs its ``guild_id``) doesn't
+    pay a second REST round-trip — and, more to the point, records the guild the
+    *server* resolved rather than one the client also sent.
+    """
+
+    problem: str | None
+    channel: h.PermissibleGuildChannel | None = None
+
+
+async def check_channel(
+    channel_id: int, *, announce_only: bool, allowed_guild_ids: set[int]
+) -> ChannelCheck:
+    """Whether ``channel_id`` is a channel the bot may actually post to — right guild,
+    right type, and the bot can fully post there (view/send/embed/external-emoji).
+
+    Takes the two facts a caller cares about rather than a :class:`_Setting`, so the
+    web surfaces that have no setting row — the CV2 builder's "custom post" mint route —
+    can vet a target through this same function instead of a stand-in setting.
+    :func:`_channel_problem` is the settings-page shaped wrapper over it.
 
     Every rule the channel picker applies in the browser (autopost_settings.js's
     ``data-scope`` / ``data-announce-only`` filters, and _handle_channels' postable-type
     filter) is re-applied here, because this is the only place the value is actually
-    written: the browser filter is a convenience for whoever is picking, not the
-    enforcement point. A followable's channel must be an announcement channel or
-    Discord's native "Follow Channel" cannot target it at all — the bot would post
-    happily and every follower would silently receive nothing.
+    used: the browser filter is a convenience for whoever is picking, not the
+    enforcement point. With ``announce_only`` the channel must additionally be an
+    announcement channel — a followable's channel must be, or Discord's native "Follow
+    Channel" cannot target it at all and the bot would post happily while every follower
+    silently received nothing.
 
-    Fails CLOSED — rejects the save — on anything short of a confirmed "yes, this
-    channel is usable": the bot not started yet, an unresolvable permission-cache
-    lookup, or an unexpected REST hiccup all reject, same as a confirmed missing
-    permission does. A channel setting is worth being unable to save for a moment
-    (retry once the bot's finished starting, or once its permission cache is warm)
-    rather than risk accepting one silently unusable — this is the primary safety net,
-    not just a courtesy check (a channel that goes bad *after* being saved still alerts
-    rather than failing silently — see ``dd.beacon.utils.open_feed_source`` — but this
-    is what stops a bad one going in to begin with).
+    Fails CLOSED — rejects — on anything short of a confirmed "yes, this channel is
+    usable": the bot not started yet, an unresolvable permission-cache lookup, or an
+    unexpected REST hiccup all reject, same as a confirmed missing permission does. A
+    channel is worth being unable to use for a moment (retry once the bot's finished
+    starting, or once its permission cache is warm) rather than risk accepting one
+    silently unusable — this is the primary safety net, not just a courtesy check (a
+    channel that goes bad *after* being saved still alerts rather than failing silently
+    — see ``dd.beacon.utils.open_feed_source`` — but this is what stops a bad one going
+    in to begin with).
     """
     # get_bot(), not require_bot(): this function owes its caller a REASON, and a
     # BotNotReady would leave the save's error path with no sentence to show. Fail
     # closed with the reason, as every other branch here does.
     bot = web.get_bot()
     if bot is None:
-        return "the bot hasn't finished starting yet — try again in a moment."
+        return ChannelCheck(
+            "the bot hasn't finished starting yet — try again in a moment."
+        )
     try:
         channel = await bot.rest.fetch_channel(channel_id)
     except (h.NotFoundError, h.ForbiddenError):
-        return "the bot can't see that channel (deleted, or its access was revoked)."
+        return ChannelCheck(
+            "the bot can't see that channel (deleted, or its access was revoked)."
+        )
     except Exception:
         logger.warning(
             "Channel permission check failed for %s", channel_id, exc_info=True
         )
-        return (
+        return ChannelCheck(
             "couldn't confirm the bot's access to that channel right now — try again."
         )
     if not isinstance(channel, h.PermissibleGuildChannel):
-        return "that channel doesn't support posting (not a text/announcement channel)."
+        return ChannelCheck(
+            "that channel doesn't support posting (not a text/announcement channel)."
+        )
     if channel.type not in _POSTABLE_CHANNEL_TYPES:
-        return "that channel doesn't support posting (not a text/announcement channel)."
-    if setting.announce_only and channel.type != h.ChannelType.GUILD_NEWS:
-        return (
+        return ChannelCheck(
+            "that channel doesn't support posting (not a text/announcement channel)."
+        )
+    if announce_only and channel.type != h.ChannelType.GUILD_NEWS:
+        return ChannelCheck(
             "that's a text channel — this one has to be an announcement channel, or "
             "other servers can't follow it."
         )
-    allowed_guilds = _allowed_guild_ids(setting)
-    if allowed_guilds and int(channel.guild_id) not in allowed_guilds:
-        return "that channel is in a server this setting can't post to."
+    if allowed_guild_ids and int(channel.guild_id) not in allowed_guild_ids:
+        return ChannelCheck("that channel is in a server this setting can't post to.")
     me = bot.get_me()
     if me is None:
-        return "the bot's own identity isn't available yet — try again in a moment."
+        return ChannelCheck(
+            "the bot's own identity isn't available yet — try again in a moment."
+        )
     try:
         member = await bot.rest.fetch_member(channel.guild_id, me.id)
         perms = calculate_permissions(member, channel)
     except CacheFailureError:
-        return (
+        return ChannelCheck(
             "couldn't confirm the bot's permissions there yet (its cache isn't warm) "
             "— try again shortly."
         )
     except (h.NotFoundError, h.ForbiddenError):
-        return "the bot isn't a member of that server."
+        return ChannelCheck("the bot isn't a member of that server.")
     missing = [name for perm, name in _REQUIRED_CHANNEL_PERMS if not (perms & perm)]
     if not missing:
-        return None
-    return f"the bot is missing permissions there: {', '.join(missing)}."
+        return ChannelCheck(None, channel)
+    return ChannelCheck(f"the bot is missing permissions there: {', '.join(missing)}.")
+
+
+async def _channel_problem(setting: _Setting, channel_id: int) -> str | None:
+    """``None`` if ``channel_id`` is a channel ``setting`` may actually use, otherwise a
+    human-readable reason to reject the save for.
+
+    A thin :class:`_Setting`-shaped wrapper over :func:`check_channel`, which holds the
+    rules and the sentences — ``setting`` only ever contributed these two facts.
+    """
+    return (
+        await check_channel(
+            channel_id,
+            announce_only=setting.announce_only,
+            allowed_guild_ids=allowed_guild_ids(
+                include_control_server=setting.channel_scope == "kyber_control"
+            ),
+        )
+    ).problem
 
 
 async def _handle_channels(request: aiohttp.web.Request) -> aiohttp.web.Response:
@@ -931,17 +1174,38 @@ async def _handle_save(request: aiohttp.web.Request) -> aiohttp.web.Response:
 
 
 def register_autopost_settings_routes(app: aiohttp.web.Application) -> None:
-    """Add the autopost-settings routes to the shared persistent app."""
-    app.router.add_get("/autopost_settings", _handle_get)
+    """Add the feeds/settings routes to the shared persistent app.
+
+    Two pages, but one channel list and one save: both are shared machinery rather than
+    either page's own, so they keep the neutral ``/autopost_settings/`` prefix the pages
+    themselves have given up. Renaming them under one page's URL would make the other
+    page's fetches read as though they were reaching across.
+    """
+    app.router.add_get("/feeds", _handle_feeds)
+    app.router.add_get("/settings", _handle_settings)
+    app.router.add_get("/autopost_settings", _handle_legacy_redirect)
     app.router.add_get("/autopost_settings/channels", _handle_channels)
     app.router.add_post("/autopost_settings/save", _handle_save)
 
 
 web.register_routes(register_autopost_settings_routes)
+# First two rows of "Set up and admin": what posts where is asked far more often than
+# what colour it comes out, and both are asked more often than the Bungie login (30).
 web.register_card(
     web.Card(
-        "Autopost Settings",
-        "Toggle which feeds anchor posts, and general bot settings",
-        "/autopost_settings",
+        "Feeds",
+        "What each feed posts to, whether it posts at all, and a way to send one now.",
+        "/feeds",
+        web.CardGroup.ADMIN,
+        10,
+    )
+)
+web.register_card(
+    web.Card(
+        "Appearance & alerts",
+        "Default colours and links for every post, and where problems get reported.",
+        "/settings",
+        web.CardGroup.ADMIN,
+        20,
     )
 )

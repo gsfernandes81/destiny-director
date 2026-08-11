@@ -1,17 +1,21 @@
 <!doctype html>
 <!--
-  Rotation editor homepage — lists every editable rotation (one link per
-  ROTATION_SCHEMAS type). Served by dd.anchor.extensions.rotation_editor; the GET
-  handler substitutes the <!--__ROTATIONS__--> placeholder with the server-rendered
-  link list. Auth is the `rotation_session` cookie (set when the /rotation?token=…
-  entry link is opened, then redirected here); this page carries no token in its URL.
+  World activity index — lists the nine world_activity_* pages (rotation_schema's
+  WORLD_ACTIVITY_SLUGS). The other four rotations are linked by name from the panel's
+  "Fix the data behind a post" group and go straight to their own tab, so they are not
+  listed here; their /rotation/edit?type=… routes are unchanged. Served by
+  dd.anchor.extensions.rotation_editor; the GET handler substitutes the __ROTATIONS__
+  placeholder below with the server-rendered link list (spelled without its comment
+  delimiters here on purpose — str.replace hits every occurrence). Auth is the
+  `rotation_session` cookie (set when the /rotation?token=… entry link is opened, then
+  redirected here); this page carries no token in its URL.
 -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex, nofollow" />
-    <title>Rotation Editor</title>
+    <title>World activity pages (legacy) — Destiny Director</title>
     <link rel="stylesheet" href="/static/shared.css" />
     <style>
       /* Base/reset/theme lives in shared.css (linked above); only this page's own
@@ -25,19 +29,16 @@
         color: var(--link); text-decoration: none; font-size: 1.05rem; font-weight: 600;
       }
       ul.rotations a:hover { text-decoration: underline; }
-      code {
-        color: var(--text-faint); font-size: .8rem;
-        background: var(--surface-3); border-radius: 4px; padding: .1rem .35rem;
-      }
     </style>
   </head>
   <body>
     <header>
-      <p class="nav"><a href="/" class="backlink">← Control panel</a></p>
-      <h1>Rotation Editor</h1>
+      <p class="nav"><a href="/" class="backlink">← Home</a></p>
+      <h1>World activity pages (legacy)</h1>
       <p class="muted">
-        Pick a rotation to edit. You're signed in via Discord for 30 days — no need to
-        re-run the command between edits.
+        Nine older location pages, kept for the posts that still read them. The Lost
+        Sector, Xûr, Trials and Iron Banner data have their own entries on the home
+        page.
       </p>
     </header>
     <main>

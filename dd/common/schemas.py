@@ -3301,8 +3301,16 @@ class Cv2Draft(Base):
     message. The web builder can't: the Discord command and the browser are different
     processes, so the command writes a draft row and replies with a link, and the page
     reads it back. The row also carries **what to do on publish** — post to a channel,
-    edit an existing message, or send a copy — so the browser never has to be told a
-    target it could tamper with.
+    edit an existing message, or send a copy.
+
+    That makes the target a property of the row, which is the safety property worth
+    stating: publishing reads ``target_channel_id``/``target_message_id`` from here and
+    never from the publishing request, so no request can point an existing draft
+    somewhere new. A target still has to be *chosen* by someone — for the web-originated
+    "custom post" flow that someone is the browser, once, at creation — but whoever
+    chooses it must vet it before this row is written (see
+    ``dd.anchor.extensions.cv2_builder_page._handle_new``, which validates through the
+    settings page's own channel checker), because nothing downstream re-checks it.
 
     **This is not an auth token.** ``id`` is a UUID for tidy, non-enumerable URLs, but
     every anchor HTTP surface is already gated by Discord OAuth to bot owners
@@ -3312,8 +3320,11 @@ class Cv2Draft(Base):
 
     ``nodes`` is the raw CV2 node list (:mod:`dd.anchor.cv2_nodes`) — the same JSON the
     REST API accepts — autosaved as the author edits, so a closed tab or an expired
-    session loses nothing. :meth:`prune` drops rows past
-    :data:`DRAFT_RETENTION_DAYS`; drafts are scratch space, not history.
+    session loses nothing. :meth:`prune` drops rows older than **14 days**; drafts are
+    scratch space, not history. It runs at boot and then daily on a cron, both in
+    ``dd.anchor.extensions.cv2_builder_page`` — the boot pass alone was enough when a
+    draft cost someone typing a Discord command, but the web flow mints one per button
+    press and a long-lived process would never sweep them.
     """
 
     __tablename__ = "cv2_draft"
@@ -3435,9 +3446,18 @@ class Cv2Draft(Base):
     @classmethod
     @ensure_session(db_session)
     async def prune(
-        cls, older_than_days: int = 30, session: AsyncSession = _UNSET
+        cls, older_than_days: int = 14, session: AsyncSession = _UNSET
     ) -> int:
-        """Delete drafts older than ``older_than_days``; returns the row count."""
+        """Delete drafts older than ``older_than_days``; returns the row count.
+
+        Keyed on ``created_at``, not ``updated_at``, even though :meth:`save_nodes`
+        stamps the latter and a draft still being autosaved is by definition not stale.
+        ``ix_cv2_draft_created_at`` is the index that exists; keying on ``updated_at``
+        would want its own (and a migration to add it) to avoid a scan. At a 14-day
+        retention the difference is a draft someone opened a fortnight ago and has been
+        editing ever since — and the cost of getting that wrong is re-doing an edit, not
+        losing anything published.
+        """
         cutoff = dt.datetime.now(dt.UTC).replace(tzinfo=None) - dt.timedelta(
             days=older_than_days
         )
