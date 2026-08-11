@@ -855,10 +855,10 @@ async def test_every_control_has_an_accessible_name() -> None:
 
     # "Post to channel" is the label on twelve different rows, so the bare label is not
     # a name — the card it belongs to has to be folded in.
-    assert 'aria-label="Post to channel — Lost Sector"' in html_out
-    assert 'aria-label="Post to channel — Xûr"' in html_out
+    assert 'aria-label="Post to channel, Lost Sector"' in html_out
+    assert 'aria-label="Post to channel, Xûr"' in html_out
     # ...but the row that NAMES its card does not repeat itself.
-    assert 'aria-label="Lost Sector — Lost Sector"' not in html_out
+    assert 'aria-label="Lost Sector, Lost Sector"' not in html_out
 
 
 @pytest.mark.integration

@@ -503,7 +503,7 @@ def _render_row(
     rows. Every control here is named by a sibling ``div.name`` that no accessibility
     API can see, so each carries an explicit ``aria-label`` — and "Post to channel" is
     the label on twelve rows, so on a sub row the card's name is folded in to make
-    it "Post to channel — Lost Sector". The first row of a feed card is the row that
+    it "Post to channel, Lost Sector". The first row of a feed card is the row that
     names the card, so it gets no suffix; a categorised card (Branding, Alerts) passes
     nothing, because its rows are peers under a header a screen reader already reads.
 
@@ -513,7 +513,10 @@ def _render_row(
     *channel*, which lives in a different row of the same card and so is only known one
     level up.
     """
-    aria = f"{setting.label} — {group_label}" if group_label else setting.label
+    # Comma, not a dash: a screen reader treats it as a pause, where an em dash is
+    # read aloud as "em dash" under some punctuation settings and swallowed under
+    # others. The colour row's two halves are joined the same way.
+    aria = f"{setting.label}, {group_label}" if group_label else setting.label
     aria_attr = f' aria-label="{html.escape(aria)}"'
     base_class = "row flat-alt" if flat else "row sub" if setting.sub else "row"
 

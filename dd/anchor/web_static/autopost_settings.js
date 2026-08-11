@@ -167,6 +167,11 @@ document.addEventListener("DOMContentLoaded", () => {
   let dirty = 0;
   function refreshDirty() {
     dirty = dirtyFields();
+    // A failed save's message says WHAT was rejected ("Alerts channel: not an
+    // announcement channel"), and the next thing the reader does is edit that field to
+    // fix it — which is exactly the keystroke that would replace the explanation with a
+    // change count. The error stays until the next save attempt clears it.
+    if (status.classList.contains("err")) return;
     status.classList.toggle("dirty", dirty > 0);
     status.textContent = dirty
       ? `${dirty} unsaved change${dirty === 1 ? "" : "s"} — press Save to keep ${
