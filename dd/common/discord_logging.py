@@ -536,7 +536,8 @@ async def install_discord_logging(
         # retry, leaving a process that booted unconfigured with no alerting for its
         # entire life, however correct the database became afterwards.
         DiscordLogHandler._stderr(
-            "Alerts channel unset (Autopost Settings); alerts inert until one is set"
+            "Alerts channel not set; nothing is sent anywhere until one is "
+            "picked on the Feeds page"
         )
 
     owner_ids = [int(owner_id) for owner_id in await bot.fetch_owner_ids()]

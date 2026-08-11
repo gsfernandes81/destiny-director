@@ -293,8 +293,8 @@ initPostForm({
       "Delete the in-channel draft post? Your form data stays — Create re-creates it.",
     deletePublished:
       "Delete the PUBLISHED weekly-reset post? This removes it from the channel and" +
-      " propagates the deletion to every follower (beacon mirrors the removal too). Your" +
-      " form data stays — Create re-posts it.",
+      " from every server that follows this feed. Your form data stays — Create" +
+      " re-posts it.",
     deleted: "Post deleted — create a new one when ready.",
   },
 });

@@ -17,6 +17,14 @@
   live in shared.css, which every page linking this one also links.
 */
 
+/* The sticky actions bar below is ~67px of opaque page colour pinned to the bottom of
+   the viewport, and the browser scrolls a newly focused control to exactly there — so
+   tabbing down the page put focus behind the bar, repeatedly, at 390px and at 1440px.
+   scroll-padding is the fix for precisely this: it tells the scroll container to stop
+   short. On :root because the viewport is the scroller, and in this sheet because only
+   the two pages that have the bar link it. */
+:root { scroll-padding-bottom: 5.5rem; }
+
 main.settings { margin: 1rem 0; }
 form#toggles { display: flex; flex-direction: column; gap: .6rem; }
 
@@ -249,9 +257,11 @@ form#toggles { display: flex; flex-direction: column; gap: .6rem; }
   border-top: 1px solid var(--border);
 }
 #status { color: var(--text-faint); font-size: .85rem; }
-/* Shown while something is changed and unsaved. --warn, not --err: an unsaved change is
-   a state the reader can fix, which is exactly what the sheet reserves --warn for.
-   Declared BEFORE .err deliberately — a failed save can leave both classes on the
-   element, and at equal specificity the later rule wins, so red has to be last. */
-#status.dirty { color: var(--warn); }
+#status.warn { color: var(--warn); }
 #status.err { color: var(--err); }
+/* The unsaved-change count, in its own slot beside the save result. --warn, not --err:
+   an unsaved change is a state the reader can fix, which is what the sheet reserves
+   --warn for. Separate element rather than a class on #status because the two messages
+   are both live at once — a rejected save has to keep saying which field it rejected
+   while you edit that field, and the count has to keep counting while you do. */
+.dirtycount { color: var(--warn); font-size: .85rem; }

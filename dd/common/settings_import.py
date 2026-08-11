@@ -414,7 +414,7 @@ async def _main(argv: list[str] | None = None) -> int:
     print(format_report(changes, execute=args.execute))
     if args.execute:
         await apply(changes)
-        print("\nWritten. Reload the Autopost Settings page to confirm.")
+        print("\nWritten. Reload the Feeds page to confirm.")
     return 0
 
 

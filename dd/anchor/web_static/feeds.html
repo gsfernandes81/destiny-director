@@ -40,8 +40,9 @@
       <h1>Feeds</h1>
       <p class="muted">
         What posts where. Switches stop the bot writing a feed — they don't change which
-        servers follow it. Nothing changes until you press Save, and then it applies from
-        the next post; no restart needed.
+        servers follow it. Switch, channel and image edits aren't kept until you press
+        Save, and then they apply from the next post; no restart needed. Preview and Send
+        now act straight away.
       </p>
     </header>
     <main class="settings">
@@ -50,6 +51,7 @@
       </form>
       <div class="actions">
         <button type="button" class="primary" id="save">Save</button>
+        <span id="dirty" class="dirtycount" role="status"></span>
         <span id="status" role="status"></span>
       </div>
     </main>

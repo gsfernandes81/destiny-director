@@ -218,7 +218,12 @@ async def test_render_reflects_db_state() -> None:
     html_out = await _render_both_pages()
 
     # An enabled row renders a checked box; a disabled row renders unchecked.
-    assert 'data-slug="lost_sector" aria-label="Lost Sector" checked' in html_out
+    lost_sector_toggle = re.search(
+        r'<input[^>]*data-slug="lost_sector"[^>]*>', html_out
+    )
+    assert lost_sector_toggle, "no lost_sector toggle rendered"
+    assert ' aria-label="Lost Sector"' in lost_sector_toggle.group(0)
+    assert " checked" in lost_sector_toggle.group(0)
     assert 'data-slug="xur" checked' not in html_out
     assert 'data-slug="xur"' in html_out
     # Every known toggle appears with its label + description, and rows are switches.
@@ -865,10 +870,10 @@ async def test_every_control_has_an_accessible_name() -> None:
 async def test_render_alerts_channel_scope_is_kyber_control() -> None:
     html_out = await _render_both_pages()
 
-    assert (
-        'data-slug="alerts_channel_id" aria-label="Alerts channel"'
-        ' data-scope="kyber_control"'
-    ) in html_out
+    alerts = re.search(r'<select[^>]*data-slug="alerts_channel_id"[^>]*>', html_out)
+    assert alerts, "no alerts channel picker rendered"
+    assert ' aria-label="Alerts channel"' in alerts.group(0)
+    assert ' data-scope="kyber_control"' in alerts.group(0)
 
 
 @pytest.mark.integration
@@ -881,10 +886,13 @@ async def test_render_followable_channels_are_announce_only_log_alerts_are_not()
     # postable channel is fine for it.
     html_out = await _render_both_pages()
 
-    assert 'data-slug="lost_sector_channel"' in html_out
+    ls_channel = re.search(
+        r'<select[^>]*data-slug="lost_sector_channel"[^>]*>', html_out
+    )
+    assert ls_channel, "no lost_sector channel picker rendered"
     assert (
         'data-scope="kyber" data-required="true" data-announce-only="true"'
-        in html_out.split('data-slug="lost_sector_channel"')[1][:150]
+        in ls_channel.group(0)
     )
     assert (
         'data-scope="kyber_control" data-required="false" data-announce-only="false"'

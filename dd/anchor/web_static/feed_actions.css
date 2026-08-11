@@ -55,6 +55,10 @@ dialog.feedmodal label.publish {
 .modalpreview { max-height: 50vh; overflow-y: auto; }
 .modalstatus { color: var(--text-faint); font-size: .85rem; }
 .modalstatus.err { color: var(--err); }
+/* A wait rather than a breakage (shared.js's `toneFor` — a 503 is the bot still
+   starting). Lives here and not in shared.css because asset_links.test.js reserves
+   every .modalstatus rule to this sheet. */
+.modalstatus.warn { color: var(--warn); }
 /* The send dialog carries two of these (preview build, send outcome) and usually
    only one is saying anything; an empty one must not hold open a gap. */
 .modalstatus:empty { display: none; }

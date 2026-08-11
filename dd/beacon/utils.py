@@ -453,7 +453,7 @@ async def open_feed_source[T](
             logger.critical(
                 "%s channel %s is configured but no longer reachable (deleted, or the "
                 "bot lost access) — its commands will answer 'unavailable' until it's "
-                "fixed on the Autopost Settings page.",
+                "fixed on the Feeds page.",
                 dd_feeds.FEEDS[feed].display_name,
                 channel_id,
             )
@@ -561,7 +561,7 @@ async def sweep_dormant_feeds() -> None:
         _dormant_feeds[followable.slug] = now
         logger.critical(
             "%s has no channel set — it posts nothing and its commands will answer "
-            "'unavailable' until one is picked on the Autopost Settings page.",
+            "'unavailable' until one is picked on the Feeds page.",
             followable.display_name,
         )
 

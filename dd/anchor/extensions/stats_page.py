@@ -134,7 +134,7 @@ web.register_routes(register_stats_routes)
 web.register_card(
     web.Card(
         "Reach & usage",
-        "How many servers each feed reaches, and which commands people run.",
+        "How many channels each feed reaches, and which commands people run.",
         "/stats",
         web.CardGroup.CHECK,
         20,

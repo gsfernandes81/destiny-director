@@ -191,7 +191,7 @@ function initPostForm({
    * An in-page confirmation, replacing window.confirm.
    *
    * The browser dialog is unstyled, unplaceable, and on some platforms suppressible —
-   * a poor last gate in front of "publish to every follower". Resolves true/false.
+   * a poor last gate in front of pushing a post out. Resolves true/false.
    */
   function confirmInPage(title, body, confirmLabel, danger) {
     return new Promise((resolve) => {
@@ -283,7 +283,7 @@ function initPostForm({
       if (
         confirmMsg &&
         !(await confirmInPage(
-          "Publish to every follower?",
+          "Push to every server that follows this feed?",
           confirmMsg,
           "Publish",
           false,
@@ -299,15 +299,21 @@ function initPostForm({
       }
     });
   }
-  wirePost("createBtn", "create", false, "Creating post…", "Post created (uncrossposted) ✓");
+  wirePost(
+  "createBtn",
+  "create",
+  false,
+  "Creating post…",
+  "Post created — not pushed out yet ✓",
+);
   wirePost(
     "createPublishBtn", "create", true, "Creating & publishing…", "Published ✓",
-    "Create the post AND publish it to every follower?",
+    "Create the post AND push it to every server that follows this feed?",
   );
   wirePost("editBtn", "edit", false, "Editing post…", "Post edited ✓");
   wirePost(
     "editPublishBtn", "edit", true, "Editing & publishing…", "Published ✓",
-    "This edits the live post and crossposts it, so beacon mirrors the change to every "
+    "This edits the live post and pushes the change out, so every server that follows "
       + "server following this feed.",
   );
 

@@ -113,10 +113,20 @@ document.addEventListener("DOMContentLoaded", () => {
       if (current) ts.setValue(current, true);
       // Tom Select builds its own <input> to type into and leaves it unnamed, so the
       // control a keyboard actually lands on is anonymous however well the underlying
-      // <select> is labelled (the server gives it e.g. "Post to channel — Lost Sector",
+      // <select> is labelled (the server gives it e.g. "Post to channel, Lost Sector",
       // see autopost_settings.py's _render_row). Carry the name across.
       const name = select.getAttribute("aria-label");
-      if (name && ts.control_input) ts.control_input.setAttribute("aria-label", name);
+      if (name && ts.control_input) {
+        ts.control_input.setAttribute("aria-label", name);
+        const desc = select.getAttribute("aria-describedby");
+        if (desc) ts.control_input.setAttribute("aria-describedby", desc);
+        // Tom Select leaves the original <select> visible to assistive tech (its
+        // .ts-hidden-accessible only clips it visually), so without this the row
+        // announces two comboboxes with the same name. Done AFTER the copy: until the
+        // widget exists the plain <select> is the working fallback and needs its label.
+        select.setAttribute("aria-hidden", "true");
+        select.tabIndex = -1;
+      }
     });
   }
   initChannelPickers();
@@ -146,6 +156,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const btn = byId("save");
   const status = byId("status");
+  const dirtyEl = byId("dirty");
 
   // --- unsaved changes ---------------------------------------------------------------
   //
@@ -165,19 +176,23 @@ document.addEventListener("DOMContentLoaded", () => {
     ).length;
 
   let dirty = 0;
-  function refreshDirty() {
+  function refreshDirty(event) {
+    // Only this form's own controls. The listener is on the document because Tom Select
+    // replaces each channel <select> with its own widget and only the original element
+    // fires `change` — but /feeds also carries the shared send dialog, whose "Also
+    // push…" checkbox would otherwise rewrite a status line it has no business touching
+    // (and which feed_actions.js is simultaneously using for "Send started…").
+    if (event && !event.target.closest("#toggles")) return;
     dirty = dirtyFields();
-    // A failed save's message says WHAT was rejected ("Alerts channel: not an
-    // announcement channel"), and the next thing the reader does is edit that field to
-    // fix it — which is exactly the keystroke that would replace the explanation with a
-    // change count. The error stays until the next save attempt clears it.
-    if (status.classList.contains("err")) return;
-    status.classList.toggle("dirty", dirty > 0);
-    status.textContent = dirty
+    const text = dirty
       ? `${dirty} unsaved change${dirty === 1 ? "" : "s"} — press Save to keep ${
           dirty === 1 ? "it" : "them"
         }.`
       : "";
+    // Only write when the string actually changes. This element is role="status", so
+    // reassigning textContent re-announces it — and without the guard a screen reader
+    // reads the whole sentence again on every character typed into a URL or hex field.
+    if (dirtyEl.textContent !== text) dirtyEl.textContent = text;
   }
   document.addEventListener("input", refreshDirty);
   document.addEventListener("change", refreshDirty);
@@ -191,8 +206,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btn.addEventListener("click", async () => {
     const settings = {};
+    // Snapshot what is being SUBMITTED, field by field. The success path below sets the
+    // new baseline from this map and not from a fresh read of the DOM: the fields stay
+    // editable while the request is in flight (only the button is disabled), so a live
+    // re-read would absorb anything flipped mid-flight into the baseline — leaving it
+    // on screen as set, absent from the database, and reported as "Saved." with the
+    // leave-guard disarmed. That is the one change most likely to be lost, and it was
+    // the only one the guard could not see.
+    const submitted = new Map();
     document.querySelectorAll(FIELD_SELECTOR).forEach((el) => {
       const value = readField(el);
+      submitted.set(el, value);
       settings[el.dataset.slug] = value === baseline.get(el) ? null : value;
     });
     btn.disabled = true;
@@ -200,14 +224,13 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const res = await window.api("/autopost_settings/save", { settings });
       if (res.ok) {
-        // What is on the page is now what is in the DB, so the next save starts from
-        // a clean slate — otherwise every later save would resubmit these same fields.
-        document
-          .querySelectorAll(FIELD_SELECTOR)
-          .forEach((el) => baseline.set(el, readField(el)));
-        dirty = 0;
-        status.classList.remove("dirty");
+        // What was SENT is now what is in the DB, so the next save starts from there —
+        // otherwise every later save would resubmit these same fields.
+        submitted.forEach((value, el) => baseline.set(el, value));
         say(status, "Saved.", false);
+        // After the baseline moves, not before: anything changed mid-flight is still
+        // dirty, and both the count and the leave-guard have to say so.
+        refreshDirty();
       } else {
         let msg = "Save failed.";
         try {

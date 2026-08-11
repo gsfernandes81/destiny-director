@@ -75,7 +75,7 @@ document.addEventListener("DOMContentLoaded", () => {
           row(feeds, c.feed, c.channelName || c.channelId || "(not set)", c.url),
         );
       } else {
-        row(feeds, "—", "(none configured)");
+        row(feeds, "—", "(not set)");
       }
       infoBody.appendChild(feeds);
     } catch (e) {

@@ -364,6 +364,6 @@ async def test_the_card_names_the_feeds_the_page_actually_offers() -> None:
 
     for feed in dd_feeds.FOLLOWABLES:
         # Compared through the same non-breaking-hyphen swap the description applies,
-        # so "Ada-1" still matches "Ada‑1" (see _CARD_DESCRIPTION).
-        name = feed.display_name.replace("-", "‑")
+        # so "Ada-1" still matches "Ada\u2011 1" (see _CARD_DESCRIPTION).
+        name = feed.display_name.replace("-", "\u2011")
         assert (name in card.description) is feed.has_toggle, feed.slug

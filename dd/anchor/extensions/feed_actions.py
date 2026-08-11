@@ -175,11 +175,16 @@ def actions_html(
     live = slug in registered_feeds()
 
     def _button(action: str, text: str, title: str, *, enabled: bool) -> str:
+        # The visible word is "Preview" or "Send now" on every card, so the accessible
+        # name has to carry the feed — otherwise a screen reader announces six identical
+        # "Preview button, Send now button" pairs down /feeds with nothing to tell them
+        # apart. Same reasoning as the "Post to channel" rows one line below them.
         return (
             f'<button type="button" class="feedaction small" data-action="{action}"'
             f' data-slug="{html.escape(slug)}"'
             f"{'' if enabled else ' disabled'}"
             f' title="{title}"'
+            f' aria-label="{html.escape(f"{text}, {label}")}"'
             f' data-label="{html.escape(label)}">{text}</button>'
         )
 
@@ -316,9 +321,10 @@ async def _handle_send(request: aiohttp.web.Request) -> aiohttp.web.Response:
     if not channel_id:
         return aiohttp.web.json_response(
             {
-                # "Dormant" is the settings page's word for this state, not something
-                # an admin would say; and the sentence has to point at the fix, since
-                # this is the only place the problem surfaces.
+                # "Dormant" was this state's name in the code and on the old settings
+                # page; it is not something an admin would say. The sentence points at
+                # the fix because the reader may have arrived from /send, where the
+                # row's own note is not in view.
                 "error": f"{dd_feeds.FEEDS[feed.name].display_name} has no channel to"
                 " post to yet — pick one on the Feeds page."
             },
