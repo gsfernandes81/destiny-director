@@ -15,12 +15,13 @@
 
 """Web editor for the rotation JSON store (anchor).
 
-``{public_base_url}/rotation`` is a homepage listing every rotation type
-(``ROTATION_SCHEMAS``); each links to ``/rotation/edit?type=…`` so the owner edits the
-document with a friendly form, previews the rendered post, and saves — the server
+``{public_base_url}/rotation`` is an index of the nine world-activity types
+(``WORLD_ACTIVITY_SLUGS``); each links to ``/rotation/edit?type=…`` so the owner edits
+the document with a friendly form, previews the rendered post, and saves — the server
 re-validates against the JSON schema on save. The four rotations that feed a post are
 linked by name from the panel's "Fix the data behind a post" group and go straight to
-their own tab; this page is the way in to the nine legacy location pages behind them.
+their own tab, so they are not listed here; every one of the thirteen
+``ROTATION_SCHEMAS`` types stays reachable at ``/rotation/edit?type=…``.
 Authentication for every page, preview and save is handled centrally by the
 Discord-OAuth middleware in ``web_auth.py`` (this module carries no auth code of its
 own).
@@ -318,17 +319,23 @@ def _read_json_body(payload: t.Any) -> tuple[str, t.Any]:
 
 
 def _render_home_html() -> str:
-    """The rotations homepage: one link per ``ROTATION_SCHEMAS`` type."""
+    """The world-activity index: one link per ``WORLD_ACTIVITY_SLUGS`` type.
+
+    The four rotations that feed a post (lost sector, Xûr, Trials loot, Iron Banner) are
+    linked by name from the panel's "Fix the data behind a post" group and go straight
+    to their own tab, so listing them here too would put an index in front of the thing
+    somebody came for. Their edit routes are untouched — all thirteen types stay
+    reachable at ``/rotation/edit?type=…``.
+    """
     items: list[str] = []
-    for slug in sorted(rotation_schema.ROTATION_SCHEMAS):
+    for slug in sorted(rotation_schema.WORLD_ACTIVITY_SLUGS):
         title = html.escape(
             str(rotation_schema.ROTATION_SCHEMAS[slug].get("title", slug))
         )
         slug_attr = html.escape(slug, quote=True)
-        items.append(
-            f'<li><a href="/rotation/edit?type={slug_attr}">{title}</a>'
-            f" <code>{html.escape(slug)}</code></li>"
-        )
+        # No slug chip beside the title: the titles are already unique, and
+        # ``world_activity_pale_heart`` is engineer-facing noise on an owner's page.
+        items.append(f'<li><a href="/rotation/edit?type={slug_attr}">{title}</a></li>')
     list_html = '<ul class="rotations">' + "".join(items) + "</ul>"
     return _HOME_HTML_PATH.read_text(encoding="utf-8").replace(
         "<!--__ROTATIONS__-->", list_html

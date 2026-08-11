@@ -110,17 +110,29 @@ def _req(
     )
 
 
-# --- GET /rotation (homepage) ----------------------------------------------------
+# --- GET /rotation (the world-activity index) -------------------------------------
 
 
-async def test_home_lists_all_rotation_types():
+async def test_home_lists_the_world_activity_pages_only():
     resp = await editor._handle_home_get(_req())
     assert resp.status == 200
     body = resp.text or ""
-    # Every registered rotation type is linked, and a friendly title renders.
-    for slug in rs.ROTATION_SCHEMAS:
+    # The nine world-activity pages are linked, and a friendly title renders.
+    for slug in rs.WORLD_ACTIVITY_SLUGS:
         assert f"type={slug}" in body
-    assert "Lost sector rotation" in body
+    assert "World activity pages (legacy)" in body
+    # The four that feed a post are reached by name from the landing page instead; an
+    # index in front of the thing somebody came for is the whole reason they moved.
+    for slug in rs.ROTATION_SCHEMAS:
+        if slug not in rs.WORLD_ACTIVITY_SLUGS:
+            assert f"type={slug}" not in body
+
+
+async def test_home_carries_no_slug_chips():
+    # Titles are unique on their own; `world_activity_pale_heart` beside one is
+    # engineer-facing noise on a page for the person editing the data.
+    body = (await editor._handle_home_get(_req())).text or ""
+    assert "<code>" not in body
 
 
 # --- GET /rotation/edit ----------------------------------------------------------

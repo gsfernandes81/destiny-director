@@ -115,7 +115,7 @@ async def test_page_shell_served() -> None:
     assert resp.status == 200
     assert resp.content_type == "text/html"
     body = _text(resp)
-    assert "Statistics" in body
+    assert "Reach &amp; usage" in body
     assert "/static/stats.js" in body
 
 
