@@ -26,6 +26,6 @@
    _build_options). Not an error — the rest of the form is usable, the pickers just are
    not populated yet. */
 .options-warning {
-  border-left: 3px solid var(--warning, #d9a441); padding: .4rem .7rem;
-  margin: .6rem 0 0; color: var(--muted); font-size: .88rem;
+  border-left: 3px solid var(--warn); padding: .4rem .7rem;
+  margin: .6rem 0 0; color: var(--text-faint); font-size: .88rem;
 }

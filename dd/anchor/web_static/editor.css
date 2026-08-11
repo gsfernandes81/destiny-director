@@ -20,7 +20,8 @@ input[type="text"], input[type="url"], input[type="date"], select {
 .field { margin: .5rem 0; }
 .field > label { font-weight: 600; display: block; margin-bottom: .2rem; }
 button {
-  background: var(--accent-strong); color: #fff; border: 0; border-radius: var(--radius-sm);
+  background: var(--accent-strong); color: var(--accent-text-strong);
+  border: 0; border-radius: var(--radius-sm);
   padding: .45rem .8rem; font: inherit; cursor: pointer;
 }
 button.secondary { background: var(--surface-3); }

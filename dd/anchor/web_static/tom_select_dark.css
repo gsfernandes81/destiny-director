@@ -67,11 +67,13 @@
 
 /* Multi-select chips. */
 .ts-wrapper.multi .ts-control > .item {
-  background: var(--accent-strong); color: #fff; border: 0; border-radius: 4px;
+  background: var(--accent-strong); color: var(--accent-text-strong);
+  border: 0; border-radius: 4px;
   padding: .12rem .45rem;
 }
 .ts-wrapper.multi .ts-control > .item .remove {
-  border-left-color: rgba(255, 255, 255, .4); color: #fff;
+  border-left-color: rgba(255, 255, 255, .4);
+  color: var(--accent-text-strong);
 }
 .ts-wrapper.multi .ts-control > .item .remove:hover { background: rgba(255, 255, 255, .18); }
 

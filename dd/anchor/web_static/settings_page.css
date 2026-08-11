@@ -235,7 +235,10 @@ form#toggles { display: flex; flex-direction: column; gap: .6rem; }
 .switch input:checked + .slider {
   background: var(--accent); border-color: var(--accent);
 }
-/* Pure white knob on the pink fill (>=3:1 non-text contrast; #e6e6e6 would be 2.9). */
+/* Pure white knob on the pink fill, and NOT --text-1: at 3.57:1 against the fill it
+   clears the 3:1 non-text floor comfortably, where --text-1 sits at 3.01:1 — one
+   rounding away. Deliberately a literal, so a future change to the text tiers
+   cannot quietly drop the knob under the floor. */
 .switch input:checked + .slider::before { transform: translateX(18px); background: #fff; }
 /* The checkbox is visually hidden and stretched over the switch, so it carries
    .no-focus-ring (see shared.css) and the slider wears the ring instead. */

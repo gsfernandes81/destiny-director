@@ -145,9 +145,12 @@ tr.run.open td {
   background: color-mix(in srgb, var(--err) 12%, transparent);
 }
 .chip.partial {
-  color: #f0b429; /* amber: some delivered, some failed */
-  border-color: color-mix(in srgb, #f0b429 45%, transparent);
-  background: color-mix(in srgb, #f0b429 12%, transparent);
+  /* Amber, because a partial run is neither clean nor failed — and --warn is the
+     sheet's word for exactly that: a state the reader can act on. This was a
+     hand-picked #f0b429 sitting a shade off the token for no stated reason. */
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 .chip.progress {
   color: var(--link);

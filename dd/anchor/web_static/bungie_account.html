@@ -21,16 +21,16 @@
         background: var(--surface-3); padding: .9rem;
       }
       .panel h2 { margin: 0 0 .35rem; font-size: 1rem; }
-      .panel p.hint { margin: 0 0 .7rem; color: var(--muted); font-size: .88rem; }
+      .panel p.hint { margin: 0 0 .7rem; color: var(--text-faint); font-size: .88rem; }
       .actions { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; }
-      .status { color: var(--muted); font-size: .88rem; }
-      .status.err { color: var(--danger, #d9534f); }
+      .status { color: var(--text-faint); font-size: .88rem; }
+      .status.err { color: var(--danger-text); }
       /* The link-state line: a dot plus a sentence, so state reads at a glance. */
       .state { display: flex; align-items: center; gap: .5rem; font-size: .95rem; }
       .dot { width: .6rem; height: .6rem; border-radius: 50%; flex: none;
-             background: var(--muted); }
-      .dot.ok { background: #3fb950; }
-      .dot.bad { background: var(--danger, #d9534f); }
+             background: var(--text-muted); }
+      .dot.ok { background: var(--ok); }
+      .dot.bad { background: var(--danger-text); }
       dialog.panelmodal {
         border: 1px solid var(--border); border-radius: var(--radius);
         background: var(--surface-3); color: var(--text-1); padding: 1.1rem;
@@ -41,7 +41,7 @@
          transition has no start state to move from. The one in control_panel.html looks
          like a duplicate and is not — it is [open]-scoped and sets the danger colour. */
       dialog.panelmodal h2 { margin: 0 0 .6rem; font-size: 1.05rem; }
-      dialog.panelmodal p { margin: 0 0 1rem; font-size: .92rem; color: var(--muted); }
+      dialog.panelmodal p { margin: 0 0 1rem; font-size: .92rem; color: var(--text-faint); }
       .modal-actions { display: flex; justify-content: flex-end; gap: .6rem; }
 
       /* Account numbers, in a monospace block that is easy to copy out. */
