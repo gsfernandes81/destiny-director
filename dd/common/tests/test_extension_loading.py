@@ -99,3 +99,27 @@ async def test_extension_package_loads_cleanly(
     assert not critical, "extension(s) failed to load: " + "; ".join(
         record.getMessage() for record in critical
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("package", _PACKAGES, ids=lambda p: p.__name__)
+async def test_testing_extension_does_not_load_outside_a_test_env(
+    package: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both bots' `testing` extensions are debug aids — gated on ``cfg.test_env``.
+
+    Without ``TEST_ENV`` set they must register nothing at all, so `/testing` never
+    reaches a production deployment (the control/kyber guild scopes notwithstanding).
+    """
+    monkeypatch.setattr(cfg, "test_env", ())
+
+    bot = h.GatewayBot(token=_FAKE_TOKEN)  # never started; no gateway/Discord call
+    client = lb.client_from_app(bot)
+
+    await load_extensions_strict(client, package)
+
+    registered = {
+        getattr(command, "name", None) for command in client._registered_commands
+    }
+    assert "testing" not in registered

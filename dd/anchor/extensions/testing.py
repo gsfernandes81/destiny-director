@@ -25,6 +25,9 @@ routes it through the real ``guard_cv2_post_sections`` path, so the CRITICAL
 owner-pinging overflow alert fires on demand — a repeatable way to eyeball that the
 alert renders as a clean notice (no traceback) and that the fixed header/footer survive
 the body truncation.
+
+Both are debugging aids, so the whole extension is gated on ``cfg.test_env`` — matching
+beacon's ``testing`` extension, they never reach a production deployment.
 """
 
 import datetime
@@ -36,7 +39,8 @@ import lightbulb as lb
 from ...common import cfg, components, settings, utils
 from ...common.bot import CachedFetchBot
 
-loader = lb.Loader()
+# This whole extension only loads in a test environment, matching beacon's `testing`.
+loader = lb.Loader(should_load_hook=lambda: bool(cfg.test_env))
 
 testing_group = lb.Group("testing", "Testing group")
 
