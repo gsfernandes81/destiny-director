@@ -3712,7 +3712,7 @@ class DestinyManifestDefinition(Base):
     table keyed by the table name it came from. Storing it here rather than on disk is
     what makes a redeploy free (the manifest outlives the container, so a cold start
     downloads nothing) and what gives the bot an answer while Bungie is unreachable —
-    the failure mode ``plans/manifest_backup_in_git.md`` was opened for.
+    the failure mode ``plans/manifest_in_postgres.md`` was written to close.
 
     ``hash`` is Bungie's **unsigned** 32-bit hash, not the signed ``id`` SQLite stored
     it under; consumers speak unsigned hashes, so the conversion happens once at load

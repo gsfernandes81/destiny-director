@@ -141,10 +141,14 @@ dmypy.json
 *.png
 
 # Bungie api files
+#
+# Nothing writes these any more — the manifest lives in Postgres and its download is
+# unpacked into a temp directory that is removed on the way out (see
+# dd/anchor/extensions/bungie_api/manifest.py). They stay ignored because a working copy
+# that predates that move still has ~340M of extracted manifest sitting here, and it
+# must not become committable just because the code stopped producing it.
 world_sql_content*
 manifest.zip
-# The extracted manifest sqlite dir (downloaded at runtime, ~340M). Untracked and huge,
-# so keep it out of `railway up` build contexts and `git status`.
 manifest/
 
 # Local DB dumps (`make dump-prod-db` / `dump-dev-db`). Alembic revisions are Python,

@@ -245,8 +245,16 @@ migration-check: .env
 # dump-mysql does the opposite, and the note above it says why: the naming problem does
 # not exist for `MySQL`, and reading the database service directly is immune to a stale
 # copy on a bot. Symmetry between the two is not worth either failure.
+#
+# The Destiny manifest tables are dumped as SCHEMA ONLY (--exclude-table-data). They are
+# ~170MB of Bungie's own data, they are regenerable from Bungie in one load, and they
+# turn a small text backup into something nobody wants to move around. Restoring a dump
+# leaves them empty and the next resolve fills them — which is exactly what a fresh
+# deploy already does.
+MANIFEST_TABLES = --exclude-table-data=destiny_manifest_definition \
+                  --exclude-table-data=destiny_manifest_version
 dump-db:
-	$(RAILWAY_RUN) bash -c 'pg_dump --no-owner --no-privileges "$$DATABASE_URL" > "kyber-$(TARGET_ENV)-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
+	$(RAILWAY_RUN) bash -c 'pg_dump --no-owner --no-privileges $(MANIFEST_TABLES) "$$DATABASE_URL" > "kyber-$(TARGET_ENV)-$$(date -u +%Y%m%dT%H%M%SZ).sql"'
 
 # The same, for the OLD MySQL database, until it is retired. `dump-db` above cannot
 # stand in for this: it dumps DATABASE_URL, so before the cutover there is nothing to

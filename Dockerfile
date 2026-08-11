@@ -152,8 +152,11 @@ ENV TZ=Etc/UTC \
 # locked-account marker on some platforms, but Alpine's build authenticates a public key
 # against it happily — verified by flipping the field and logging in, rather than
 # pre-emptively "fixing" it.
-#   /app is owned by dd because anchor writes the downloaded Bungie manifest into
-#   ./manifest at runtime; its *contents* stay root-owned and read-only.
+#   /app is owned by dd. The original reason — anchor writing the downloaded Bungie
+#   manifest into ./manifest — is gone (the manifest lives in Postgres now, and its
+#   download is unpacked under /tmp), but a writable working directory is cheap and
+#   removing it would be a behaviour change to the image for no gain. Its *contents*
+#   stay root-owned and read-only.
 #   /home/dd/.ssh-host holds the runtime-generated sshd host keys — never baked, see
 #   supervisord.conf. `ssh-keygen -A -f <prefix>` appends etc/ssh/ to the prefix and does
 #   NOT create it (it fails, and still exits 0), so the directory has to exist here.

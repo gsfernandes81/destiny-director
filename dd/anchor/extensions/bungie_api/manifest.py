@@ -11,7 +11,7 @@ Three things follow:
   it straight out of Postgres instead of re-downloading a third of a gigabyte.
 * A Bungie outage stops being fatal. The old last line of defence was "reuse whatever is
   extracted in ``manifest/``", which is no answer on a fresh container — there was
-  nothing to fall back to (``plans/manifest_backup_in_git.md``). Now there always is.
+  nothing to fall back to. Now there always is — see ``plans/manifest_in_postgres.md``.
 * No host keeps 340 MB of manifest around: not Railway's ephemeral disk, not the Pi's
   SD card. Only the transient download does, for the minute or two a load takes.
 
