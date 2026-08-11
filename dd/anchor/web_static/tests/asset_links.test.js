@@ -80,6 +80,44 @@ test("cv2_render.js is loaded after the model it consumes", () => {
   );
 });
 
+test("the Tom Select dark theme is loaded after the sheet it overrides", () => {
+  // Same class of failure as the cv2_model/cv2_render order above, but in CSS, where it
+  // is quieter still: nothing is undefined and nothing throws — the vendored LIGHT theme
+  // simply cascades in last and wins, so the picker renders dark-on-white inside an
+  // otherwise dark page. tom_select_dark.css's own header says "link this file AFTER the
+  // vendored sheet"; a comment is not a guard, and there are three pages relying on it.
+  const VENDOR = "/static/vendor/tom-select.min.css";
+  const DARK = "/static/tom_select_dark.css";
+  const wrong = pages()
+    .filter((p) => p.text.includes(VENDOR) || p.text.includes(DARK))
+    .filter((p) => {
+      const vendor = p.text.indexOf(VENDOR);
+      const dark = p.text.indexOf(DARK);
+      return vendor === -1 || dark === -1 || vendor > dark;
+    })
+    .map((p) => p.name);
+  assert.deepEqual(
+    wrong,
+    [],
+    "load the vendored Tom Select sheet first, then tom_select_dark.css",
+  );
+});
+
+test("a page with a Tom Select picker loads the widget and its styles", () => {
+  // The pairing in the other direction: the sheets style what the vendored script builds,
+  // so either half alone is wrong — markup with no widget, or a widget with no theme.
+  const SCRIPT = "/static/vendor/tom-select.complete.min.js";
+  const DARK = "/static/tom_select_dark.css";
+  const mismatched = pages()
+    .filter((p) => p.text.includes(SCRIPT) !== p.text.includes(DARK))
+    .map((p) => p.name);
+  assert.deepEqual(
+    mismatched,
+    [],
+    "tom-select.complete.min.js and tom_select_dark.css must be loaded together",
+  );
+});
+
 test("charts.css is not loaded by pages that draw no charts", () => {
   // The reverse direction, so the sheet does not quietly become a second shared.css.
   const pointless = pages()
