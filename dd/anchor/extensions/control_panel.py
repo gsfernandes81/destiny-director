@@ -174,6 +174,10 @@ def _panel_links() -> list[str]:
         _link("Configured channels", element_id="infoBtn"),
         '<form method="post" action="/auth/logout">'
         '<button type="submit" class="qlink">Sign out</button></form>',
+        # Forces the wrapped link row to break before the one destructive entry, so
+        # Shut down never lands beside Sign out (it did, at 390px). Presentational, so
+        # aria-hidden; see control_panel.html for why CSS alone cannot do it.
+        '<span class="linebreak" aria-hidden="true"></span>',
         _link("Shut down", element_id="stopBtn", danger=True),
     ]
 

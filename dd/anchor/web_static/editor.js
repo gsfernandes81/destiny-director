@@ -19,7 +19,7 @@
 // named bonus focus pools (Iron Banner / Preview).
 
 const BOOTSTRAP = window.__BOOTSTRAP__;
-const { type, data, vocab } = BOOTSTRAP;
+const { type, title, data, vocab } = BOOTSTRAP;
 // The world-activity destinations are stored under the `world_activity_` slug prefix
 // (dd.common.rotation_schema.ROTATION_SLUG_PREFIX). Server dispatch keys off
 // `is_world_activity`; the form mirrors it with this one prefix test so the two can't
@@ -33,7 +33,10 @@ const el = (tag, props = {}, kids = []) => {
   return n;
 };
 
-document.getElementById("typeName").textContent = type;
+// The heading says the rotation's NAME ("Lost sector rotation"), which the server
+// sends alongside the slug. It used to print the slug itself.
+document.getElementById("typeName").textContent = title || type;
+document.title = `${title || type} — Destiny Director`;
 document.getElementById("authNote").textContent =
   "Signed in via Discord (about 30 days). Changes save straight to the database.";
 

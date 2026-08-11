@@ -214,7 +214,11 @@ async def test_send_refuses_a_dormant_feed(
     _register(announcer=_announcer)
     res = await feed_actions._handle_send(_as_request(_FakeRequest("xur", {})))
     assert res.status == 409
-    assert "dormant" in json.loads(_text(res))["error"]
+    # The sentence names the feed and points at the fix — this is the only place a
+    # channel-less feed surfaces, so "dormant" (the settings page's word) would leave
+    # the reader with nothing to do about it.
+    err = json.loads(_text(res))["error"]
+    assert "no channel" in err and "Feeds page" in err
     assert not called
 
 

@@ -83,6 +83,33 @@ form#toggles { display: flex; flex-direction: column; gap: .6rem; }
 .row .name { font-size: .95rem; }
 .row .desc { color: var(--text-faint); font-size: .8rem; margin-top: .15rem; }
 
+/* Phone: the label takes the full width and the control wraps under it.
+
+   `.row.channelrow` already sets flex-wrap, but wrap never fired — `.text` is
+   `flex: 1; min-width: 0`, so it shrinks to nothing while the field's 14rem basis
+   still fits. At 390px that left a 34px text column beside a 224px picker, and "Post
+   to channel / The Kyber channel this feed posts to." came out as one word per line;
+   Portal Ops' four-sentence note became a twenty-line word ladder, and the cards under
+   "Written by you" did it to the feed names ("Trials / of / Osiris"). Twelve feeds of
+   it.
+
+   `flex: 1 1 100%` on the text is what forces the break. The URL rows on the same cards
+   already stack this way and read correctly, so the shape is proven — this just gives
+   the other WIDE-control rows the same treatment below the width where they stop
+   fitting.
+
+   Toggle rows are deliberately excluded. A switch is ~40px wide, so it leaves the label
+   ~300px even at 390px and nothing is crushed; breaking those too would push every
+   switch onto a line of its own and cost a screenful of height across twelve feeds. */
+@media (max-width: 34rem) {
+  .row.channelrow, .row.selectrow, .row.colorrow { flex-wrap: wrap; }
+  .row.channelrow .text, .row.selectrow .text, .row.colorrow .text { flex: 1 1 100%; }
+  .row.channelrow .channelfield, .row.channelrow .ts-wrapper { width: 100%; }
+  .row.selectrow .selectfield { width: 100%; }
+  .row.colorrow .colorpicker { flex: 1 1 100%; }
+  .row.colorrow .colorfield { flex: 1 1 auto; width: auto; }
+}
+
 /* Per-feed actions, inline on the row: the pair sits between the label and the toggle,
    so the switch stays where the eye expects it down the right edge. The buttons' own
    look — and the sentence under a dimmed one — is feed_actions.css's, shared with /send,
@@ -210,8 +237,21 @@ form#toggles { display: flex; flex-direction: column; gap: .6rem; }
 
 /* Save: the one filled control on the page (shared.css's .primary), so "the change is
    not made until you press this" needs no sentence. */
+/* Pinned to the bottom, the same way the rotation editor's toolbar is. Nothing on this
+   page persists until Save, and unpinned it sat ~5,400px below the first switch at
+   390px — off-screen, not sticky, with twelve feeds' worth of scrolling between a
+   change and the only thing that keeps it. The switches read as "took effect when I
+   flipped it", which makes an unreachable Save a silent-loss machine. */
 .actions {
   display: flex; align-items: center; gap: .8rem; margin-top: 1.1rem;
+  position: sticky; bottom: 0; z-index: 6;
+  background: var(--surface-1); padding: .8rem 0;
+  border-top: 1px solid var(--border);
 }
 #status { color: var(--text-faint); font-size: .85rem; }
+/* Shown while something is changed and unsaved. --warn, not --err: an unsaved change is
+   a state the reader can fix, which is exactly what the sheet reserves --warn for.
+   Declared BEFORE .err deliberately — a failed save can leave both classes on the
+   element, and at equal specificity the later rule wins, so red has to be last. */
+#status.dirty { color: var(--warn); }
 #status.err { color: var(--err); }

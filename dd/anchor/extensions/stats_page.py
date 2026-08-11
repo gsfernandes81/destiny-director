@@ -44,7 +44,11 @@ from pathlib import Path
 import aiohttp.web
 import lightbulb as lb
 
-from ...common import schemas, settings
+from ...common import (
+    feeds as dd_feeds,
+    schemas,
+    settings,
+)
 from .. import web
 
 logger = logging.getLogger(__name__)
@@ -84,14 +88,25 @@ async def _collect_data() -> dict:
             mirrors = await schemas.MirroredChannel.count_dests(
                 src_id, legacy_only=True, session=session
             )
-            current.append({"feed": feed, "follows": follows, "mirrors": mirrors})
+            # `name` travels with the row so the page never has to turn a slug into
+            # words itself. A historical row can name a feed the catalog no longer
+            # has, so the slug is the fallback rather than an assumption.
+            entry = dd_feeds.FEEDS.get(feed)
+            current.append(
+                {
+                    "feed": feed,
+                    "name": entry.display_name if entry else feed,
+                    "follows": follows,
+                    "mirrors": mirrors,
+                }
+            )
 
     return {
         # [name, "YYYY-MM-DD", count]
         "commands": [[n, d.isoformat(), c] for n, d, c in commands],
         # ["YYYY-MM-DD", feed, kind, count]
         "autoposts": [[d.isoformat(), f, k, c] for d, f, k, c in autoposts],
-        # per-feed live follower/mirror counts
+        # per-feed live counts: {feed, name, follows, mirrors}
         "current": current,
         # [id, population] — id as a string (see docstring)
         "populations": [[str(sid), pop] for sid, pop in populations],

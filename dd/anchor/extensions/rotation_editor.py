@@ -329,8 +329,13 @@ def _render_home_html() -> str:
     """
     items: list[str] = []
     for slug in sorted(rotation_schema.WORLD_ACTIVITY_SLUGS):
+        # "(legacy)" is stripped: the schema titles carry it for the editor form,
+        # where it is the only thing saying so, and this page's own heading already
+        # says it once. Nine links repeating it turns a fact into a drumbeat.
         title = html.escape(
-            str(rotation_schema.ROTATION_SCHEMAS[slug].get("title", slug))
+            str(rotation_schema.ROTATION_SCHEMAS[slug].get("title", slug)).removesuffix(
+                " (legacy)"
+            )
         )
         slug_attr = html.escape(slug, quote=True)
         # No slug chip beside the title: the titles are already unique, and
@@ -363,7 +368,19 @@ async def _handle_edit_get(request: aiohttp.web.Request) -> aiohttp.web.Response
     if doc is None:
         doc = _default_doc(post_type)
 
-    bootstrap = {"type": post_type, "data": doc, "vocab": _vocab()}
+    # `title` is what the heading says. The page used to print `type` there, so the h1
+    # read "Rotation Editor — lost_sector" — a database key, on the one line of the page
+    # whose whole job is saying which thing you are looking at. The schema already
+    # carries the display name every other surface uses ("Lost sector rotation"), so it
+    # travels in the bootstrap rather than being reconstructed client-side from a slug.
+    bootstrap = {
+        "type": post_type,
+        "title": str(
+            rotation_schema.ROTATION_SCHEMAS[post_type].get("title", post_type)
+        ),
+        "data": doc,
+        "vocab": _vocab(),
+    }
     # Escape "<" so a "</script>" in the data can't break out of the inline <script>.
     bootstrap_js = json.dumps(bootstrap).replace("<", "\\u003c")
     page = _EDITOR_HTML_PATH.read_text(encoding="utf-8").replace(

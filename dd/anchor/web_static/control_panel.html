@@ -94,6 +94,17 @@
          before the heading itself. */
       .links { display: flex; flex-wrap: wrap; gap: .5rem; }
       .links form { margin: 0; display: contents; }
+      /* The one destructive entry starts its own line, always. The group wraps by width,
+         and at 390px that put Shut down immediately after Sign out on the same row — on
+         the page whose entire design is that the destructive thing is set apart. The
+         confirm dialog means a mis-tap costs a dismissal rather than an outage, but the
+         layout should not quietly undo what the design bought.
+
+         A zero-height flex item with a 100% basis, emitted by the server just before the
+         danger link (control_panel.py's _panel_links). CSS alone cannot do this: a
+         pseudo-element of a flex item is not itself a flex item, so there is nothing for
+         `::before` to break. */
+      .links > .linebreak { flex-basis: 100%; height: 0; }
       /* Chips, not bare text. As plain links these were 21px tall — fine with a mouse,
          a coin-toss with a thumb, and the only targets on the site below the 24px WCAG
          2.5.8 floor. Padding alone lands on 40px; the min-height holds it there if the
@@ -245,8 +256,8 @@
     <dialog class="panelmodal danger consequence" id="stopDialog">
       <h2>⚠️ Shut the bot down?</h2>
       <p class="lede">
-        <strong>Everything stops.</strong> No feeds post, nothing mirrors to any
-        following server, and no command or web page answers — until someone brings it
+        <strong>Everything stops.</strong> No feeds post, nothing reaches the servers
+        that follow them, and no command or web page answers — until someone brings it
         back by hand.
       </p>
       <p class="lede">

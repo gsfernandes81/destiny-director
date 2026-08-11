@@ -218,7 +218,7 @@ async def test_render_reflects_db_state() -> None:
     html_out = await _render_both_pages()
 
     # An enabled row renders a checked box; a disabled row renders unchecked.
-    assert 'data-slug="lost_sector" checked' in html_out
+    assert 'data-slug="lost_sector" aria-label="Lost Sector" checked' in html_out
     assert 'data-slug="xur" checked' not in html_out
     assert 'data-slug="xur"' in html_out
     # Every known toggle appears with its label + description, and rows are switches.
@@ -664,7 +664,10 @@ async def test_render_shows_color_field_with_value() -> None:
     )
     assert 'value="#EC42A5"' in html_out
     # The paired swatch carries the same value so it isn't drawn black on first load.
-    assert 'data-for="embed_default_color" value="#EC42A5"' in html_out
+    assert (
+        'data-for="embed_default_color"'
+        ' aria-label="Default accent colour, colour picker" value="#EC42A5"'
+    ) in html_out
 
 
 @pytest.mark.integration
@@ -677,11 +680,15 @@ async def test_render_unset_color_shows_the_settings_default_not_black() -> None
     default_hex = settings.default_for("embed_default_color")
 
     assert default_hex == "#EC42A5"  # sanity: the brand pink, not black
-    assert f'data-for="embed_default_color" value="{default_hex}"' in html_out
+    assert (
+        'data-for="embed_default_color"'
+        f' aria-label="Default accent colour, colour picker" value="{default_hex}"'
+    ) in html_out
     # The field itself stays empty: blank is what stores NULL ("use the default"), so
     # pre-filling it would make the next save pin today's default into the DB.
     assert re.search(
-        r'class="colorfield no-focus-ring" data-slug="embed_default_color" value=""'
+        r'class="colorfield no-focus-ring" data-slug="embed_default_color"'
+        r' aria-label="[^"]*" value=""'
         rf' placeholder="{re.escape(default_hex)}"',
         html_out,
     )
@@ -746,8 +753,13 @@ async def test_render_shows_select_field_with_current_option_selected() -> None:
     html_out = await _render_both_pages()
 
     assert 'class="selectfield" data-slug="alert_min_level"' in html_out
-    assert '<option value="WARNING" selected>WARNING</option>' in html_out
-    assert '<option value="ERROR">ERROR</option>' in html_out  # not selected
+    # The VALUE is the stored level; the text is what an operator reads. The two are
+    # deliberately different — a raw DEBUG..CRITICAL list is the logging module's
+    # vocabulary, not an admin's.
+    assert '<option value="WARNING" selected>Warnings and problems</option>' in html_out
+    assert (  # present but not selected
+        '<option value="ERROR">Errors only (the normal setting)</option>' in html_out
+    )
 
 
 @pytest.mark.integration
@@ -759,7 +771,10 @@ async def test_render_select_defaults_to_settings_default_when_unset() -> None:
     # browser: the DOM's default selection doesn't reduce to a string match in html_out.
     html_out = await _render_both_pages()
 
-    assert '<option value="ERROR" selected>ERROR</option>' in html_out
+    assert (
+        '<option value="ERROR" selected>Errors only (the normal setting)</option>'
+        in html_out
+    )
     assert await settings.get_alert_min_level() == "ERROR"  # the two must agree
 
 
@@ -821,10 +836,39 @@ async def test_render_shows_the_saved_row_for_a_followable() -> None:
 
 
 @pytest.mark.integration
+async def test_every_control_has_an_accessible_name() -> None:
+    # The visible name of a row lives in a sibling div.text, which no accessibility API
+    # can connect to the control. Without an explicit name a screen reader hears
+    # "checkbox, checked" twelve times over.
+    html_out = await _render_both_pages()
+
+    # Scoped to the settings form: the shared send dialog on /feeds names its one
+    # checkbox with a wrapping <label>, which is a correct name and not this page's to
+    # restate, and the surrounding HTML comments mention "<select>" in prose.
+    forms = re.findall(r'<form id="toggles">(.*?)</form>', html_out, re.S)
+    assert forms, "no settings form rendered"
+
+    controls = [c for f in forms for c in re.findall(r"<(?:input|select)\b[^>]*>", f)]
+    assert len(controls) > 20, len(controls)
+    unnamed = [c for c in controls if "aria-label=" not in c]
+    assert unnamed == [], unnamed
+
+    # "Post to channel" is the label on twelve different rows, so the bare label is not
+    # a name — the card it belongs to has to be folded in.
+    assert 'aria-label="Post to channel — Lost Sector"' in html_out
+    assert 'aria-label="Post to channel — Xûr"' in html_out
+    # ...but the row that NAMES its card does not repeat itself.
+    assert 'aria-label="Lost Sector — Lost Sector"' not in html_out
+
+
+@pytest.mark.integration
 async def test_render_alerts_channel_scope_is_kyber_control() -> None:
     html_out = await _render_both_pages()
 
-    assert 'data-slug="alerts_channel_id" data-scope="kyber_control"' in html_out
+    assert (
+        'data-slug="alerts_channel_id" aria-label="Alerts channel"'
+        ' data-scope="kyber_control"'
+    ) in html_out
 
 
 @pytest.mark.integration

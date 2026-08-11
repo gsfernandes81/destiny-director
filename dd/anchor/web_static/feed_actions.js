@@ -90,7 +90,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = await res.json();
       if (token !== drawToken) return false; // superseded or cancelled — drop it
       if (data.error) {
-        say(statusEl, data.error, true);
+        say(statusEl, data.error, toneFor(res));
         return false;
       }
       window.CV2Render.render(
@@ -169,7 +169,7 @@ document.addEventListener("DOMContentLoaded", () => {
           false,
         );
       } else {
-        say(sendStatus, data.error || "Send failed.", true);
+        say(sendStatus, data.error || "Send failed.", toneFor(res));
         sendConfirm.disabled = false;
       }
     } catch (_) {

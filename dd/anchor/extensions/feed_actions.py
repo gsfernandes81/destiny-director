@@ -316,8 +316,11 @@ async def _handle_send(request: aiohttp.web.Request) -> aiohttp.web.Response:
     if not channel_id:
         return aiohttp.web.json_response(
             {
-                "error": f"{dd_feeds.FEEDS[feed.name].display_name} is dormant"
-                " — no channel configured."
+                # "Dormant" is the settings page's word for this state, not something
+                # an admin would say; and the sentence has to point at the fix, since
+                # this is the only place the problem surfaces.
+                "error": f"{dd_feeds.FEEDS[feed.name].display_name} has no channel to"
+                " post to yet — pick one on the Feeds page."
             },
             status=409,
         )

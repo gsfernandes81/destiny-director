@@ -84,7 +84,15 @@ def _scheduled_feeds() -> tuple[dd_feeds.Followable, ...]:
 #: The landing row's description: the six feeds this page offers, by name. Built from
 #: the catalog rather than typed out, so the row cannot promise a feed the page does
 #: not list (or fall silent about one it does).
-_CARD_DESCRIPTION = ", ".join(feed.display_name for feed in _scheduled_feeds())
+#:
+#: The hyphen is swapped for a NON-BREAKING one (U+2011). A plain "-" is a line-break
+#: opportunity, so at 390px this list broke "Ada-1" across two lines as "Ada- / 1" —
+#: which reads as a truncation rather than a name. Only the display string is changed;
+#: the catalog's own ``display_name`` (and therefore every Discord post) is untouched,
+#: because a non-breaking hyphen is invisible to a reader but not to a text search.
+_CARD_DESCRIPTION = ", ".join(
+    feed.display_name.replace("-", "‑") for feed in _scheduled_feeds()
+)
 
 
 async def _channel_labels(channel_ids: dict[str, int]) -> dict[str, str]:
