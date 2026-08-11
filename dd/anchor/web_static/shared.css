@@ -232,7 +232,10 @@ main:not(.cv2b-mount, #mount) {
 }
 
 header { padding-top: 1.2rem; }
-h1 { font-size: 1.3rem; margin: 0 0 .2rem; }
+/* Scales with the room it is leading. Flat 1.3rem is right on a phone and inaudible
+   at the head of a 1920px screen, where it sat only 4px above a row title and anchored
+   nothing. The floor is exactly today's size, so phones are unchanged. */
+h1 { font-size: clamp(1.3rem, 1rem + .6vw, 1.75rem); margin: 0 0 .2rem; }
 .muted { color: var(--text-faint); font-size: .85rem; }
 /* Header nav links (e.g. "← Home") — one place so every page matches. */
 .backlink { color: var(--text-faint); text-decoration: none; font-size: .85rem; }
