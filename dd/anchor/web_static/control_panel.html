@@ -35,9 +35,16 @@
       .group:nth-of-type(4) { animation-delay: calc(3 * var(--dur-stagger)); }
       @keyframes group-in { from { opacity: 0; transform: translateY(4px); } }
 
+      /* The hairline is structural, not decoration: it declares the group's full width
+         regardless of how little follows it, so a heading over one short link still owns
+         an 840px-wide object instead of floating above a stray phrase. Without it the
+         three link groups read as footnotes to the first one, and their four different
+         ragged right edges have nothing in common. It was in the approved design and was
+         dropped on the way here. */
       .group h2 {
         margin: 0 0 .45rem; font-size: .8rem; font-weight: 600;
         color: var(--text-2); text-transform: uppercase; letter-spacing: .03em;
+        padding-bottom: .35rem; border-bottom: 1px solid var(--border);
       }
 
       /* Rows are DISCRETE cards with a gap, not one shared box with hairline dividers.
@@ -119,7 +126,20 @@
         padding: .35rem .75rem; border-radius: var(--radius-sm);
         background: var(--surface-3); border: 1px solid var(--border);
       }
+      /* Filled on the two featured rows only, as approved. A row is title-left,
+         control-right with ~450px of nothing between them at 1920 — the eye crosses that
+         gap because there is something bright at the far end. Shipped grey-on-grey, the
+         right half of the row was both text-less and target-less, and the pair read as
+         two things that had lost each other. Exactly two, deliberately: filling Choose
+         and Start as well would flatten the featured distinction the tint exists for. */
+      .row.featured .row-action {
+        background: var(--accent-strong); border-color: var(--accent-strong);
+        color: var(--accent-text-strong);
+      }
       .row:hover:not(:disabled) .row-action { border-color: var(--border-hover); }
+      .row.featured:hover:not(:disabled) .row-action {
+        border-color: var(--accent-text-strong);
+      }
 
       .row:hover:not(:disabled) {
         background: var(--surface-3); border-color: var(--border-hover);
