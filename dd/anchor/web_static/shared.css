@@ -11,28 +11,40 @@
 :root {
   color-scheme: dark;
 
-  /* Layered dark surfaces, back (page) to front (controls). Cooler and a step further
-     apart than the originals: the four greys were close enough that a card on the page
-     and an input on the card differed by ~4 points of luminance, so the layering did no
-     work at all on a dim screen. Widening the steps also bought contrast back everywhere
-     the panel was tightest — the brand pink on the page goes 4.73:1 -> 4.98:1 (it is the
-     focus-ring colour and the only pair that was near the 4.5 floor), muted description
-     text 6.39:1 -> 7.05:1, a link on a card 7.83:1 -> 8.03:1. */
-  --surface-0: #0b0e13;   /* inset: preview boxes */
-  --surface-1: #141821;   /* page background, sticky toolbars/tabs */
-  --surface-2: #1b212c;   /* fieldsets, cards, dropdowns */
-  --surface-3: #222937;   /* inputs, secondary buttons, control chrome */
+  /* Layered dark surfaces, back (page) to front (controls). A step further apart than
+     the originals, which were close enough that a card on the page and an input on the
+     card differed by ~4 points of luminance — the layering did no work at all on a dim
+     screen.
 
-  /* Lifted alongside the surfaces, not left where it was: a border's job is measured
-     against the surfaces either side of it, and darkening those without touching this
-     quietly cost every card and input edge some of its definition. At #374154 each edge
-     is a little MORE legible than before the palette moved (a card against the page
-     1.59:1 -> 1.73:1, an input against a card 1.49:1 -> 1.57:1).
+     Darker and less blue than the first version of that ramp. The whole ramp was shifted
+     DOWN by 2.5 points of lightness and its saturation scaled to 0.6, rather than being
+     multiplied through: scaling every surface by the same factor compresses the gaps
+     between them, which is exactly what makes a card read as sitting on the page, and it
+     does that while looking like it only changed the colour. Shifting leaves every step
+     where it was — the card-on-page ratio moved 1.10:1 -> 1.09:1, which is nothing.
 
-     Still short of WCAG 1.4.11's 3:1 for a control boundary, as it was before — closing
-     that needs roughly #5c6a85, which is a visibly light edge on every card and a design
-     decision rather than a palette fix. Recorded in plans/web_panel_followups.md. */
-  --border: #374154;
+     Both moves bought contrast back everywhere the panel was tightest. Against the
+     ORIGINAL palette: the brand pink on the page goes 4.73:1 -> 5.21:1 (it is the
+     focus-ring colour and the only pair that was ever near the 4.5 floor), muted
+     description text 6.39:1 -> 7.38:1, a link on a card 7.83:1 -> 8.50:1. */
+  --surface-0: #07080a;   /* inset: preview boxes */
+  --surface-1: #111317;   /* page background, sticky toolbars/tabs */
+  --surface-2: #191c21;   /* fieldsets, cards, dropdowns */
+  --surface-3: #21242c;   /* inputs, secondary buttons, control chrome */
+
+  /* Moves with the surfaces, never on its own: a border's job is measured against what
+     sits either side of it, so darkening those without touching this would quietly cost
+     every card and input edge some of its definition. Carried through the same shift and
+     desaturation, each edge stays where it was — a card against the page 1.73:1 ->
+     1.70:1, an input against a card 1.57:1 -> 1.56:1, both still ahead of the 1.59:1 and
+     1.49:1 they started from.
+
+     Still short of WCAG 1.4.11's 3:1 for a control boundary, as it has been throughout —
+     closing that now needs roughly #5c6a85 (3.41:1 against the page, 3.14:1 against a
+     card), a visibly light edge on every card and input in the app. That is a design
+     decision about how present the chrome should be, and the owner's call was to leave it
+     quiet. Recorded in plans/web_panel_a11y_debt.md. */
+  --border: #373d47;
   --border-hover: #8a5a72;   /* muted rose hover border */
 
   /* Accent split by role:
@@ -49,8 +61,8 @@
        something else. And --accent is the focus ring: a filled button in the very colour
        that rings it has no visible focus state. At #c9257f white lands on 5.18:1 —
        exactly what it was on the blue, so the swap costs no contrast anywhere — and the
-       fill still clears the 3:1 non-text floor against both the page (3.43) and a card
-       (3.12), which a darker pink would not.
+       fill still clears the 3:1 non-text floor against both the page (3.59) and a card
+       (3.30), which a darker pink would not.
      Links stay the blue --link: a link is not a button, and one accent doing both jobs
      leaves nothing to tell them apart. Does NOT change per post. */
   --accent: #EC42A5;              /* toggle fill, focus rings, form-control focus, selection, active tab */
@@ -64,9 +76,12 @@
      so page chrome stays stable across posts. Defaults to the fixed accent. */
   --post-accent: var(--accent);
 
-  /* Text tiers, brightest to faintest. Carry the same slight cool bias as the surfaces
-     they sit on — a neutral grey over a blue-leaning ground reads as slightly warm, and
-     the two hues fighting is what made the old faint tier look dirty rather than quiet. */
+  /* Text tiers, brightest to faintest. Carry a slight cool bias, like the surfaces they
+     sit on — a neutral grey over a cool ground reads as faintly warm, and the two hues
+     fighting is what made the old faint tier look dirty rather than quiet. Deliberately
+     left a little cooler than the ground now that the ground has been desaturated: text
+     is the thing that should look neutral, and it does so against a surface with less
+     colour in it, not more. */
   --text-1: #e8ecf2;      /* primary */
   --text-2: #cdd4de;      /* labels, legends */
   --text-3: #b6bfcc;      /* tertiary body */
