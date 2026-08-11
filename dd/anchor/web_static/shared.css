@@ -11,13 +11,19 @@
 :root {
   color-scheme: dark;
 
-  /* Layered dark surfaces, back (page) to front (controls). */
-  --surface-0: #14161a;   /* inset: preview boxes */
-  --surface-1: #1b1d22;   /* page background, sticky toolbars/tabs */
-  --surface-2: #202329;   /* fieldsets, cards, dropdowns */
-  --surface-3: #24272e;   /* inputs, secondary buttons, control chrome */
+  /* Layered dark surfaces, back (page) to front (controls). Cooler and a step further
+     apart than the originals: the four greys were close enough that a card on the page
+     and an input on the card differed by ~4 points of luminance, so the layering did no
+     work at all on a dim screen. Widening the steps also bought contrast back everywhere
+     the panel was tightest — the brand pink on the page goes 4.73:1 -> 4.98:1 (it is the
+     focus-ring colour and the only pair that was near the 4.5 floor), muted description
+     text 6.39:1 -> 7.05:1, a link on a card 7.83:1 -> 8.03:1. */
+  --surface-0: #0b0e13;   /* inset: preview boxes */
+  --surface-1: #141821;   /* page background, sticky toolbars/tabs */
+  --surface-2: #1b212c;   /* fieldsets, cards, dropdowns */
+  --surface-3: #222937;   /* inputs, secondary buttons, control chrome */
 
-  --border: #3a3f47;
+  --border: #333c4d;
   --border-hover: #8a5a72;   /* muted rose hover border */
 
   /* Accent split by role:
@@ -38,12 +44,14 @@
      so page chrome stays stable across posts. Defaults to the fixed accent. */
   --post-accent: var(--accent);
 
-  /* Text tiers, brightest to faintest. */
-  --text-1: #e6e6e6;      /* primary */
-  --text-2: #cfd3d6;      /* labels, legends */
-  --text-3: #b9bec4;      /* tertiary body */
-  --text-muted: #8b9096;  /* placeholders, bullets, small print */
-  --text-faint: #9aa0a6;  /* muted captions, backlinks, descriptions */
+  /* Text tiers, brightest to faintest. Carry the same slight cool bias as the surfaces
+     they sit on — a neutral grey over a blue-leaning ground reads as slightly warm, and
+     the two hues fighting is what made the old faint tier look dirty rather than quiet. */
+  --text-1: #e8ecf2;      /* primary */
+  --text-2: #cdd4de;      /* labels, legends */
+  --text-3: #b6bfcc;      /* tertiary body */
+  --text-muted: #8d97a6;  /* placeholders, bullets, small print */
+  --text-faint: #9aa4b3;  /* muted captions, backlinks, descriptions */
 
   /* Feedback. Three levels and no more: --ok for a thing that worked, --warn for a
      state the reader can fix (a feed with no channel yet), --err for something broken.
@@ -242,13 +250,45 @@ h1 { font-size: clamp(1.3rem, 1rem + .6vw, 1.75rem); margin: 0 0 .2rem; }
 .backlink:hover { text-decoration: underline; }
 p.nav { margin: 0 0 .4rem; }
 
+/* --- the section heading ------------------------------------------------------------
+   The micro-caps label that names a group of related controls. It was written out FIVE
+   times — the landing page's group heads, the autopost cards' titles, the authoring
+   forms' legends, the rotation editor's preview labels, and the settings cards — and the
+   copies had drifted: .78rem against .8rem, .04em against .03em, --text-faint against
+   --text-2. Nothing looked broken; the site just never quite agreed with itself.
+
+   This rule is the TYPE only. The box stays with the context, because the contexts are
+   genuinely different — a legend straddles a fieldset border, a card title is inset from
+   the card edge, a landing group head carries a full-width hairline. Sharing the box
+   would be the wrong kind of unification.
+
+   `.form-page legend` is listed here rather than carrying the class because a <legend>
+   IS the heading in that markup and there are twenty of them across three forms; the
+   point of the primitive is that the rule exists once, not that every consumer spells it
+   the same way in HTML.
+
+   Deliberately NOT swept in, so this does not get re-litigated:
+     - /feeds' `.section h2` — a sentence-case 1rem title with an explanatory blurb under
+       it, because those section names do not explain themselves (see settings_page.css).
+       Different device, on purpose.
+     - The CV2 builder's six label kinds (`.cv2b-rail-title`, `.cv2b-insp-head h3`,
+       `.cv2b-btn-head`, `.cv2b-menu-label`, …). That is a dense tool chrome with its own
+       scale, 0.62rem to 0.82rem; pulling them onto a page-level primitive would enlarge
+       the lot and is a design change to a different surface, not a consistency fix.
+     - Pills and tags (`.set-tag`, `.op-tag`, the builder's badge). Uppercase and tracked,
+       but they name a value, not a group of controls. */
+.sectionhead,
+.form-page legend {
+  font-size: .8rem; font-weight: 600; letter-spacing: .03em;
+  text-transform: uppercase; color: var(--text-2);
+}
+
 /* A stacked, labelled wall of post previews (built by editor.js) — the rotation editor's
    live preview shows the next few posts a rotation will publish. */
 .post-wall { display: flex; flex-direction: column; gap: 1rem; }
 .post-wall-item { display: flex; flex-direction: column; gap: .35rem; }
 .post-wall-label {
-  font-size: .8rem; font-weight: 600; margin: 0;
-  color: var(--text-2); text-transform: uppercase; letter-spacing: .03em;
+  margin: 0;
 }
 .post-wall-empty { color: var(--text-faint); }
 

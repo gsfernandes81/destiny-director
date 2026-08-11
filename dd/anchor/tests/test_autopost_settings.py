@@ -240,10 +240,10 @@ async def test_render_shows_a_header_for_each_general_settings_category() -> Non
     # label as a fake group title.
     html_out = await _render_both_pages()
 
-    assert '<div class="groupheader">Branding</div>' in html_out
-    assert '<div class="groupheader">Alerts</div>' in html_out
+    assert '<div class="sectionhead groupheader">Branding</div>' in html_out
+    assert '<div class="sectionhead groupheader">Alerts</div>' in html_out
     # A feed group gets no header — its toggle row already names it.
-    assert html_out.count('class="groupheader"') == len(
+    assert html_out.count('class="sectionhead groupheader"') == len(
         {s.category for s in aps._SETTINGS if s.category}
     )
 

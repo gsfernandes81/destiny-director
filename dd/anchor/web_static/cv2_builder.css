@@ -629,10 +629,13 @@ body.cv2b-dragging-now * {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
-.cv2b input:focus,
-.cv2b textarea:focus,
-.cv2b select:focus {
-  outline: none;
+/* Border tint only — the ring itself comes from shared.css's :focus-visible rule. This
+   used to be `:focus { outline: none }`, which both fired on a plain mouse click and
+   suppressed the shared ring entirely, so the builder's fields were the one place in the
+   app a keyboard user got no focus indicator at all. */
+.cv2b input:focus-visible,
+.cv2b textarea:focus-visible,
+.cv2b select:focus-visible {
   border-color: var(--accent);
 }
 .cv2b textarea {

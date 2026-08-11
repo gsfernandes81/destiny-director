@@ -652,7 +652,9 @@ def _wrap_group(
         for index, (setting, state) in enumerate(entries)
     )
     header = (
-        f'<div class="groupheader">{html.escape(category)}</div>' if category else ""
+        f'<div class="sectionhead groupheader">{html.escape(category)}</div>'
+        if category
+        else ""
     )
     return f'<div class="group">{header}{rows}{footer}</div>'
 

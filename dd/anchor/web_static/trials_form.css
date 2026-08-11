@@ -17,6 +17,9 @@
   position: relative; display: flex; flex-direction: column; gap: .35rem;
   padding: .6rem .7rem; cursor: pointer;
   background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius);
+  /* A <label>, which is not in shared.css's interactive-element list, so the hover and
+     the selected-state swap would both snap without this. */
+  transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .set-card:hover { border-color: var(--border-hover); }
 /* The radio drives selection; hidden but kept focusable for keyboard use. */

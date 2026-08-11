@@ -220,7 +220,7 @@ async def _render_panel_html() -> str:
             continue
         sections.append(
             f'<section class="group group-{group.name.lower()}">'
-            f"<h2>{html.escape(group.value)}</h2>"
+            f'<h2 class="sectionhead">{html.escape(group.value)}</h2>'
             f"{body}"
             "</section>"
         )
