@@ -89,6 +89,22 @@ _SETTINGS_HTML_PATH = _WEB_STATIC / "settings.html"
 _TOGGLES_PLACEHOLDER = "<!--__TOGGLES__-->"
 
 _ALERT_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+#: What each level is CALLED on the page. The values above are what the bot stores and
+#: what dd.common.settings validates against; these are only what an operator reads, and
+#: nothing persists them, so renaming one here cannot touch a saved row. A raw
+#: DEBUG..CRITICAL list is the logging module's vocabulary rather than an admin's — it
+#: says which constant is being compared, not how much noise to expect.
+_ALERT_LEVEL_LABELS: dict[str, str] = {
+    "DEBUG": "Everything, including routine chatter",
+    "INFO": "Everything worth noting",
+    "WARNING": "Warnings and problems",
+    "ERROR": "Errors only (the normal setting)",
+    "CRITICAL": "Only the worst",
+}
+#: Display text for a <select>'s stored values, across every select on the page. One
+#: lookup rather than a per-setting field: the alert levels are the only select today,
+#: and a second one would want the same treatment for the same reason.
+_OPTION_LABELS: dict[str, str] = dict(_ALERT_LEVEL_LABELS)
 _HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
@@ -188,8 +204,8 @@ _GENERAL_SETTINGS: tuple[_Setting, ...] = (
     # --- Alerts: the ops pipeline that forwards records to Discord -------------------
     _Setting(
         "alert_min_level",
-        "Alert level",
-        "Minimum log severity forwarded to the alerts channel.",
+        "How much to report",
+        "What gets sent to the alerts channel. Errors only is the normal setting.",
         False,
         "select",
         options=_ALERT_LEVELS,
@@ -204,8 +220,8 @@ _GENERAL_SETTINGS: tuple[_Setting, ...] = (
     _Setting(
         "alerts_channel_id",
         "Alerts channel",
-        "Where forwarded ERROR+ log records (and owner pings) post. Inert (nothing is "
-        "sent) while unset.",
+        "Where problem reports get posted, along with a ping for the owners. "
+        "Nothing is sent anywhere until you pick a channel.",
         True,
         "channel",
         channel_scope="kyber_control",
@@ -469,6 +485,7 @@ def _render_row(
     *,
     flat: bool = False,
     actions: str = "",
+    group_label: str = "",
 ) -> str:
     """Render one settings row: label + description, then its control.
 
@@ -482,12 +499,25 @@ def _render_row(
     render with the same indent/smaller-name styling as a feed's actual parent toggle,
     implying a hierarchy among the category's settings that isn't there.
 
+    ``group_label`` is the card's name, and is supplied only for a feed card's SUB
+    rows. Every control here is named by a sibling ``div.name`` that no accessibility
+    API can see, so each carries an explicit ``aria-label`` — and "Post to channel" is
+    the label on twelve rows, so on a sub row the card's name is folded in to make
+    it "Post to channel, Lost Sector". The first row of a feed card is the row that
+    names the card, so it gets no suffix; a categorised card (Branding, Alerts) passes
+    nothing, because its rows are peers under a header a screen reader already reads.
+
     ``actions`` is the caller's Preview/Send block (see
     :func:`dd.anchor.extensions.feed_actions.actions_html`), passed
     in rather than derived here: whether Send is available depends on the feed's
     *channel*, which lives in a different row of the same card and so is only known one
     level up.
     """
+    # Comma, not a dash: a screen reader treats it as a pause, where an em dash is
+    # read aloud as "em dash" under some punctuation settings and swallowed under
+    # others. The colour row's two halves are joined the same way.
+    aria = f"{setting.label}, {group_label}" if group_label else setting.label
+    aria_attr = f' aria-label="{html.escape(aria)}"'
     base_class = "row flat-alt" if flat else "row sub" if setting.sub else "row"
 
     def _label_block(actions_html: str = "") -> str:
@@ -510,7 +540,7 @@ def _render_row(
         return _row(
             "urlrow",
             '<input type="url" class="urlfield" '
-            f'data-slug="{html.escape(setting.slug)}"'
+            f'data-slug="{html.escape(setting.slug)}"{aria_attr}'
             f' value="{value}" placeholder="https://example.com/banner.png" />',
         )
 
@@ -539,9 +569,11 @@ def _render_row(
             '<div class="colorpicker">'
             '<input type="color" class="colorswatch" '
             f'data-for="{html.escape(setting.slug)}"'
+            f' aria-label="{html.escape(aria)}, colour picker"'
             f' value="{html.escape(swatch_value)}" />'
             '<input type="text" class="colorfield no-focus-ring" '
             f'data-slug="{html.escape(setting.slug)}"'
+            f' aria-label="{html.escape(aria)}, hex value"'
             f' value="{html.escape(hex_value)}"'
             f' placeholder="{html.escape(placeholder)}"'
             ' maxlength="7" />'
@@ -560,12 +592,14 @@ def _render_row(
         )
         opts = "".join(
             f'<option value="{html.escape(opt)}"'
-            f"{' selected' if opt == current else ''}>{html.escape(opt)}</option>"
+            f"{' selected' if opt == current else ''}>"
+            f"{html.escape(_OPTION_LABELS.get(opt, opt))}</option>"
             for opt in setting.options
         )
         return _row(
             "selectrow",
-            f'<select class="selectfield" data-slug="{html.escape(setting.slug)}">'
+            f'<select class="selectfield" data-slug="{html.escape(setting.slug)}"'
+            f"{aria_attr}>"
             f"{opts}"
             "</select>",
         )
@@ -592,6 +626,7 @@ def _render_row(
         return _row(
             "channelrow",
             f'<select class="channelfield" data-slug="{html.escape(setting.slug)}"'
+            f"{aria_attr}"
             f' data-scope="{html.escape(setting.channel_scope)}"'
             f' data-required="{"true" if required else "false"}"'
             f' data-announce-only="{"true" if setting.announce_only else "false"}">'
@@ -605,7 +640,7 @@ def _render_row(
         "",
         '<label class="switch">'
         f'<input type="checkbox" class="no-focus-ring" '
-        f'data-slug="{html.escape(setting.slug)}"{checked} />'
+        f'data-slug="{html.escape(setting.slug)}"{aria_attr}{checked} />'
         '<span class="slider"></span>'
         "</label>",
         block=label_block,
@@ -645,9 +680,16 @@ def _wrap_group(
     # `flat` docs: the category header is the group's only "parent", so every row under
     # it, including whichever one happens to structurally start the list, is a peer.
     flat = bool(category)
+    # The card's name, for the sub rows' accessible names. Only a FEED card has one to
+    # give: a categorised card's header is already announced, and its rows are peers.
+    group_label = "" if category or not entries else entries[0][0].label
     rows = "".join(
         _render_row(
-            setting, state, flat=flat, actions=head_actions if index == 0 else ""
+            setting,
+            state,
+            flat=flat,
+            actions=head_actions if index == 0 else "",
+            group_label="" if index == 0 else group_label,
         )
         for index, (setting, state) in enumerate(entries)
     )

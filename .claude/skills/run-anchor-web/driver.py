@@ -191,12 +191,14 @@ async def main() -> int:
     from dd.anchor import web
     from dd.anchor.extensions import (  # noqa: F401
         autopost_settings,
+        bungie_account,
         control_panel,
         cv2_builder_page,
         feed_actions,
         mirror_log,
         rotation_editor,
         send_page,
+        stats_page,
         trials,
         web_auth,
         weekly_reset,

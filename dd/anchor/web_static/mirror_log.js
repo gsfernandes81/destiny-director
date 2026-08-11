@@ -129,14 +129,19 @@
       n > 0 ? `<span class="pseg ${cls}" style="width:${pct(n)}%"></span>` : "";
     const bar =
       `<div class="pbar${big ? " big" : ""}" role="img" ` +
-      `aria-label="${resolvedPct}% resolved (${run.delivered} delivered, ` +
-      `${run.failed} failed, ${run.pending || 0} pending)">` +
+      `aria-label="${resolvedPct}% finished (${run.delivered} delivered, ` +
+      `${run.failed} failed, ${run.pending || 0} still going)">` +
       seg("done", run.delivered) +
       seg("fail", run.failed) +
       seg("cancel", run.cancelled) +
       `</div>`;
     return big
-      ? `<div class="pbar-row">${bar}<span class="pbar-pct">${resolvedPct}%</span></div>`
+      ? `<div class="pbar-row">${bar}` +
+        // Labelled, not a bare percentage. This measures how much of the run has
+        // FINISHED; the Success tile a line above measures how much of what finished
+        // succeeded. Two different numbers, and unlabelled they read as one number
+        // contradicting itself ("100%" under "90% Success").
+        `<span class="pbar-pct">${resolvedPct}% finished</span></div>`
       : bar;
   }
 
@@ -173,7 +178,7 @@
       tile("Remaining", remaining, remaining ? "pend" : ""),
       tile("Cancelled", run.cancelled, run.cancelled ? "muted" : ""),
       tile(
-        "Crosspost",
+        "Pushed out",
         `${run.crosspost_done}${run.crosspost_pending ? `+${run.crosspost_pending}…` : ""}`,
       ),
       tile("Attempts", run.max_attempts),
@@ -260,11 +265,11 @@
       `<div class="stat-label">${label}</div></div>`;
     els.overviewStats.innerHTML = [
       tile("Messages", runs.length),
-      tile("Operations", ops.length),
+      tile("Changes", ops.length),
       tile("Delivered", s.delivered, "ok"),
       tile("Failed", s.failed, s.failed ? "bad" : ""),
       tile("Success", successPct + "%", s.failed ? "" : "ok"),
-      tile("Crossposts", s.crosspost_done),
+      tile("Pushed out", s.crosspost_done),
     ].join("");
     els.overviewBar.innerHTML = progressBar(s, true);
     // A per-op-type failure line, only when there are failures (op-type breakdown earns
@@ -282,7 +287,7 @@
     if (!by.create && !by.update && !by.delete) return "";
     const parts = ["create", "update", "delete"]
       .filter((tp) => by[tp])
-      .map((tp) => `${by[tp]} ${tp}`);
+      .map((tp) => `${by[tp]} ${OP_LABEL[tp].toLowerCase()}`);
     return `failures: ${esc(parts.join(" · "))}`;
   }
 
@@ -327,11 +332,14 @@
     const href = `${DISCORD}/${run.src_guild_id}/${run.src_ch_id}/${run.src_msg_id}`;
     return (
       `<a class="jump-source" href="${esc(href)}" target="_blank" rel="noopener">` +
-      `Jump to source ↗</a>`
+      `Open the original ↗</a>`
     );
   }
 
-  const OP_LABEL = { create: "Create", update: "Update", delete: "Delete" };
+  // The three things that can happen to a mirrored post, named the way the chart
+  // caption already named them. One map, so the chart legend, the op chips and the
+  // failure line cannot drift from each other or from the caption again.
+  const OP_LABEL = { create: "Posted", update: "Edited", delete: "Removed" };
 
   function opDurationSecs(op) {
     const s = op.started_at ? new Date(op.started_at).getTime() : 0;
@@ -433,10 +441,10 @@
       const ver = d.version != null ? ` v${esc(d.version)}` : "";
       cols.push(
         `<div class="vcol vcol-delete">` +
-          `<div class="vcol-head"><span class="op-tag delete">Delete</span>` +
+          `<div class="vcol-head"><span class="op-tag delete">${OP_LABEL.delete}</span>` +
           `<span class="vcol-time" title="${esc(abs)}">${esc(relTime(d.finished_at))}</span>` +
           `</div>${opStatHeader(d)}` +
-          `<div class="vcol-body tombstone">Source deleted — removed${ver} from ` +
+          `<div class="vcol-body tombstone">The original was deleted — removed${ver} from ` +
           `${d.delivered} channel${d.delivered === 1 ? "" : "s"}. No content snapshot.` +
           `</div></div>`,
       );

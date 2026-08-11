@@ -112,7 +112,7 @@ document.addEventListener("DOMContentLoaded", () => {
         byId("stopBtn").disabled = true;
         byId("infoBtn").disabled = true;
       } else {
-        say(stopStatus, data.error || "Shutdown failed.", true);
+        say(stopStatus, data.error || "Shutdown failed.", toneFor(res));
         stopConfirm.disabled = false;
       }
     } catch (_) {

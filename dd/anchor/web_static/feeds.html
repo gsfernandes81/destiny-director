@@ -40,7 +40,8 @@
       <h1>Feeds</h1>
       <p class="muted">
         What posts where. Switches stop the bot writing a feed — they don't change which
-        servers follow it. Changes apply from the next post; no restart needed.
+        servers follow it. Nothing changes until you press Save, and then it applies from
+        the next post; no restart needed.
       </p>
     </header>
     <main class="settings">
@@ -49,7 +50,7 @@
       </form>
       <div class="actions">
         <button type="button" class="primary" id="save">Save</button>
-        <span id="status"></span>
+        <span id="status" role="status"></span>
       </div>
     </main>
     <!-- The preview and send dialogs, spliced in by autopost_settings.py from

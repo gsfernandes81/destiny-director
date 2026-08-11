@@ -8,7 +8,7 @@
 // The payload shape (see dd/anchor/extensions/stats_page.py::_collect_data):
 //   commands:     [[name, "YYYY-MM-DD", count], ...]
 //   autoposts:    [["YYYY-MM-DD", feed, kind, count], ...]   kind: "follow" | "mirror"
-//   current:      [{feed, follows, mirrors}, ...]
+//   current:      [{feed, name, follows, mirrors}, ...]  name: the feed's display name
 //   populations:  [[id, population], ...]                    id is a string (snowflake)
 
 const _byId = (id) => document.getElementById(id);
@@ -177,6 +177,12 @@ function reachSeriesFor(key) {
   return key === "__all__" ? ix.total.reach : ix.byFeed.get(key)?.reach || [];
 }
 
+// One number per feed, not two. "Followers" and "Mirrors" are the two mechanisms by
+// which a post reaches a server — Discord's own channel-follow, and the bot posting a
+// copy — and which of the two carried it is the bot's business, not an admin's. The
+// question the page answers is "did this land, and is it growing?", so the row leads
+// with the total and keeps the split as a quieter second line for whoever wants it (a
+// mirror count that suddenly drops is still worth being able to see).
 function _feedRow(key, label, follows, mirrors) {
   const tr = document.createElement("tr");
   tr.dataset.feed = key;
@@ -184,12 +190,18 @@ function _feedRow(key, label, follows, mirrors) {
 
   const name = document.createElement("td");
   name.textContent = label;
-  const fol = document.createElement("td");
-  fol.className = "num";
-  fol.textContent = _fmt(follows);
-  const mir = document.createElement("td");
-  mir.className = "num";
-  mir.textContent = _fmt(mirrors);
+
+  const reach = document.createElement("td");
+  reach.className = "num";
+  reach.append(
+    Object.assign(document.createElement("div"), {
+      textContent: _fmt(follows + mirrors),
+    }),
+    Object.assign(document.createElement("div"), {
+      className: "reach-split",
+      textContent: `${_fmt(follows)} following · ${_fmt(mirrors)} sent a copy`,
+    }),
+  );
 
   const trend = document.createElement("td");
   const t = trendArrow(reachSeriesFor(key));
@@ -200,7 +212,7 @@ function _feedRow(key, label, follows, mirrors) {
   spark.className = "spark-cell";
   spark.dataset.spark = key; // filled/refreshed by renderAutopostSparklines()
 
-  tr.append(name, fol, mir, trend, spark);
+  tr.append(name, reach, trend, spark);
   tr.addEventListener("click", () => selectFeed(key));
   return tr;
 }
@@ -216,7 +228,7 @@ function renderAutoposts(current, autoposts) {
   const tbody = _byId("currentTable").querySelector("tbody");
   tbody.replaceChildren(
     _feedRow("__all__", "All feeds", allFollows, allMirrors),
-    ...feeds.map((c) => _feedRow(c.feed, c.feed, c.follows, c.mirrors)),
+    ...feeds.map((c) => _feedRow(c.feed, c.name || c.feed, c.follows, c.mirrors)),
   );
   _byId("section-autoposts").classList.remove("hidden");
 }
@@ -323,8 +335,8 @@ function renderAutopostsChart() {
   DDCharts.lineChart(_byId("autopostsChart"), {
     resolution: res,
     series: [
-      { name: "Followers", color: cssVar("--accent"), points: DDCharts.bucketByResolution(s.follow, res, "last") },
-      { name: "Mirrors", color: cssVar("--accent-strong"), points: DDCharts.bucketByResolution(s.mirror, res, "last") },
+      { name: "Following", color: cssVar("--accent"), points: DDCharts.bucketByResolution(s.follow, res, "last") },
+      { name: "Sent a copy", color: cssVar("--accent-strong"), points: DDCharts.bucketByResolution(s.mirror, res, "last") },
     ],
   });
 }

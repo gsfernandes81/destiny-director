@@ -43,7 +43,11 @@
     follows this feed</label
   >
   <div class="modal-actions">
-    <button type="button" id="sendCancel">Cancel</button>
+    <!-- autofocus on Cancel, the same rule the shutdown dialog follows: an
+         irreversible dialog opens with the SAFE button focused, so a stray Enter
+         dismisses it rather than committing it. This used to land on the "Also push…"
+         checkbox, which is neither safe nor the decision. -->
+    <button type="button" id="sendCancel" autofocus>Cancel</button>
     <!-- The one filled button in this flow, and it lives HERE rather than on either
          page: the send is a single irreversible click, so the page that leads to it
          stays quiet and the emphasis sits where the decision is actually made. -->

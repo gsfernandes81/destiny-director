@@ -55,22 +55,41 @@ window.api = api;
 // a spinner helper that only existed in another file, which threw on click and left its
 // button disabled forever.
 
-/** Plain status text. `isError` switches it to the error colour. */
-function say(el, message, isError) {
-  el.classList.toggle("err", !!isError);
+/**
+ * Plain status text. `tone` is falsy for neutral, `true` (or "err") for the error
+ * colour, and "warn" for the amber one.
+ *
+ * The three-way tone exists because "Bot is still starting — try again in a moment" was
+ * being drawn in --err, which the sheet reserves for something broken. A wait is a state
+ * the reader can fix by waiting, which is exactly what --warn is for. `true` still means
+ * error, so no existing caller changed.
+ */
+function say(el, message, tone) {
+  const kind = tone === true ? "err" : tone || "";
+  el.classList.toggle("err", kind === "err");
+  el.classList.toggle("warn", kind === "warn");
   el.textContent = message;
 }
 
 /** Status text with a spinner in front — for waits measured in seconds. */
 function busy(el, message) {
-  el.classList.remove("err");
+  el.classList.remove("err", "warn");
   el.replaceChildren(
     Object.assign(document.createElement("span"), { className: "spinner" }),
     document.createTextNode(message),
   );
 }
+
+/**
+ * The tone a failed Response deserves: a 503 is the bot still starting, which is a wait
+ * rather than a breakage. One place, so every page agrees about it.
+ */
+function toneFor(res) {
+  return res && res.status === 503 ? "warn" : true;
+}
 window.say = say;
 window.busy = busy;
+window.toneFor = toneFor;
 
 // Internal DOM helpers (each page's own script keeps its own copies for widget building).
 const _byId = (id) => document.getElementById(id);

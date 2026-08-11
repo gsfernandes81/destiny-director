@@ -45,7 +45,7 @@
       const res = await fetch("/bungie/account");
       const data = await res.json();
       if (data.error) {
-        say(numbersStatus, data.error, true);
+        say(numbersStatus, data.error, toneFor(res));
       } else {
         // textContent, not innerHTML — these are ids from a remote API.
         numbers.textContent =

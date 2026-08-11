@@ -36,7 +36,10 @@
         background: var(--surface-3); color: var(--text-1); padding: 1.1rem;
         max-width: 32rem; width: calc(100% - 2rem);
       }
-      dialog.panelmodal::backdrop { background: rgba(0, 0, 0, .55); }
+      /* No ::backdrop rule here on purpose. shared.css sets this exact colour on
+         `dialog[open]::backdrop`, and an unconditional copy is what stops the fade: the
+         transition has no start state to move from. The one in control_panel.html looks
+         like a duplicate and is not — it is [open]-scoped and sets the danger colour. */
       dialog.panelmodal h2 { margin: 0 0 .6rem; font-size: 1.05rem; }
       dialog.panelmodal p { margin: 0 0 1rem; font-size: .92rem; color: var(--muted); }
       .modal-actions { display: flex; justify-content: flex-end; gap: .6rem; }

@@ -111,6 +111,12 @@ document.addEventListener("DOMContentLoaded", () => {
         allowEmptyOption: !required,
       });
       if (current) ts.setValue(current, true);
+      // Tom Select builds its own <input> to type into and leaves it unnamed, so the
+      // control a keyboard actually lands on is anonymous however well the underlying
+      // <select> is labelled (the server gives it e.g. "Post to channel — Lost Sector",
+      // see autopost_settings.py's _render_row). Carry the name across.
+      const name = select.getAttribute("aria-label");
+      if (name && ts.control_input) ts.control_input.setAttribute("aria-label", name);
     });
   }
   initChannelPickers();
@@ -140,6 +146,49 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const btn = byId("save");
   const status = byId("status");
+
+  // --- unsaved changes ---------------------------------------------------------------
+  //
+  // These are iOS-style switches, whose universal meaning is "took effect the moment I
+  // flipped it" — and nothing here persists until Save. So the page has to say so, in
+  // two places: a running count while you edit, and the browser's own guard if you try
+  // to leave with changes outstanding. Both read the same `baseline` map the save
+  // protocol already keeps, so there is no second notion of "changed" to drift.
+  //
+  // The listener is on the document rather than per field: Tom Select replaces each
+  // channel <select> with its own widget but still fires `change` on the original
+  // element, and both events bubble.
+
+  const dirtyFields = () =>
+    [...document.querySelectorAll(FIELD_SELECTOR)].filter(
+      (el) => readField(el) !== baseline.get(el),
+    ).length;
+
+  let dirty = 0;
+  function refreshDirty() {
+    dirty = dirtyFields();
+    // A failed save's message says WHAT was rejected ("Alerts channel: not an
+    // announcement channel"), and the next thing the reader does is edit that field to
+    // fix it — which is exactly the keystroke that would replace the explanation with a
+    // change count. The error stays until the next save attempt clears it.
+    if (status.classList.contains("err")) return;
+    status.classList.toggle("dirty", dirty > 0);
+    status.textContent = dirty
+      ? `${dirty} unsaved change${dirty === 1 ? "" : "s"} — press Save to keep ${
+          dirty === 1 ? "it" : "them"
+        }.`
+      : "";
+  }
+  document.addEventListener("input", refreshDirty);
+  document.addEventListener("change", refreshDirty);
+  // Chrome ignores the string and shows its own wording; returnValue is what actually
+  // arms the prompt, and it must be set (not just returned) for the older path.
+  window.addEventListener("beforeunload", (e) => {
+    if (!dirty) return;
+    e.preventDefault();
+    e.returnValue = "";
+  });
+
   btn.addEventListener("click", async () => {
     const settings = {};
     document.querySelectorAll(FIELD_SELECTOR).forEach((el) => {
@@ -156,6 +205,8 @@ document.addEventListener("DOMContentLoaded", () => {
         document
           .querySelectorAll(FIELD_SELECTOR)
           .forEach((el) => baseline.set(el, readField(el)));
+        dirty = 0;
+        status.classList.remove("dirty");
         say(status, "Saved.", false);
       } else {
         let msg = "Save failed.";
@@ -163,7 +214,7 @@ document.addEventListener("DOMContentLoaded", () => {
           const data = await res.json();
           if (data && data.error) msg = data.error;
         } catch (_) {}
-        say(status, msg, true);
+        say(status, msg, toneFor(res));
       }
     } catch (_) {
       say(status, "Network error — try again.", true);

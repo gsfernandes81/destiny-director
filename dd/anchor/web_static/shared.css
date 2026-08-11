@@ -259,6 +259,13 @@ h1 { font-size: clamp(1.3rem, 1rem + .6vw, 1.75rem); margin: 0 0 .2rem; }
 .backlink:hover { text-decoration: underline; }
 p.nav { margin: 0 0 .4rem; }
 
+/* A status line whose message is a WAIT rather than a breakage — see shared.js's
+   `toneFor`. One rule for every page's status element, because each page declares its
+   own `.err` and copying a second colour eight times is how the first one drifted.
+   `.note.warn` is NOT in here: that is /feeds' dormant-feed sentence, which
+   feed_actions.css already owns. */
+.status.warn, .modalstatus.warn, #status.warn { color: var(--warn); }
+
 /* --- the section heading ------------------------------------------------------------
    The micro-caps label that names a group of related controls. It was written out FIVE
    times — the landing page's group heads, the autopost cards' titles, the authoring

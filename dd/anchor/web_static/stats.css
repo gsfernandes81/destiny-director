@@ -41,6 +41,12 @@ table.data thead th {
   color: var(--text-2); font-weight: 600; border-bottom: 1px solid var(--border-hover);
 }
 table.data td.num, table.data th.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* The two ways a post got there, under the number that matters. Quiet on purpose: an
+   admin wants "how many servers", and only wants the split when one half moves. */
+.reach-split {
+  font-size: .74rem; color: var(--text-muted); white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 table.data tbody tr:hover { background: var(--surface-3); }
 
 .search {
