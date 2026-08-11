@@ -81,25 +81,11 @@ form#toggles { display: flex; flex-direction: column; gap: .6rem; }
 .row .name { font-size: .95rem; }
 .row .desc { color: var(--text-faint); font-size: .8rem; margin-top: .15rem; }
 
-/* Per-feed actions, inline on the row: one horizontal pair that wraps rather than
-   squashing. Sits between the label and the toggle, so the switch stays where the eye
-   expects it down the right edge. Explanations are hover cards — two labelled buttons do
-   not need two paragraphs. */
-.rowactions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .5rem; }
-/* Unavailable, not absent. Dimmer than shared.css's generic :disabled, because here the
-   sentence underneath is doing the explaining and the button only has to look inert. */
-.feedaction:disabled { opacity: .4; }
-
-/* One explanatory line under the row it belongs to: a bullet and a sentence. --warn is a
-   state the reader can fix from this page, --err is something broken. Nothing else gets
-   one — a note that is neither is a description, and descriptions live in .desc. */
-.note {
-  margin: .4rem 0 0; font-size: .8rem; display: flex; gap: .4rem;
-  align-items: baseline; max-width: 60ch;
-}
-.note .bullet { flex: none; }
-.note.warn { color: var(--warn); }
-.note.err { color: var(--err); }
+/* Per-feed actions, inline on the row: the pair sits between the label and the toggle,
+   so the switch stays where the eye expects it down the right edge. The buttons' own
+   look — and the sentence under a dimmed one — is feed_actions.css's, shared with /send,
+   which is nothing but that pair. Only their PLACEMENT on these rows is this page's. */
+.rowactions { margin-top: .5rem; }
 
 /* The last row of a "Written by you" card: the way to the form that writes the post.
    Inside the card because the link belongs to that feed, not to the section — two feeds
@@ -115,30 +101,8 @@ form#toggles { display: flex; flex-direction: column; gap: .6rem; }
 /* Inset: the card rounds its last child, so an outset ring is sliced by the corner. */
 .row.formlink:focus-visible { outline-offset: -2px; }
 
-/* Modals. Native <dialog>, so Escape and the backdrop come free; the open/close motion
-   and the backdrop fade are shared.css's, which is why nothing here pins a ::backdrop
-   colour — an unconditional one applies in the closed state too, and there is then
-   nothing for the fade to animate between. */
-dialog.feedmodal {
-  border: 1px solid var(--border); border-radius: var(--radius);
-  background: var(--surface-2); color: var(--text-1); padding: 1.1rem;
-  max-width: 40rem; width: calc(100% - 2rem);
-}
-dialog.feedmodal h2 { margin: 0 0 .5rem; font-size: 1.05rem; }
-dialog.feedmodal p.lede { margin: 0 0 .8rem; font-size: .92rem; color: var(--text-3); }
-dialog.feedmodal label.publish {
-  display: flex; align-items: center; gap: .45rem; font-size: .92rem;
-  margin: .9rem 0 1rem;
-}
-.modal-actions { display: flex; justify-content: flex-end; gap: .6rem; }
-/* The rendered post inside a modal — bounded so a long post scrolls rather than
-   pushing the confirm buttons off-screen. */
-.modalpreview { max-height: 50vh; overflow-y: auto; }
-.modalstatus { color: var(--text-faint); font-size: .85rem; }
-.modalstatus.err { color: var(--err); }
-/* The send dialog carries two of these (preview build, send outcome) and usually
-   only one is saying anything; an empty one must not hold open a gap. */
-.modalstatus:empty { display: none; }
+/* The modals the Preview / Send now pair opens are NOT here — they are shared with
+   /send and live in feed_actions.css, alongside the buttons that open them. */
 
 /* --- fields ------------------------------------------------------------------------
    Every editable value is a --surface-3 box on the card's --surface-2, so "this is the

@@ -1,0 +1,60 @@
+/*
+  The look of the Preview / Send now pair and the two dialogs behind it — everything
+  feed_actions.js drives and feed_actions.py renders, on either page that carries them
+  (/feeds, where they sit on a feed's settings row, and /send, which is nothing but).
+
+  Split out of settings_page.css when /send arrived: the buttons, the sentence under a
+  dimmed one and the send confirmation are one vocabulary, and a second page copying them
+  is how the chart chrome ended up in two sheets that had already drifted (see
+  tests/asset_links.test.js, which pairs this sheet with its script).
+
+  What is NOT here is either page's row anatomy — where the buttons sit, and what sits
+  beside them, is the page's own business. Base/reset/theme and the dialog open/close
+  motion live in shared.css, which every page linking this one also links.
+*/
+
+/* The pair itself: one horizontal group that wraps rather than squashing. */
+.rowactions { display: flex; flex-wrap: wrap; gap: .4rem; }
+/* Unavailable, not absent. Dimmer than shared.css's generic :disabled, because here the
+   sentence underneath is doing the explaining and the button only has to look inert. */
+.feedaction:disabled { opacity: .4; }
+
+/* One explanatory line under the row it belongs to: a bullet and a sentence. --warn is a
+   state the reader can fix, --err is something broken. Nothing else gets one — a note
+   that is neither is a description, and descriptions live with the row's own copy. */
+.note {
+  margin: .4rem 0 0; font-size: .8rem; display: flex; gap: .4rem;
+  align-items: baseline; max-width: 60ch;
+}
+.note .bullet { flex: none; }
+.note.warn { color: var(--warn); }
+.note.err { color: var(--err); }
+/* A note may end in the page that fixes it. Inherits the note's colour rather than
+   taking --link: it is part of the sentence, and a blue word inside an amber line reads
+   as a second thing to attend to. */
+.note a { color: inherit; }
+
+/* Modals. Native <dialog>, so Escape and the backdrop come free; the open/close motion
+   and the backdrop fade are shared.css's, which is why nothing here pins a ::backdrop
+   colour — an unconditional one applies in the closed state too, and there is then
+   nothing for the fade to animate between. */
+dialog.feedmodal {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface-2); color: var(--text-1); padding: 1.1rem;
+  max-width: 40rem; width: calc(100% - 2rem);
+}
+dialog.feedmodal h2 { margin: 0 0 .5rem; font-size: 1.05rem; }
+dialog.feedmodal p.lede { margin: 0 0 .8rem; font-size: .92rem; color: var(--text-3); }
+dialog.feedmodal label.publish {
+  display: flex; align-items: center; gap: .45rem; font-size: .92rem;
+  margin: .9rem 0 1rem;
+}
+.modal-actions { display: flex; justify-content: flex-end; gap: .6rem; }
+/* The rendered post inside a modal — bounded so a long post scrolls rather than
+   pushing the confirm buttons off-screen. */
+.modalpreview { max-height: 50vh; overflow-y: auto; }
+.modalstatus { color: var(--text-faint); font-size: .85rem; }
+.modalstatus.err { color: var(--err); }
+/* The send dialog carries two of these (preview build, send outcome) and usually
+   only one is saying anything; an empty one must not hold open a gap. */
+.modalstatus:empty { display: none; }
