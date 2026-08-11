@@ -44,7 +44,6 @@ import typing as t
 from pathlib import Path
 
 import aiohttp.web
-import aiosqlite
 import hikari as h
 
 from dd.hmessage import HMessage
@@ -931,45 +930,52 @@ async def publish_draft(
 #: One weapon/armour row: (name, hash, itemTypeDisplayName, itemType, rarity).
 WeaponItem = tuple[str, int, str, int, str]
 
-#: Rows pulled per ``fetchmany`` when scanning a manifest table. Big enough that the
-#: round-trip overhead is noise, small enough that the raw JSON of a batch is a rounding
-#: error next to the table (see :func:`iter_weapon_items`).
-_ROW_BATCH = 200
+#: The item fields the pool keeps. Everything else in a definition — sockets, stats,
+#: investment, the preview blocks — is discarded, which is why this is a projection and
+#: not a scan: selecting these five in the database is the difference between shipping a
+#: few hundred KB and shipping ~200 MB of JSON.
+_WEAPON_FIELDS = (
+    api.Field("itemType", "int"),
+    api.Field("displayProperties.name"),
+    api.Field("itemTypeDisplayName"),
+    api.Field("inventory.tierTypeName"),
+    api.Field("redacted", "bool"),
+)
 
 
-async def iter_weapon_items(cursor: t.Any) -> list[WeaponItem]:
-    """Read the manifest's named, non-dummy weapons/armour via ``cursor``, deduped.
+async def iter_weapon_items(api_key: str) -> list[WeaponItem]:
+    """The manifest's named, non-dummy weapons/armour, deduped.
 
-    Runs the ``DestinyInventoryItemDefinition`` query on the caller-owned sqlite cursor
-    (so a producer can share one manifest connection across several reads) and returns
-    one row per (name, type), newest hash winning — the pool the reward autocomplete and
-    :func:`resolve_weapon` search. Whites/greens and redacted/dummy items are dropped.
+    Returns one row per (name, type), newest hash winning — the pool the reward
+    autocomplete and :func:`resolve_weapon` search. Whites/greens and redacted/dummy
+    items are dropped.
 
-    Rows are consumed in ``fetchmany`` batches, not one ``fetchall()``: the item table
-    is the manifest's largest and materialising all ~39k raw JSON strings at once cost
-    240 MB (+284 MB RSS) before a single one was even parsed. Only the deduped result
-    survives the loop, so batching is output-identical and drops the peak to ~6 MB.
+    The item-type filter runs in the database (``only=``), so the ~39k-row item table is
+    already down to the ~7k weapons and armour before anything is transferred; the
+    rarity and name filters are Python because they are cheap once the rows are this
+    few. What this replaces read every row's whole JSON and threw ~95% of it away —
+    240 MB of raw strings, which is why it had to be batched, cached process-wide and
+    generally handled with care. It is now a small query.
     """
+    rows = await api.scan_projection(
+        api_key,
+        "DestinyInventoryItemDefinition",
+        _WEAPON_FIELDS,
+        only={"itemType": (2, 3)},
+    )
     item_by_key: dict[tuple[str, str], WeaponItem] = {}
-    await cursor.execute("SELECT json FROM DestinyInventoryItemDefinition")
-    while batch := await cursor.fetchmany(_ROW_BATCH):
-        for (row,) in batch:
-            defn = json.loads(row)
-            item_type = defn.get("itemType")
-            if item_type not in (2, 3) or defn.get("redacted"):
-                continue
-            rarity = (defn.get("inventory") or {}).get("tierTypeName", "")
-            if rarity in ("", "Common", "Basic"):  # drop dummies/whites/greens
-                continue
-            name = (defn.get("displayProperties") or {}).get("name")
-            if not name:
-                continue
-            type_name = defn.get("itemTypeDisplayName", "")
-            hash_ = int(defn["hash"])
-            key = (name.lower(), type_name.lower())
-            existing = item_by_key.get(key)
-            if existing is None or hash_ > existing[1]:  # keep the newest hash
-                item_by_key[key] = (name, hash_, type_name, item_type, rarity)
+    for hash_, item_type, name, type_name, rarity, redacted in rows:
+        if redacted:
+            continue
+        if rarity in (None, "", "Common", "Basic"):  # drop dummies/whites/greens
+            continue
+        if not name:
+            continue
+        type_name = type_name or ""
+        key = (name.lower(), type_name.lower())
+        existing = item_by_key.get(key)
+        if existing is None or hash_ > existing[1]:  # keep the newest hash
+            item_by_key[key] = (name, int(hash_), type_name, item_type, rarity)
     return sorted(item_by_key.values(), key=lambda e: e[0].lower())
 
 
@@ -984,11 +990,11 @@ _weapon_pool_lock = asyncio.Lock()
 async def get_weapon_pool() -> list[WeaponItem]:
     """Build (once) and cache the manifest weapon/armour pool, shared process-wide.
 
-    Opens its own short-lived manifest connection and runs :func:`iter_weapon_items`;
-    the result is cached so subsequent callers (every producer + its prewarm) reuse it
-    rather than re-scanning the item table. On any failure returns ``[]`` **without
-    caching**: the caller degrades to a manifest-less form and a later call retries, so
-    a transient manifest error doesn't permanently disable the reward pickers.
+    Runs :func:`iter_weapon_items`; the result is cached so subsequent callers (every
+    producer + its prewarm) reuse it rather than re-querying. On any failure returns
+    ``[]`` **without caching**: the caller degrades to a manifest-less form and a later
+    call retries, so a transient manifest error doesn't permanently disable the reward
+    pickers.
     """
     global _weapon_pool
     if _weapon_pool is not None:
@@ -996,10 +1002,9 @@ async def get_weapon_pool() -> list[WeaponItem]:
     async with _weapon_pool_lock:
         if _weapon_pool is None:
             try:
-                path = await api._get_latest_manifest(schemas.BungieCredentials.api_key)
-                async with aiosqlite.connect(path) as con:
-                    cur = await con.cursor()
-                    _weapon_pool = await iter_weapon_items(cur)
+                _weapon_pool = await iter_weapon_items(
+                    schemas.BungieCredentials.api_key
+                )
             except Exception:
                 logger.warning("manifest weapon-pool build failed", exc_info=True)
                 return []

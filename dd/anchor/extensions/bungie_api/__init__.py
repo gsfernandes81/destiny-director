@@ -30,7 +30,16 @@ from .constants import (
     XUR_VENDOR_HASH,
     likely_emoji_name,
 )
-from .manifest import _build_manifest_dict, _get_latest_manifest, prewarm_manifest
+from .manifest import (
+    Field,
+    ManifestLookup,
+    build_in_thread,
+    ensure_manifest,
+    hashes_by_field_prefix,
+    manifest_lookup,
+    prewarm_manifest,
+    scan_projection,
+)
 from .models import (
     APIOffline,
     DestinyArmor,
@@ -65,9 +74,14 @@ __all__ = [
     "XUR_STRANGE_GEAR_VENDOR_HASH",
     "XUR_VENDOR_HASH",
     "likely_emoji_name",
-    "_build_manifest_dict",
-    "_get_latest_manifest",
+    "Field",
+    "ManifestLookup",
+    "build_in_thread",
+    "ensure_manifest",
+    "hashes_by_field_prefix",
+    "manifest_lookup",
     "prewarm_manifest",
+    "scan_projection",
     "APIOffline",
     "APIOfflineException",
     "DestinyArmor",

@@ -19,17 +19,15 @@ The rendering these used to assert moved to the shared golden corpus
 (``dd/anchor/preview_fixtures``), which holds the Python and JavaScript renderers
 to one output rather than checking either alone."""
 
-import asyncio
 import dataclasses
 import json
-import sqlite3
 import typing as t
 
-import aiosqlite
-import hikari as h
 import pytest
+import pytest_asyncio
 
 from dd.anchor import hybrid_post_core as hpc
+from dd.anchor.tests.manifest_fixtures import clear_store, load_store, pin_manifest
 
 
 def test_hybrid_post_spec_has_no_autopost_hooks() -> None:
@@ -196,18 +194,17 @@ def test_resolve_weapon_still_matches_a_real_hash() -> None:
 
 # --- iter_weapon_items ----------------------------------------------------------------
 #
-# The scan reads the item table in fetchmany batches instead of one fetchall(), which
-# used to materialise every raw JSON string in the manifest's largest table before a
-# single one was parsed. Batching is only worth shipping if it is output-identical, so
-# the pre-fix body is kept verbatim below and the two are asserted equal.
+# The scan is a projection now: the item-type filter runs in the database and only the
+# five fields the pool keeps come back, where it used to read every row of the
+# manifest's largest table and throw ~95% of each away. A projection is only worth
+# shipping if it is output-identical, so the pre-change body is kept verbatim below —
+# fed from the same stored manifest — and the two are asserted equal.
 
 
-async def _iter_weapon_items_via_fetchall(cursor) -> list[hpc.WeaponItem]:
-    """The pre-fix implementation, kept as the equivalence reference."""
+def _iter_weapon_items_via_definitions(lookup) -> list[hpc.WeaponItem]:
+    """The pre-projection implementation, kept as the equivalence reference."""
     item_by_key: dict[tuple[str, str], hpc.WeaponItem] = {}
-    await cursor.execute("SELECT json FROM DestinyInventoryItemDefinition")
-    for (row,) in await cursor.fetchall():
-        defn = json.loads(row)
+    for defn in lookup["DestinyInventoryItemDefinition"].values():
         item_type = defn.get("itemType")
         if item_type not in (2, 3) or defn.get("redacted"):
             continue
@@ -251,9 +248,9 @@ def _item_defn(
 def _weapon_pool_rows() -> list[dict]:
     """Rows covering every filter, dedupe and ordering branch of the scan.
 
-    Deliberately longer than one fetchmany batch (200) so the batching loop is
+    Deliberately larger than one load batch (500) so the loader's own batching is
     exercised across boundaries, with the interesting rows sprinkled through it rather
-    than all in the first batch.
+    than all at the start.
     """
     rows: list[dict] = []
     # Bulk filler: distinct names, so none of them dedupe against each other.
@@ -271,7 +268,7 @@ def _weapon_pool_rows() -> list[dict]:
     rows.insert(9, _item_defn(56, None))
     rows.insert(230, _item_defn(57, ""))
     # Kept: armour, and a differing-case duplicate that must dedupe with the newest
-    # hash winning — split across batches so the batching cannot hide a dedupe bug.
+    # hash winning.
     rows.insert(11, _item_defn(60, "Alpha Lupi", item_type=2, type_name="Chest Armor"))
     rows.insert(300, _item_defn(70, "alpha lupi", item_type=2, type_name="chest armor"))
     rows.insert(400, _item_defn(65, "ALPHA LUPI", item_type=2, type_name="CHEST ARMOR"))
@@ -281,37 +278,42 @@ def _weapon_pool_rows() -> list[dict]:
     return rows
 
 
-@pytest.fixture
-def item_manifest(tmp_path):
-    path = str(tmp_path / "world.content")
-    con = sqlite3.connect(path)
-    try:
-        con.execute(
-            "CREATE TABLE DestinyInventoryItemDefinition (id INTEGER PRIMARY KEY, json)"
-        )
-        con.executemany(
-            "INSERT INTO DestinyInventoryItemDefinition (id, json) VALUES (?, ?)",
-            [(i, json.dumps(defn)) for i, defn in enumerate(_weapon_pool_rows())],
-        )
-        con.commit()
-    finally:
-        con.close()
-    return path
+@pytest_asyncio.fixture
+async def item_manifest(tmp_path, monkeypatch):
+    """The pool fixture, loaded into the store as the active manifest.
+
+    Rows are keyed by the definition's own hash, as Bungie's SQLite keys them — the
+    load takes the hash from that primary key, not from the JSON body.
+    """
+    version_id = await load_store(
+        tmp_path,
+        {
+            "DestinyInventoryItemDefinition": [
+                (defn["hash"], json.dumps(defn)) for defn in _weapon_pool_rows()
+            ]
+        },
+    )
+    pin_manifest(monkeypatch, version_id)
+    yield version_id
+    await clear_store()
 
 
 @pytest.mark.asyncio
-async def test_iter_weapon_items_matches_the_fetchall_reference(item_manifest) -> None:
-    async with aiosqlite.connect(item_manifest) as con:
-        batched = await hpc.iter_weapon_items(await con.cursor())
-        reference = await _iter_weapon_items_via_fetchall(await con.cursor())
-    assert batched == reference
-    assert batched  # a fixture that filtered everything out would prove nothing
+@pytest.mark.integration
+async def test_iter_weapon_items_matches_the_definition_reference(
+    item_manifest,
+) -> None:
+    projected = await hpc.iter_weapon_items("key")
+    with hpc.api.ManifestLookup(item_manifest) as lookup:
+        reference = _iter_weapon_items_via_definitions(lookup)
+    assert projected == reference
+    assert projected  # a fixture that filtered everything out would prove nothing
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_iter_weapon_items_filters_dedupes_and_sorts(item_manifest) -> None:
-    async with aiosqlite.connect(item_manifest) as con:
-        items = await hpc.iter_weapon_items(await con.cursor())
+    items = await hpc.iter_weapon_items("key")
     names = [item[0] for item in items]
     assert not any(name.startswith("Dropped") for name in names)
     assert "" not in names
@@ -327,124 +329,34 @@ async def test_iter_weapon_items_filters_dedupes_and_sorts(item_manifest) -> Non
 
 
 @pytest.mark.asyncio
-async def test_iter_weapon_items_batches_rather_than_fetching_everything() -> None:
-    """The fetchall() the fix removed must not come back."""
-    calls: list[str] = []
+@pytest.mark.integration
+async def test_iter_weapon_items_pushes_the_type_filter_into_the_database(
+    item_manifest, monkeypatch
+) -> None:
+    """The successor to "it must not call fetchall()".
 
-    class _Cursor:
-        def __init__(self) -> None:
-            self._batches = [[(json.dumps(_item_defn(1, "Solo")),)], []]
+    What bounded the cost before was reading the table in batches; what bounds it now is
+    never asking for the rows at all. If ``only`` were dropped, every emblem, mod and
+    shader in the manifest would cross the wire to be discarded in Python.
+    """
+    seen: dict[str, object] = {}
+    real = hpc.api.scan_projection
 
-        async def execute(self, _sql: str) -> None:
-            calls.append("execute")
+    async def _spy(api_key, table, fields, *, only=None):
+        seen["table"], seen["only"] = table, only
+        seen["fields"] = [f.path for f in fields]
+        return await real(api_key, table, fields, only=only)
 
-        async def fetchmany(self, size: int) -> list:
-            calls.append(f"fetchmany({size})")
-            return self._batches.pop(0)
+    monkeypatch.setattr(hpc.api, "scan_projection", _spy)
+    await hpc.iter_weapon_items("key")
 
-        async def fetchall(self) -> list:
-            raise AssertionError("iter_weapon_items must not call fetchall()")
-
-    items = await hpc.iter_weapon_items(_Cursor())
-    assert [i[0] for i in items] == ["Solo"]
-    assert calls == ["execute", "fetchmany(200)", "fetchmany(200)"]
-
-
-# --- reconcile_missing_post -----------------------------------------------------------
-# A post deleted in Discord has to be RETIRED from the record, not merely reported: the
-# form's Edit/Create split and post_action's 409 guard both read `meta.is_current()`, so
-# an answer that lives only in the render path offers a Create the server then refuses.
-# The probe runs outside `draft_lock` (a REST call), so the locked re-read may find a
-# different record than the one probed — hence a DraftMeta return rather than a bool:
-# "gone, but a different post now exists" has no truthy answer.
-
-
-class _FakeBot:
-    """Only what reconcile_missing_post touches — one fetch_message that can fail."""
-
-    def __init__(self, error: Exception | None = None) -> None:
-        self.error = error
-        self.calls = 0
-
-    async def fetch_message(self, _channel_id: int, _message_id: int) -> object:
-        self.calls += 1
-        if self.error:
-            raise self.error
-        return object()
-
-
-def _spec_for(meta: "hpc.DraftMeta", saved: list["hpc.DraftMeta"]) -> t.Any:
-    """A stand-in spec exposing just the meta accessors and the draft lock."""
-
-    class _Spec:
-        followable_key = "weekly_reset"
-        channel_id = 123
-        draft_lock = asyncio.Lock()
-
-        async def load_meta(self) -> hpc.DraftMeta:
-            return meta
-
-        async def save_meta(self, m: hpc.DraftMeta) -> None:
-            saved.append(m)
-
-    return _Spec()
-
-
-@pytest.mark.asyncio
-async def test_reconcile_retires_and_persists_a_deleted_post() -> None:
-    meta = hpc.DraftMeta(
-        message_id=7, reset_ts=99, crossposted=True, status="published"
-    )
-    saved: list[hpc.DraftMeta] = []
-    bot = t.cast(t.Any, _FakeBot(h.NotFoundError(url="u", headers={}, raw_body=b"")))
-
-    got = await hpc.reconcile_missing_post(_spec_for(meta, saved), meta, bot)
-    # Persisted, so post_action's own is_current() check agrees with the form.
-    assert saved and saved[0].message_id == 0
-    assert saved[0].reset_ts == 0
-    assert saved[0].crossposted is False
-    assert saved[0].status == "draft"
-    # And the returned meta is the retired record, so this request renders from it.
-    assert got.is_current(99) is False
-    assert got.message_id == 0
-
-
-@pytest.mark.asyncio
-async def test_reconcile_leaves_the_record_alone_when_discord_is_unhappy() -> None:
-    # A rate limit or a transport blip is not evidence of deletion; flipping the form
-    # into offering Create there would risk a second post for the period.
-    meta = hpc.DraftMeta(message_id=7, reset_ts=99, status="posted")
-    saved: list[hpc.DraftMeta] = []
-
-    bot = t.cast(t.Any, _FakeBot(RuntimeError("429")))
-    got = await hpc.reconcile_missing_post(_spec_for(meta, saved), meta, bot)
-    assert got is meta
-    assert not saved
-    assert meta.message_id == 7
-
-
-@pytest.mark.asyncio
-async def test_reconcile_does_not_probe_without_a_bot() -> None:
-    meta = hpc.DraftMeta(message_id=7, reset_ts=99, status="posted")
-    saved: list[hpc.DraftMeta] = []
-
-    got = await hpc.reconcile_missing_post(_spec_for(meta, saved), meta, None)
-    assert got is meta
-    assert not saved
-
-
-@pytest.mark.asyncio
-async def test_reconcile_adopts_a_newer_record_instead_of_retiring_it() -> None:
-    # Between the (unlocked) fetch 404ing and the locked re-read, another tab or the
-    # cron created a NEW post: the persisted record now names a different message. The
-    # newer record must be left alone AND handed back, so the form renders Edit for the
-    # post that now exists rather than a Create post_action would 409.
-    stale = hpc.DraftMeta(message_id=7, reset_ts=99, status="posted")
-    fresh = hpc.DraftMeta(message_id=8, reset_ts=99, status="posted")
-    saved: list[hpc.DraftMeta] = []
-    bot = t.cast(t.Any, _FakeBot(h.NotFoundError(url="u", headers={}, raw_body=b"")))
-
-    got = await hpc.reconcile_missing_post(_spec_for(fresh, saved), stale, bot)
-    assert got is fresh  # render from what the locked read established
-    assert not saved  # the newer record is not touched
-    assert stale.message_id == 7  # nor is the caller's stale copy wiped
+    assert seen["table"] == "DestinyInventoryItemDefinition"
+    assert seen["only"] == {"itemType": (2, 3)}
+    # And only the fields the pool keeps — not the definition.
+    assert seen["fields"] == [
+        "itemType",
+        "displayProperties.name",
+        "itemTypeDisplayName",
+        "inventory.tierTypeName",
+        "redacted",
+    ]

@@ -13,216 +13,189 @@
 # You should have received a copy of the GNU Affero General Public License along with
 # destiny-director. If not, see <https://www.gnu.org/licenses/>.
 
-# Manifest resolution: the currency check, the on-disk reuse it enables, and the
-# Bungie-unreachable fallback. No network — aiohttp.ClientSession is faked out, and the
-# manifest directory is a tmp cwd.
+# Manifest resolution: the currency check, the reuse it enables, and the
+# Bungie-unreachable fallback. No network — aiohttp.ClientSession is faked out and the
+# manifest is loaded into the test database.
 #
 # The behaviour under test is specifically the thing a TTL cache broke once: reuse must
 # be keyed on Bungie's versioned filename, never on elapsed time, so a manifest that
 # ships mid-week is picked up on the next resolve rather than hours later.
+#
+# The fallback is the reason this whole move happened. It used to mean "reuse whatever
+# is extracted in manifest/", which answered on a warm process and not at all on a cold
+# one — a fresh container had nothing to fall back to. Now the manifest outlives the
+# container, so test_falls_back_* holds on a process that has never seen Bungie.
 
 import asyncio
-import io
-import typing as t
-import zipfile
 
 import pytest
+import pytest_asyncio
 
 from dd.anchor.extensions.bungie_api import manifest as m
+from dd.common import schemas
 
-pytestmark = pytest.mark.asyncio
+from .manifest_fixtures import FRAGMENT_PREFIX, install_fake_bungie, manifest_zip
 
-_FRAGMENT = "/common/destiny2_content/sqlite/en/"
-
-
-class _FakeContent:
-    """``response.content`` — the download streams off this rather than ``read()``."""
-
-    def __init__(self, body: bytes) -> None:
-        self._body = body
-
-    async def iter_chunked(self, size: int) -> t.AsyncIterator[bytes]:
-        for start in range(0, len(self._body), size):
-            yield self._body[start : start + size]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 
-class _FakeResponse:
-    def __init__(self, payload: t.Any, body: bytes) -> None:
-        self._payload = payload
-        self.content = _FakeContent(body)
-
-    async def json(self) -> t.Any:
-        return self._payload
-
-    async def __aenter__(self) -> "_FakeResponse":
-        return self
-
-    async def __aexit__(self, *_exc: object) -> None:
-        return None
+@pytest_asyncio.fixture(autouse=True)
+async def _empty_store():
+    """No stored manifest, and no resolve left in flight from a previous test."""
+    m._inflight = None
+    await _clear()
+    yield
+    m._inflight = None
+    await _clear()
 
 
-class _FakeSession:
-    """Stands in for both sessions the resolver opens (metadata, then download)."""
-
-    def __init__(self, calls: list[str], meta: t.Any, zip_bytes: bytes) -> None:
-        self._calls = calls
-        self._meta = meta
-        self._zip = zip_bytes
-
-    def get(self, url: str, **_kw: t.Any) -> _FakeResponse:
-        self._calls.append(url)
-        return _FakeResponse(self._meta, self._zip)
-
-    async def __aenter__(self) -> "_FakeSession":
-        return self
-
-    async def __aexit__(self, *_exc: object) -> None:
-        return None
+async def _clear() -> None:
+    async with schemas.db_session() as session, session.begin():
+        await session.execute(schemas.DestinyManifestDefinition.__table__.delete())
+        await session.execute(schemas.DestinyManifestVersion.__table__.delete())
 
 
-def _zip_containing(name: str) -> bytes:
-    """A real zip, so the production extract path runs unmodified."""
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr(name, b"not really sqlite, but a file with the right name")
-    return buf.getvalue()
+async def _loaded_version() -> str | None:
+    active = await schemas.DestinyManifestVersion.active()
+    return None if active is None else str(active.version)
 
 
-def _install(monkeypatch: pytest.MonkeyPatch, *, current: str | None) -> list[str]:
-    """Fake out the network. `current` is the filename Bungie reports, None to fail."""
-    calls: list[str] = []
-
-    def session(*_a: t.Any, **_kw: t.Any) -> _FakeSession:
-        if current is None:
-            raise OSError("Bungie unreachable")
-        payload = {"Response": {"mobileWorldContentPaths": {"en": _FRAGMENT + current}}}
-        return _FakeSession(calls, payload, _zip_containing(current))
-
-    monkeypatch.setattr(m.aiohttp, "ClientSession", session)
-    return calls
-
-
-def _downloaded(manifest_dir) -> list[str]:
-    """Extracted manifests actually on disk, by name."""
-    return sorted(p.name for p in manifest_dir.iterdir() if p.is_file())
-
-
-@pytest.fixture
-def manifest_dir(tmp_path, monkeypatch: pytest.MonkeyPatch):
-    """A tmp cwd — the resolver works against the relative `manifest/` directory."""
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "manifest").mkdir()
-    return tmp_path / "manifest"
-
-
-async def test_reuses_the_copy_on_disk_when_it_is_the_current_one(
-    manifest_dir, monkeypatch: pytest.MonkeyPatch
+async def test_reuses_the_loaded_manifest_when_it_is_the_current_one(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    (manifest_dir / "world_v1.content").write_bytes(b"already here")
-    calls = _install(monkeypatch, current="world_v1.content")
+    calls = install_fake_bungie(monkeypatch, current="world_v1.content")
+    assert (await m.ensure_manifest("key")).version == "world_v1.content"
 
-    path = await m._get_latest_manifest("key")
+    m._inflight = None
+    calls.clear()
+    resolved = await m.ensure_manifest("key")
 
-    assert path == "manifest/world_v1.content"
+    assert resolved.version == "world_v1.content"
     # One call — the currency check. The download is what reuse saves, not the check.
     assert len(calls) == 1
-    assert (manifest_dir / "world_v1.content").read_bytes() == b"already here"
 
 
-async def test_a_newer_manifest_is_downloaded_rather_than_served_stale(
-    manifest_dir, monkeypatch: pytest.MonkeyPatch
+async def test_a_newer_manifest_is_loaded_rather_than_served_stale(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The regression a time-based cache introduced: a copy on disk, and a different one
+    # The regression a time-based cache introduced: one manifest loaded, a different one
     # live at Bungie. Elapsed time must not decide this.
-    (manifest_dir / "world_v1.content").write_bytes(b"last week's definitions")
-    _install(monkeypatch, current="world_v2.content")
+    install_fake_bungie(monkeypatch, current="world_v1.content")
+    await m.ensure_manifest("key")
 
-    path = await m._get_latest_manifest("key")
+    m._inflight = None
+    install_fake_bungie(monkeypatch, current="world_v2.content")
+    assert (await m.ensure_manifest("key")).version == "world_v2.content"
+    assert await _loaded_version() == "world_v2.content"
 
-    assert path == "manifest/world_v2.content"
-    assert not (manifest_dir / "world_v1.content").exists()
 
-
-async def test_raises_when_bungie_is_unreachable_and_nothing_is_on_disk(
-    manifest_dir, monkeypatch: pytest.MonkeyPatch
+async def test_raises_when_bungie_is_unreachable_and_nothing_is_loaded(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _install(monkeypatch, current=None)
+    install_fake_bungie(monkeypatch, current=None)
 
     with pytest.raises(OSError):
-        await m._get_latest_manifest("key")
+        await m.ensure_manifest("key")
 
 
-async def test_falls_back_to_disk_when_bungie_cannot_be_reached_and_retries_after(
-    manifest_dir, monkeypatch: pytest.MonkeyPatch
+async def test_falls_back_to_the_stored_manifest_when_bungie_cannot_be_reached(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The fallback answers, and does not stick — the next resolve re-checks."""
-    (manifest_dir / "world_v1.content").write_bytes(b"stale but usable")
-    _install(monkeypatch, current=None)
-    assert await m._get_latest_manifest("key") == "manifest/world_v1.content"
+    """The fallback answers, and does not stick — the next resolve re-checks.
 
-    _install(monkeypatch, current="world_v2.content")
-    assert await m._get_latest_manifest("key") == "manifest/world_v2.content"
-
-
-async def test_a_failed_extract_leaves_nothing_the_next_resolve_would_trust(
-    manifest_dir, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The one corruption the currency check cannot see, so it must not be left behind.
-
-    An extract that dies part-way (running out of disk inside ~340MB is the realistic
-    cause) leaves a file with exactly the name Bungie just gave us. Nothing downstream
-    can tell it apart from a good copy — the next resolve finds the name, believes it,
-    and hands every consumer a truncated sqlite for the life of the process.
+    Note what makes this different from the on-disk version it replaces: the process
+    doing the falling back never successfully talked to Bungie *in this test's second
+    half*, and on a real deploy would not have talked to it at all. The manifest is in
+    the database, so a cold start during an outage still has one.
     """
-    calls = _install(monkeypatch, current="world_v1.content")
+    install_fake_bungie(monkeypatch, current="world_v1.content")
+    await m.ensure_manifest("key")
 
-    real_extractall = zipfile.ZipFile.extractall
+    m._inflight = None
+    install_fake_bungie(monkeypatch, current=None)
+    assert (await m.ensure_manifest("key")).version == "world_v1.content"
 
-    def _die_after_writing(self, path, *a, **kw):
-        real_extractall(self, path, *a, **kw)  # the partial file now exists
+    m._inflight = None
+    install_fake_bungie(monkeypatch, current="world_v2.content")
+    assert (await m.ensure_manifest("key")).version == "world_v2.content"
+
+
+async def test_a_failed_load_leaves_nothing_the_next_resolve_would_trust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A load that dies part-way must not be readable as the current manifest.
+
+    The on-disk equivalent of this was a partial extract leaving a file with exactly the
+    name Bungie had just given us — indistinguishable from a good copy, and handed to
+    every consumer as a truncated sqlite for the life of the process. The version row's
+    ``loading`` state is what replaces that: nothing is current until every row is in.
+    """
+    calls = install_fake_bungie(monkeypatch, current="world_v1.content")
+
+    async def _die(*_a: object, **_kw: object) -> None:
         raise OSError(28, "No space left on device")
 
-    monkeypatch.setattr(zipfile.ZipFile, "extractall", _die_after_writing)
+    monkeypatch.setattr(m, "_load_tables", _die)
     with pytest.raises(OSError):
-        await m._get_latest_manifest("key")
-    assert _downloaded(manifest_dir) == []
+        await m.ensure_manifest("key")
 
-    # And the next resolve genuinely re-downloads rather than reusing the wreckage.
-    monkeypatch.setattr(zipfile.ZipFile, "extractall", real_extractall)
-    assert await m._get_latest_manifest("key") == "manifest/world_v1.content"
-    assert len(calls) == 4  # two metadata checks + two downloads, nothing reused
+    assert await _loaded_version() is None
+
+    # And the next resolve genuinely re-loads rather than reusing the wreckage.
+    m._inflight = None
+    monkeypatch.undo()
+    calls.clear()
+    install_fake_bungie(monkeypatch, current="world_v1.content")
+    assert (await m.ensure_manifest("key")).version == "world_v1.content"
 
 
 async def test_concurrent_callers_share_one_resolve(
-    manifest_dir, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Several pages needing the manifest at once must not each call Bungie."""
-    (manifest_dir / "world_v1.content").write_bytes(b"already here")
-    calls = _install(monkeypatch, current="world_v1.content")
+    install_fake_bungie(monkeypatch, current="world_v1.content")
+    await m.ensure_manifest("key")
 
-    results = await asyncio.gather(*(m._get_latest_manifest("key") for _ in range(5)))
+    m._inflight = None
+    calls = install_fake_bungie(monkeypatch, current="world_v1.content")
+    results = await asyncio.gather(*(m.ensure_manifest("key") for _ in range(5)))
 
-    assert results == ["manifest/world_v1.content"] * 5
+    assert [r.version for r in results] == ["world_v1.content"] * 5
     assert len(calls) == 1
 
 
 async def test_a_cancelled_caller_does_not_cancel_the_shared_resolve(
-    manifest_dir, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    (manifest_dir / "world_v1.content").write_bytes(b"already here")
-    _install(monkeypatch, current="world_v1.content")
+    install_fake_bungie(monkeypatch, current="world_v1.content")
+    await m.ensure_manifest("key")
 
-    first = asyncio.create_task(m._get_latest_manifest("key"))
-    second = asyncio.create_task(m._get_latest_manifest("key"))
+    m._inflight = None
+    install_fake_bungie(monkeypatch, current="world_v1.content")
+    first = asyncio.create_task(m.ensure_manifest("key"))
+    second = asyncio.create_task(m.ensure_manifest("key"))
     await asyncio.sleep(0)  # let both attach to the same resolve
     first.cancel()
 
-    assert await second == "manifest/world_v1.content"
+    assert (await second).version == "world_v1.content"
 
 
-async def test_prewarm_swallows_a_failure(
-    manifest_dir, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_prewarm_swallows_a_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """A bot that cannot reach Bungie at boot must still start."""
-    _install(monkeypatch, current=None)
+    install_fake_bungie(monkeypatch, current=None)
     await m.prewarm_manifest("key")  # must not raise
+
+
+async def test_prewarm_is_a_no_op_without_an_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = install_fake_bungie(monkeypatch, current="world_v1.content")
+    await m.prewarm_manifest("")
+    assert calls == []
+
+
+def test_the_fixture_zip_really_contains_the_version_named_file() -> None:
+    # Guards the fixtures themselves: the loader opens ``<workdir>/<version>``, so a zip
+    # whose member is named anything else would make every test above vacuous.
+    assert manifest_zip("world_v1.content")
+    assert FRAGMENT_PREFIX.endswith("/")

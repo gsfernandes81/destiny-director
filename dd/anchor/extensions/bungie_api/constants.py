@@ -75,6 +75,8 @@ components = (
 )
 
 
+#: Tables reachable by hash through ``ManifestLookup`` — the keyed lookups the vendor
+#: post constructors make.
 manifest_table_names = [
     # "DestinyClassDefinition",
     # "DestinyPlaceDefinition",
@@ -89,6 +91,21 @@ manifest_table_names = [
     "DestinyPresentationNodeDefinition",
     "DestinyVendorDefinition",
 ]
+
+#: Tables nothing looks up by hash, but whose *whole contents* are scanned to derive an
+#: index: seasons (item recency, ``item_index``) and activities (the weekly-reset strike
+#: and conquest pools, ``weekly_reset._scan_activities``).
+manifest_scanned_table_names = [
+    "DestinySeasonDefinition",
+    "DestinyActivityDefinition",
+    "DestinyActivityTypeDefinition",
+]
+
+#: Everything the loader copies out of Bungie's SQLite into Postgres. Anything absent
+#: here simply does not exist as far as the bot is concerned, so a new consumer that
+#: needs a new table has to add it *and* trigger a reload — this is the allowlist that
+#: keeps the stored manifest to the ~11 tables we read instead of Bungie's ~50.
+manifest_stored_table_names = manifest_table_names + manifest_scanned_table_names
 
 
 DESTINY_ITEM_TYPE_WEAPON = 3

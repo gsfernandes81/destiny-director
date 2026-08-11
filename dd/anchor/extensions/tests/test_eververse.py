@@ -20,23 +20,26 @@ hand-built fixtures that mirror the live manifest shapes (verified against dev d
 """
 
 import json
-import sqlite3
 
 import pytest
+import pytest_asyncio
 
 from dd.anchor.extensions.bungie_api import (
     EVERVERSE_BRIGHT_DUST_ROTATOR_PREFIX,
     EVERVERSE_SILVER_ROTATOR_PREFIX,
 )
-from dd.anchor.extensions.bungie_api.manifest import ManifestLookup
+from dd.anchor.extensions.bungie_api.manifest import (
+    ManifestLookup,
+    hashes_by_field_prefix,
+)
 from dd.anchor.extensions.bungie_api.models import DestinyItem
 from dd.anchor.extensions.eververse import (
     _eververse_line,
     _eververse_type_group,
     _exotic_ornament_target_name,
     _group_eververse_offerings,
-    _rotator_hashes,
 )
+from dd.anchor.tests.manifest_fixtures import clear_store, load_store, pin_manifest
 
 # Vendor rows as (id, vendorDefinition). ``_rotator_hashes`` used to scan
 # ``.values()`` in Python and now pushes the prefix test into sqlite, so the fixture is
@@ -89,7 +92,7 @@ _CORRUPT_ROW_ID = 120
 
 
 def _rotator_hashes_via_values(manifest_table, prefix: str) -> list[int]:
-    """The pre-fix implementation, kept as the equivalence reference."""
+    """The pre-pushdown implementation, kept as the equivalence reference."""
     return [
         vendor_def["hash"]
         for vendor_def in manifest_table["DestinyVendorDefinition"].values()
@@ -97,42 +100,48 @@ def _rotator_hashes_via_values(manifest_table, prefix: str) -> list[int]:
     ]
 
 
-@pytest.fixture
-def vendor_manifest(tmp_path):
-    path = str(tmp_path / "world.content")
-    con = sqlite3.connect(path)
-    try:
-        con.execute(
-            "CREATE TABLE DestinyVendorDefinition (id INTEGER PRIMARY KEY, json)"
+@pytest_asyncio.fixture
+async def vendor_manifest(tmp_path, monkeypatch):
+    """The vendor rows, loaded into the store as the active manifest.
+
+    The corrupt row is still fed in: it is skipped at *load* time now (the JSON never
+    reaches the database) rather than being stepped over by every query, so neither the
+    pushdown nor the reference implementation can see it.
+    """
+    rows = [
+        (
+            id_,
+            json.dumps(defn).encode() if id_ in _BLOB_ROW_IDS else json.dumps(defn),
         )
-        for id_, defn in _VENDOR_ROWS:
-            blob = json.dumps(defn)
-            con.execute(
-                "INSERT INTO DestinyVendorDefinition (id, json) VALUES (?, ?)",
-                (id_, blob.encode() if id_ in _BLOB_ROW_IDS else blob),
-            )
-        con.execute(
-            "INSERT INTO DestinyVendorDefinition (id, json) VALUES (?, ?)",
-            (_CORRUPT_ROW_ID, "{not json"),
-        )
-        con.commit()
-    finally:
-        con.close()
-    lookup = ManifestLookup(path)
-    yield lookup
-    lookup.close()
+        for id_, defn in _VENDOR_ROWS
+    ]
+    rows.append((_CORRUPT_ROW_ID, "{not json"))
+    version_id = await load_store(tmp_path, {"DestinyVendorDefinition": rows})
+    pin_manifest(monkeypatch, version_id)
+    yield version_id
+    await clear_store()
 
 
-def test_rotator_hashes_filters_by_bright_dust_prefix(vendor_manifest):
-    hashes = _rotator_hashes(vendor_manifest, EVERVERSE_BRIGHT_DUST_ROTATOR_PREFIX)
-    assert hashes == [10, 20, 70, 80]
+async def _rotators(prefix: str) -> list[int]:
+    return await hashes_by_field_prefix(
+        "key", "DestinyVendorDefinition", "vendorIdentifier", prefix
+    )
 
 
-def test_rotator_hashes_filters_by_silver_prefix(vendor_manifest):
-    hashes = _rotator_hashes(vendor_manifest, EVERVERSE_SILVER_ROTATOR_PREFIX)
-    assert hashes == [60]
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_rotator_hashes_filters_by_bright_dust_prefix(vendor_manifest):
+    assert await _rotators(EVERVERSE_BRIGHT_DUST_ROTATOR_PREFIX) == [10, 20, 70, 80]
 
 
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_rotator_hashes_filters_by_silver_prefix(vendor_manifest):
+    assert await _rotators(EVERVERSE_SILVER_ROTATOR_PREFIX) == [60]
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "prefix",
     [
@@ -145,15 +154,21 @@ def test_rotator_hashes_filters_by_silver_prefix(vendor_manifest):
         "EVERVERSE%",
     ],
 )
-def test_rotator_hashes_matches_the_values_scan(vendor_manifest, prefix):
-    # The whole point of the sqlite pushdown: same hashes, same order, every prefix.
-    assert _rotator_hashes(vendor_manifest, prefix) == _rotator_hashes_via_values(
-        vendor_manifest, prefix
-    )
+async def test_rotator_hashes_matches_the_values_scan(vendor_manifest, prefix):
+    # The whole point of the pushdown: the same hashes, for every prefix. Compared as
+    # sets — the pushdown orders by hash where the values() scan yields whatever order
+    # the rows come back in, and the one caller treats the result as a set.
+    with ManifestLookup(vendor_manifest) as lookup:
+        reference = _rotator_hashes_via_values(lookup, prefix)
+    pushed = await _rotators(prefix)
+    assert set(pushed) == set(reference)
+    assert pushed == sorted(pushed)
 
 
-def test_rotator_hashes_empty_when_none_match(vendor_manifest):
-    assert _rotator_hashes(vendor_manifest, "NOTHING_STARTS_WITH_THIS") == []
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_rotator_hashes_empty_when_none_match(vendor_manifest):
+    assert await _rotators("NOTHING_STARTS_WITH_THIS") == []
 
 
 def _item_manifest_with(entry: dict) -> dict:
@@ -297,19 +312,9 @@ def test_group_eververse_offerings_orders_groups_and_sorts_items():
 
 
 def test_eververse_line_armor_ornament_puts_class_emoji_with_target():
-    manifest = {
-        "DestinyInventoryItemDefinition": {
-            7: {
-                "traitIds": ["item.ornament.armor"],
-                "displayProperties": {
-                    "description": (
-                        "Equip this ornament to change the appearance of "
-                        "Hallowfire Heart."
-                    )
-                },
-            }
-        }
-    }
+    # Targets are resolved up front now (see _ornament_targets), so the renderer takes
+    # a plain {hash: exotic} map and does no manifest lookup of its own.
+    targets = {7: "Hallowfire Heart"}
     armor = _item_of(
         "Titan",
         "Titan Ornament",
@@ -318,7 +323,7 @@ def test_eververse_line_armor_ornament_puts_class_emoji_with_target():
         cost=1500,
         rarity="Exotic",
     )
-    line = _eververse_line(armor, manifest)
+    line = _eververse_line(armor, targets)
     assert line.startswith("• [**Arcturus Engine**](")
     assert "— 1500 (:titan: Hallowfire Heart)" in line
 

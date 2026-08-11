@@ -26,10 +26,23 @@ import typing as t
 from dataclasses import dataclass
 from typing import Self
 
-from sqlalchemy import Index, bindparam, case, exists, literal, or_, tuple_
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import (
+    Index,
+    bindparam,
+    case,
+    create_engine,
+    exists,
+    literal,
+    or_,
+    tuple_,
+)
+from sqlalchemy.dialects.postgresql import (
+    JSONB,
+    insert as pg_insert,
+)
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.engine import URL, Engine
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -110,6 +123,76 @@ def reset_db() -> None:
     global db_engine
     db_engine = _build_engine()
     db_session.rebind(async_sessionmaker(db_engine, **cfg.db_session_kwargs))
+    dispose_sync_db_engine()
+
+
+#: The synchronous engine and the URL it was built for. Rebuilt (not just reused) when
+#: ``db_engine`` is repointed, so ``configure_test_db`` moves both halves together.
+_sync_engine: Engine | None = None
+_sync_engine_url: URL | None = None
+
+
+def _sync_url() -> URL:
+    """``db_engine``'s URL, with the async driver swapped for its sync counterpart.
+
+    Derived from the *live* engine rather than ``cfg.db_url`` so it follows
+    ``configure_test_db`` onto the test SQLite file. Postgres needs no swap —
+    ``postgresql+psycopg`` is the same driver either way.
+    """
+    url = db_engine.url
+    return url.set(drivername="sqlite") if url.get_backend_name() == "sqlite" else url
+
+
+def sync_db_engine() -> Engine:
+    """A **synchronous** engine over the same database ``db_engine`` targets.
+
+    Exists for exactly one caller: the Destiny manifest lookup
+    (:mod:`dd.anchor.extensions.bungie_api.manifest`), whose consumers read it from deep
+    inside synchronous model construction — ``DestinyItem.from_sale_item`` and friends
+    cannot ``await``. Those reads run inside ``asyncio.to_thread``, so the blocking
+    calls this engine makes never touch the event loop; the project's "no blocking I/O
+    in coroutine paths" rule is kept by moving the *caller* off the loop, not by
+    pretending the driver is async.
+
+    Nothing else should use this. Every other DB access in the codebase is already
+    async and belongs on ``db_session``.
+    """
+    global _sync_engine, _sync_engine_url
+    url = _sync_url()
+    if _sync_engine is None or _sync_engine_url != url:
+        dispose_sync_db_engine()
+        # Derived from the URL in hand, not cfg: under pytest the configured database
+        # may be Postgres while the engine actually in use is the temp-file SQLite, and
+        # SQLite rejects the ``-c timezone=UTC`` connect option psycopg wants.
+        connect_args = (
+            {} if url.get_backend_name() == "sqlite" else dict(cfg.db_connect_args)
+        )
+        engine_args: dict[str, t.Any] = {"pool_pre_ping": True, "pool_recycle": 3600}
+        if url.get_backend_name() != "sqlite":
+            # AUTOCOMMIT, because these connections are held open for the length of a
+            # post build. In a read transaction that would pin the oldest visible xmin
+            # for a minute at a time and block autovacuum — which matters more here than
+            # anywhere else in the schema, since replacing the manifest deletes a couple
+            # of hundred MB of TOASTed rows that vacuum then has to reclaim.
+            engine_args["isolation_level"] = "AUTOCOMMIT"
+            # A small, hard-capped pool. This sits *alongside* the async engine's
+            # 5+10, and the Pi's Postgres runs with max_connections=25 (see
+            # cfg.db_engine_args) — the manifest never needs more than the handful of
+            # post builds in flight at once, so it does not compete for those slots.
+            engine_args["pool_size"] = 2
+            engine_args["max_overflow"] = 2
+        _sync_engine = create_engine(url, connect_args=connect_args, **engine_args)
+        _sync_engine_url = url
+    return _sync_engine
+
+
+def dispose_sync_db_engine() -> None:
+    """Drop the synchronous engine and its pool, if one was ever built."""
+    global _sync_engine, _sync_engine_url
+    if _sync_engine is not None:
+        _sync_engine.dispose()
+    _sync_engine = None
+    _sync_engine_url = None
 
 
 # Sentinel used as default for session parameters in @ensure_session-decorated methods.
@@ -3463,6 +3546,194 @@ class Cv2Draft(Base):
         )
         result = await session.execute(delete(cls).where(cls.created_at < cutoff))
         return int(result.rowcount or 0)
+
+
+class ManifestLoadInProgress(RuntimeError):
+    """Another process is already loading this manifest version — back off and read
+    whatever is currently active instead of loading a second copy."""
+
+
+class DestinyManifestVersion(Base):
+    """One row per Destiny manifest Bungie has published *and we have loaded*.
+
+    ``version`` is Bungie's own versioned filename
+    (``world_sql_content_<hash>.content``) — the same string the on-disk cache used to
+    be keyed by, and the reason invalidation
+    is free: a new manifest is a new name, so it can never be confused with the copy we
+    hold.
+
+    ``state`` is the load barrier. Rows are inserted ``loading`` and flipped to
+    ``active`` only once every definition row is committed, so a load that dies part-way
+    (the container is redeployed mid-import) leaves rows no reader will ever look at
+    rather than a half-populated manifest that reads as current.
+
+    **A replaced manifest is not deleted when it is replaced — it is deleted when the
+    *next* load starts.** Activating a new version only demotes the old one to
+    ``superseded``. A reader resolves a version id once and then reads through it for
+    the length of a post build; deleting its rows underneath it would turn a
+    mid-render lookup into a miss, and the consumers are full of
+    ``.get(hash, {})`` defaults that would quietly render "Unknown Type" into a
+    published post rather than fail. Deferring the delete to the next load makes that
+    window a week wide instead of milliseconds. The cost is one superseded manifest's
+    worth of rows kept around; the steady state is two, which is what Postgres would
+    have held in dead tuples anyway.
+
+    The ``version`` unique constraint doubles as the cross-process lock. Two anchor
+    containers that both notice a new manifest will both try to claim it; exactly one
+    INSERT wins and the loser gets :class:`ManifestLoadInProgress` and falls back to the
+    manifest already in place. A claim that is never completed (the winner was killed)
+    is reclaimable after :data:`LOAD_LEASE`.
+    """
+
+    __tablename__ = "destiny_manifest_version"
+    __mapper_args__ = {"eager_defaults": True}
+
+    id = Column("id", Integer, primary_key=True, autoincrement=True)
+    version = Column("version", VARCHAR(160), nullable=False, unique=True)
+    state = Column("state", VARCHAR(16), nullable=False, default="loading")
+    created_at = Column("created_at", DateTime, nullable=False)
+    activated_at = Column("activated_at", DateTime, default=None)
+
+    LOADING: t.ClassVar[str] = "loading"
+    ACTIVE: t.ClassVar[str] = "active"
+    SUPERSEDED: t.ClassVar[str] = "superseded"
+
+    #: How long another process's unfinished claim on a version is respected before it
+    #: is treated as wreckage and taken over. Comfortably longer than a real load (a
+    #: download plus ~65k rows, minutes at worst) and shorter than the gap between
+    #: manifests (a week or two), so it can only ever reclaim a genuinely dead load.
+    LOAD_LEASE: t.ClassVar[dt.timedelta] = dt.timedelta(minutes=30)
+
+    @classmethod
+    @ensure_session(db_session)
+    async def active(cls, session: AsyncSession = _UNSET) -> Self | None:
+        """The manifest readers should be reading, or ``None`` if none is loaded."""
+        return (
+            await session.execute(select(cls).where(cls.state == cls.ACTIVE))
+        ).scalar_one_or_none()
+
+    @classmethod
+    @ensure_session(db_session)
+    async def begin_load(cls, version: str, session: AsyncSession = _UNSET) -> int:
+        """Claim ``version`` for loading and return its id.
+
+        First prunes: every version that is neither active nor a live claim goes, rows
+        and all. That is where a superseded manifest is actually deleted, and where the
+        wreckage of a load that was killed mid-import is cleared — re-importing on top
+        of it would collide on the definition primary key.
+
+        Raises :class:`ManifestLoadInProgress` if another process holds a live claim on
+        this version, which is what the ``version`` unique constraint buys: whoever
+        loses the INSERT race backs off instead of loading a second copy.
+        """
+        now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+        reclaimable = (
+            await session.execute(
+                select(cls.id).where(
+                    and_(
+                        cls.state != cls.ACTIVE,
+                        or_(
+                            cls.version != version,
+                            cls.created_at < now - cls.LOAD_LEASE,
+                        ),
+                    )
+                )
+            )
+        ).scalars()
+        for stale_id in list(reclaimable):
+            await session.execute(
+                delete(DestinyManifestDefinition).where(
+                    DestinyManifestDefinition.version_id == stale_id
+                )
+            )
+            await session.execute(delete(cls).where(cls.id == stale_id))
+
+        try:
+            row = (
+                await session.execute(
+                    insert(cls)
+                    .values(
+                        {
+                            cls.version: version,
+                            cls.state: cls.LOADING,
+                            cls.created_at: now,
+                        }
+                    )
+                    .returning(cls.id)
+                )
+            ).scalar_one()
+        except IntegrityError as error:
+            raise ManifestLoadInProgress(
+                f"another process is already loading manifest {version!r}"
+            ) from error
+        return int(row)
+
+    @classmethod
+    @ensure_session(db_session)
+    async def activate(cls, version_id: int, session: AsyncSession = _UNSET) -> None:
+        """Promote ``version_id`` and demote whatever it replaces.
+
+        One transaction, so readers never see two active manifests and never see zero —
+        the outgoing manifest stays *readable* (see the class docstring: its rows
+        survive until the next load) right up to the commit that replaces it.
+        """
+        await session.execute(
+            update(cls)
+            .values({cls.state: cls.SUPERSEDED})
+            .where(and_(cls.id != version_id, cls.state == cls.ACTIVE))
+        )
+        await session.execute(
+            update(cls)
+            .values(
+                {
+                    cls.state: cls.ACTIVE,
+                    cls.activated_at: dt.datetime.now(dt.UTC).replace(tzinfo=None),
+                }
+            )
+            .where(cls.id == version_id)
+        )
+
+    @classmethod
+    @ensure_session(db_session)
+    async def discard(cls, version_id: int, session: AsyncSession = _UNSET) -> None:
+        """Delete a version and its definitions — the cleanup for a failed load."""
+        await session.execute(
+            delete(DestinyManifestDefinition).where(
+                DestinyManifestDefinition.version_id == version_id
+            )
+        )
+        await session.execute(delete(cls).where(cls.id == version_id))
+
+
+class DestinyManifestDefinition(Base):
+    """One manifest definition row: ``(version, table, hash) -> the definition JSON``.
+
+    This is the manifest itself, flattened out of Bungie's per-table SQLite into one
+    table keyed by the table name it came from. Storing it here rather than on disk is
+    what makes a redeploy free (the manifest outlives the container, so a cold start
+    downloads nothing) and what gives the bot an answer while Bungie is unreachable —
+    the failure mode ``plans/manifest_backup_in_git.md`` was opened for.
+
+    ``hash`` is Bungie's **unsigned** 32-bit hash, not the signed ``id`` SQLite stored
+    it under; consumers speak unsigned hashes, so the conversion happens once at load
+    rather than on every lookup.
+
+    ``definition`` is JSONB on Postgres and JSON (text) on SQLite. JSONB costs a little
+    more space than the raw text but parses once at load instead of once per read, which
+    is what makes the projection scans (the item index, the weapon pool, the activity
+    pools) cheap enough to run server-side — they select five fields out of a table
+    whose rows are kilobytes each, and shipping whole rows over the wire is precisely
+    what this move is meant to stop.
+    """
+
+    __tablename__ = "destiny_manifest_definition"
+
+    version_id = Column("version_id", Integer, primary_key=True)
+    table_name = Column("table_name", VARCHAR(64), primary_key=True)
+    hash = Column("hash", BigInteger, primary_key=True)
+    definition = Column(
+        "definition", JSON().with_variant(JSONB(), "postgresql"), nullable=False
+    )
 
 
 _LOCAL_DB_HOSTS = frozenset({None, "", "localhost", "127.0.0.1", "::1"})

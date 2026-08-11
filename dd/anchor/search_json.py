@@ -5,7 +5,6 @@ the downloaded Bungie manifest, for ad-hoc debugging.
 """
 
 import asyncio
-import typing as t
 from pathlib import Path
 from pprint import pprint
 
@@ -17,17 +16,23 @@ ITEM_NAME = "Ferropotent Robes"
 
 
 async def item_ids_from_name(item_name: str) -> list[str]:
-    manifest = await b._build_manifest_dict(
-        await b._get_latest_manifest(schemas.BungieCredentials.api_key)
-    )
-    inventory_items_dict: dict[str, t.Any] = manifest["DestinyInventoryItemDefinition"]
+    """Every inventory-item hash whose display name matches, as strings.
 
+    A projection rather than a walk over the item table: the name is the only field
+    this compares, so it is the only field worth transferring.
+    """
+    rows = await b.scan_projection(
+        schemas.BungieCredentials.api_key,
+        "DestinyInventoryItemDefinition",
+        [b.Field("displayProperties.name")],
+    )
+
+    wanted = item_name.lower().strip()
     item_ids: list[str] = []
-    for item_id, item_data in inventory_items_dict.items():
-        item_name_in_data: str = item_data.get("displayProperties", {}).get("name", "")
-        if item_name.lower().strip() == item_name_in_data.lower().strip():
-            print(f"Found Item ID: {item_id}, Name: {item_name_in_data}")
-            item_ids.append(item_id)
+    for item_id, name in rows:
+        if wanted == (name or "").lower().strip():
+            print(f"Found Item ID: {item_id}, Name: {name}")
+            item_ids.append(str(item_id))
 
     return item_ids
 

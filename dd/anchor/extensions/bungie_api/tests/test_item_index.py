@@ -16,11 +16,14 @@
 # Pure search/resolution logic over an injected in-memory index (no manifest download).
 
 import json
-import sqlite3
 
 import pytest
 
 from dd.anchor.extensions.bungie_api import item_index
+from dd.anchor.tests.manifest_fixtures import clear_store, load_store, pin_manifest
+
+# The pure search/resolution tests need no database; the three _build tests do, and are
+# marked individually rather than marking the module.
 
 
 @pytest.fixture
@@ -55,10 +58,10 @@ def index():
             },
         ],
     }
-    item_index._index_path = "test"
+    item_index._index_version = 1
     yield
     item_index._index = None
-    item_index._index_path = None
+    item_index._index_version = None
 
 
 def test_resolve_prefers_collectible_type_match(index):
@@ -83,7 +86,7 @@ def test_resolve_prefers_newer_season_over_hash():
             {**common, "hash": 100, "collectible": True, "season": 23},  # reissue
         ],
     }
-    item_index._index_path = "test"
+    item_index._index_version = 1
     try:
         assert (
             item_index.resolve_light_gg_url("Recluse (Submachine Gun)")
@@ -91,7 +94,7 @@ def test_resolve_prefers_newer_season_over_hash():
         )
     finally:
         item_index._index = None
-        item_index._index_path = None
+        item_index._index_version = None
 
 
 def test_search_weapon_kind(index):
@@ -114,88 +117,139 @@ def test_cold_index_degrades_gracefully():
     assert item_index.resolve_light_gg_url("Chroma Rush (Auto Rifle)") is None
 
 
-def _make_manifest(tmp_path, rows: list[str], seasons: list[str] | None = None) -> str:
-    """A throwaway manifest SQLite whose item (and optional season) table hold the given
-    raw json blobs."""
-    path = str(tmp_path / "manifest.sqlite")
-    con = sqlite3.connect(path)
-    con.execute("CREATE TABLE DestinyInventoryItemDefinition (json TEXT)")
-    con.executemany(
-        "INSERT INTO DestinyInventoryItemDefinition (json) VALUES (?)",
-        [(r,) for r in rows],
-    )
-    if seasons is not None:
-        con.execute("CREATE TABLE DestinySeasonDefinition (json TEXT)")
-        con.executemany(
-            "INSERT INTO DestinySeasonDefinition (json) VALUES (?)",
-            [(s,) for s in seasons],
-        )
-    con.commit()
-    con.close()
-    return path
-
-
-def test_build_sync_joins_season_numbers(tmp_path):
-    # An item's seasonHash resolves to the season's seasonNumber (review finding #10);
-    # an item with no seasonHash falls back to -1.
-    weapon = json.dumps(
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_build_joins_season_numbers(tmp_path, monkeypatch):
+    # An item's seasonHash resolves to the season's seasonNumber; an item with no
+    # seasonHash falls back to -1.
+    version_id = await load_store(
+        tmp_path,
         {
-            "hash": 100,
-            "seasonHash": 555,
-            "itemType": 3,
-            "itemTypeDisplayName": "Hand Cannon",
-            "displayProperties": {"name": "Fatebringer", "icon": "i"},
-        }
+            "DestinyInventoryItemDefinition": [
+                _item(
+                    100,
+                    {
+                        "seasonHash": 555,
+                        "itemType": 3,
+                        "itemTypeDisplayName": "Hand Cannon",
+                        "displayProperties": {"name": "Fatebringer", "icon": "i"},
+                    },
+                ),
+                _item(
+                    200,
+                    {
+                        "itemType": 3,
+                        "itemTypeDisplayName": "Scout Rifle",
+                        "displayProperties": {"name": "Jade Rabbit", "icon": "i"},
+                    },
+                ),
+            ],
+            "DestinySeasonDefinition": [_item(555, {"seasonNumber": 15})],
+        },
     )
-    seasonless = json.dumps(
-        {
-            "hash": 200,
-            "itemType": 3,
-            "itemTypeDisplayName": "Scout Rifle",
-            "displayProperties": {"name": "Jade Rabbit", "icon": "i"},
-        }
-    )
-    season = json.dumps({"hash": 555, "seasonNumber": 15})
-    path = _make_manifest(tmp_path, [weapon, seasonless], seasons=[season])
+    pin_manifest(monkeypatch, version_id)
 
-    index = item_index._build_sync(path)
+    index = await item_index._build("key")
 
     assert index["fatebringer"][0]["season"] == 15
     assert index["jade rabbit"][0]["season"] == -1  # no seasonHash → sentinel
+    await clear_store()
 
 
-def test_build_sync_skips_malformed_rows(tmp_path):
-    # One good weapon, then a truncated-JSON row and a row missing "hash": the bad rows
-    # must be skipped, not abort the whole build (review finding #9).
-    good = json.dumps(
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_build_survives_a_manifest_with_no_season_table(tmp_path, monkeypatch):
+    """The season table isn't in every manifest; without it every item gets -1 rather
+    than the build failing (the collectible + hash tiebreak then decides recency)."""
+    version_id = await load_store(
+        tmp_path,
         {
-            "hash": 100,
-            "itemType": 3,
-            "itemTypeDisplayName": "Auto Rifle",
-            "displayProperties": {"name": "Chroma Rush", "icon": "i"},
-            "collectibleHash": 1,
-        }
+            "DestinyInventoryItemDefinition": [
+                _item(
+                    100,
+                    {
+                        "seasonHash": 555,
+                        "itemType": 3,
+                        "itemTypeDisplayName": "Hand Cannon",
+                        "displayProperties": {"name": "Fatebringer", "icon": "i"},
+                    },
+                )
+            ]
+        },
     )
-    missing_hash = json.dumps(
-        {
-            "itemType": 3,
-            "displayProperties": {"name": "No Hash"},
-        }
-    )
-    also_good = json.dumps(
-        {
-            "hash": 200,
-            "itemType": 2,
-            "itemTypeDisplayName": "Hunter Armor",
-            "displayProperties": {"name": "Wild Hunt Vest", "icon": "i"},
-        }
-    )
-    path = _make_manifest(
-        tmp_path, [good, "{ this is not json", missing_hash, also_good]
-    )
+    pin_manifest(monkeypatch, version_id)
 
-    index = item_index._build_sync(path)
+    index = await item_index._build("key")
+
+    assert index["fatebringer"][0]["season"] == -1
+    await clear_store()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_build_keeps_only_weapons_and_armour_and_needs_a_name(
+    tmp_path, monkeypatch
+):
+    # The item-type filter runs in the database; a nameless row is dropped here. The
+    # hash comes from the manifest's own primary key rather than the definition body,
+    # so an item whose JSON omits "hash" is still indexed correctly — the old build read
+    # it out of the JSON and had to skip such a row.
+    version_id = await load_store(
+        tmp_path,
+        {
+            "DestinyInventoryItemDefinition": [
+                _item(
+                    100,
+                    {
+                        "itemType": 3,
+                        "itemTypeDisplayName": "Auto Rifle",
+                        "displayProperties": {"name": "Chroma Rush", "icon": "i"},
+                        "collectibleHash": 1,
+                    },
+                ),
+                # A mod: not a weapon or armour, filtered out in SQL.
+                (
+                    300,
+                    json.dumps(
+                        {
+                            "hash": 300,
+                            "itemType": 19,
+                            "displayProperties": {"name": "A Mod"},
+                        }
+                    ),
+                ),
+                # Named armour, but its body carries no "hash" key.
+                (
+                    200,
+                    json.dumps(
+                        {
+                            "itemType": 2,
+                            "itemTypeDisplayName": "Hunter Armor",
+                            "displayProperties": {
+                                "name": "Wild Hunt Vest",
+                                "icon": "i",
+                            },
+                        }
+                    ),
+                ),
+                # No display name at all.
+                (
+                    400,
+                    json.dumps({"hash": 400, "itemType": 3, "displayProperties": {}}),
+                ),
+            ]
+        },
+    )
+    pin_manifest(monkeypatch, version_id)
+
+    index = await item_index._build("key")
 
     assert index["chroma rush"][0]["hash"] == 100
     assert index["wild hunt vest"][0]["hash"] == 200
-    assert "no hash" not in index  # the hash-less row was skipped, not indexed
+    assert "a mod" not in index
+    assert len(index) == 2
+    await clear_store()
+
+
+def _item(hash_: int, body: dict) -> tuple[int, str]:
+    return (hash_, json.dumps(body | {"hash": hash_}))

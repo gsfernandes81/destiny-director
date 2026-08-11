@@ -540,23 +540,32 @@ async def fetch_vendor_data(
             session, access_token, character_class
         )
 
-    manifest_table = await api._build_manifest_dict(
-        await api._get_latest_manifest(schemas.BungieCredentials.api_key)
-    )
-    vendor: api.DestinyVendor = accumulate(
-        [
-            await api.DestinyVendor.request_from_api(
-                destiny_membership=destiny_membership,
-                character_id=character_id,
-                access_token=access_token,
-                manifest_table=manifest_table,
-                vendor_hash=vendor_hash,
-            )
-            for vendor_hash in vendor_hashes
-        ]
-    )
+    # Fetch first, build second. The build reads the manifest through a synchronous
+    # connection several frames deep (``DestinyItem.from_sale_item`` and friends cannot
+    # await), so it runs in a worker thread — which is only possible because nothing in
+    # it needs the network. ``request_from_api`` fused the two and could not be split.
+    responses = [
+        await api.client.fetch_vendor(
+            access_token,
+            destiny_membership.membership_type,
+            destiny_membership.membership_id,
+            character_id,
+            vendor_hash,
+        )
+        for vendor_hash in vendor_hashes
+    ]
 
-    return vendor
+    def _build(manifest_table: api.ManifestLookup) -> api.DestinyVendor:
+        return accumulate(
+            [
+                api.DestinyVendor.from_vendors_api_response(
+                    response=response, manifest_table=manifest_table
+                )
+                for response in responses
+            ]
+        )
+
+    return await api.build_in_thread(schemas.BungieCredentials.api_key, _build)
 
 
 async def fetch_xur_data(webserver_runner: aiohttp.web.AppRunner) -> api.DestinyVendor:

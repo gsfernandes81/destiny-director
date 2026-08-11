@@ -23,17 +23,22 @@ Components V2 builder.
 
 import datetime as dt
 import json
-import sqlite3
 import types
 import typing as t
 
 import aiohttp.web
-import aiosqlite
 import hikari as h
 import pytest
+import pytest_asyncio
 
 from dd.anchor import web
 from dd.anchor.extensions import weekly_reset as wr
+from dd.anchor.tests.manifest_fixtures import (
+    ManifestRows,
+    clear_store,
+    load_store,
+    pin_manifest,
+)
 
 # The three real "Weekly Reset Overview" posts this feature was reverse-engineered from.
 # These are each post's "Resets:"-line value — the *next* Tuesday (when that week's
@@ -1279,31 +1284,30 @@ async def test_handle_delete_503_when_bot_unset(monkeypatch) -> None:
     assert resp.status == 503
 
 
-# --- _build_indexes: batched manifest scans -------------------------------------------
+# --- _build_indexes: the projected activity scans -------------------------------------
 #
-# The two activity scans read in fetchmany batches rather than one fetchall() each, for
-# the same reason as hybrid_post_core.iter_weapon_items. Only the derived names outlive
-# the loop, so the transform must be output-identical — asserted here against the
-# manifest-shaped fixture rather than assumed.
+# The two activity scans are projections now: five fields per activity are selected in
+# the database instead of every definition being read and parsed. Only the derived names
+# outlive the transform, so it must be output-identical — asserted here against the same
+# stored manifest, read back as whole definitions.
 
 
-def _activity_manifest(path: str, n_filler: int = 450) -> None:
-    """A manifest sqlite with more activity rows than one fetchmany batch (200)."""
+def _activity_rows(n_filler: int = 450) -> ManifestRows:
+    """Activity + activity-type rows, more than one load batch of them."""
     strike_type, raid_type = 1, 2
-    activity_types = [
+    activity_types: list[dict[str, t.Any]] = [
         {"hash": strike_type, "displayProperties": {"name": "Strike"}},
         {"hash": raid_type, "displayProperties": {"name": "Raid"}},
     ]
-    # Filler activity-type rows push the real ones across batch boundaries.
     activity_types += [
         {"hash": 100 + i, "displayProperties": {"name": f"Type {i:03d}"}}
         for i in range(n_filler)
     ]
-    activities = [
+    activities: list[dict[str, t.Any]] = [
         {"hash": 1000 + i, "activityTypeHash": raid_type, "displayProperties": {}}
         for i in range(n_filler)
     ]
-    # The rows that must survive, seeded past the first batch as well as inside it.
+    # The rows that must survive, seeded past the first load batch as well as inside it.
     activities.insert(
         3,
         {
@@ -1328,68 +1332,72 @@ def _activity_manifest(path: str, n_filler: int = 450) -> None:
             "displayProperties": {"name": "Master Conquest: The Vault: Customize"},
         },
     )
-    con = sqlite3.connect(path)
-    try:
-        for table, rows in (
-            ("DestinyActivityTypeDefinition", activity_types),
-            ("DestinyActivityDefinition", activities),
-        ):
-            con.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, json)")
-            con.executemany(
-                f"INSERT INTO {table} (id, json) VALUES (?, ?)",
-                [(i, json.dumps(row)) for i, row in enumerate(rows)],
-            )
-        con.commit()
-    finally:
-        con.close()
+    # A row whose classification depends on fields other than the type name, so the
+    # projection is pinned to carry them: battlegrounds classify as strikes by name.
+    activities.insert(
+        310,
+        {
+            "hash": 9004,
+            "displayProperties": {"name": "Battleground: Behemoth"},
+            "activityModeTypes": [3],
+        },
+    )
+    return {
+        "DestinyActivityTypeDefinition": [
+            (int(row["hash"]), json.dumps(row)) for row in activity_types
+        ],
+        "DestinyActivityDefinition": [
+            (int(row["hash"]), json.dumps(row)) for row in activities
+        ],
+    }
 
 
-@pytest.fixture
-def activity_manifest(tmp_path, monkeypatch):
-    path = str(tmp_path / "world.content")
-    _activity_manifest(path)
-
-    async def _fake_manifest(_api_key: object) -> str:
-        return path
+@pytest_asyncio.fixture
+async def activity_manifest(tmp_path, monkeypatch):
+    version_id = await load_store(tmp_path, _activity_rows())
+    pin_manifest(monkeypatch, version_id)
 
     async def _no_weapons() -> list:
         return []
 
-    monkeypatch.setattr(wr.api, "_get_latest_manifest", _fake_manifest)
     monkeypatch.setattr(wr, "get_weapon_pool", _no_weapons)
-    return path
+    yield version_id
+    await clear_store()
 
 
 @pytest.mark.asyncio
-async def test_build_indexes_scans_every_batch(activity_manifest) -> None:
+@pytest.mark.integration
+async def test_build_indexes_reads_the_whole_table(activity_manifest) -> None:
     indexes = await wr._build_indexes()
 
-    # Both an early row and rows past the 200-row batch boundary are present, so the
-    # batching loop did not stop after its first fetchmany.
-    assert indexes.activities["strike"] == ["The Corrupted", "Warden of Nothing"]
+    # Rows early in the table and rows past the load-batch boundary are both present.
+    assert indexes.activities["strike"] == [
+        "Battleground: Behemoth",
+        "The Corrupted",
+        "Warden of Nothing",
+    ]
     assert indexes.conquests["Master"] == ["The Vault"]
-    # Activity-type names come from the *other* batched scan; without it neither strike
-    # would classify at all.
-    assert indexes.activities["strike"]
 
 
 @pytest.mark.asyncio
-async def test_build_indexes_matches_a_fetchall_reference(activity_manifest) -> None:
-    """The pre-fix scans, replayed with fetchall(), must produce the same sets."""
+@pytest.mark.integration
+async def test_build_indexes_matches_a_whole_definition_reference(
+    activity_manifest,
+) -> None:
+    """The pre-projection scans, replayed over the full definitions, must agree.
+
+    This is the check that the five projected fields are the *right* five: drop one that
+    ``_classify_activity`` reads and this reference diverges.
+    """
     strikes: set[str] = set()
     conquest_by_tier: dict[str, set[str]] = {t_: set() for t_ in wr.CONQUEST_TIERS}
-    async with aiosqlite.connect(activity_manifest) as con:
-        cur = await con.cursor()
-        await cur.execute("SELECT json FROM DestinyActivityTypeDefinition")
-        activity_types: dict[int, str] = {}
-        for (row,) in await cur.fetchall():
-            defn = json.loads(row)
-            activity_types[int(defn["hash"])] = (
-                defn.get("displayProperties") or {}
-            ).get("name", "")
-        await cur.execute("SELECT json FROM DestinyActivityDefinition")
-        for (row,) in await cur.fetchall():
-            defn = json.loads(row)
+    with wr.api.ManifestLookup(activity_manifest) as lookup:
+        types_table = _LazyTable(lookup, "DestinyActivityTypeDefinition")
+        activity_types = {
+            int(defn["hash"]): (defn.get("displayProperties") or {}).get("name", "")
+            for defn in types_table.values()
+        }
+        for defn in _LazyTable(lookup, "DestinyActivityDefinition").values():
             raw_name = (defn.get("displayProperties") or {}).get("name", "")
             parsed = wr._parse_conquest_name(raw_name)
             if parsed:
@@ -1405,3 +1413,13 @@ async def test_build_indexes_matches_a_fetchall_reference(activity_manifest) -> 
     assert indexes.conquests == {
         tier: sorted(names) for tier, names in conquest_by_tier.items()
     }
+
+
+def _LazyTable(lookup, table: str):
+    """A whole-definition view of a stored table.
+
+    ``ManifestLookup`` only hands out the tables consumers key into by hash, and the
+    activity tables are scan-only — so the reference above reaches for the table view
+    directly rather than through ``lookup[...]``.
+    """
+    return wr.api.manifest._LazyManifestTable(lookup, table)

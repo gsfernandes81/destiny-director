@@ -16,7 +16,6 @@ from .constants import (
     DESTINY_CLASSES_ENUM,
     DESTINY_ITEM_TYPE_ARMOR,
     DESTINY_ITEM_TYPE_WEAPON,
-    XUR_VENDOR_HASH,
     likely_emoji_name,
 )
 
@@ -607,34 +606,12 @@ class DestinyPresentationNode:
 
 
 class DestinyVendor:
-    @classmethod
-    async def request_from_api(
-        cls,
-        access_token: str,
-        destiny_membership: DestinyMembership,
-        character_id: int,
-        vendor_hash: int = XUR_VENDOR_HASH,
-        manifest_table: dict[str, t.Any] | None = None,
-        manifest_entry: dict[str, t.Any] | None = None,
-    ) -> t.Self:
-        """Deprecated thin wrapper — prefer ``client.fetch_vendor(...)`` +
-        :meth:`from_vendors_api_response`.
-
-        Will raise a VendorNotFound exception if the vendor is not found."""
-        from .client import fetch_vendor
-
-        response = await fetch_vendor(
-            access_token,
-            destiny_membership.membership_type,
-            destiny_membership.membership_id,
-            character_id,
-            vendor_hash,
-        )
-        return cls.from_vendors_api_response(
-            response=response,
-            manifest_table=manifest_table,
-            manifest_entry=manifest_entry,
-        )
+    # ``request_from_api`` (fetch + parse in one await) is gone. It could not be used
+    # any more: the parse reads the manifest through a synchronous connection and so has
+    # to run in a worker thread, which means it cannot be fused with the fetch. Callers
+    # do ``client.fetch_vendor(...)`` then ``manifest.build_in_thread(...)`` around
+    # :meth:`from_vendors_api_response` — the split this method's own docstring already
+    # said to prefer.
 
     @classmethod
     def from_vendors_api_response(

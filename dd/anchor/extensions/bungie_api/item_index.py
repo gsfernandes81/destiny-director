@@ -1,20 +1,24 @@
 """A name → item index over the Destiny manifest, for the rotation editor.
 
 Powers weapon/armor name autocomplete and light.gg link resolution. Built once from the
-cached manifest SQLite (weapon + armor items only) and held in memory; consumers read it
+stored manifest (weapon + armor items only) and held in memory; consumers read it
 synchronously. Everything degrades gracefully when the index isn't warm yet or no Bungie
 API key is configured — autocomplete returns nothing and link resolution returns
-``None`` rather than blocking a request on the (large, slow) manifest download.
+``None`` rather than blocking a request on the manifest.
+
+The build is a **projection**, not a scan: the seven fields an entry keeps are selected
+in the database, so what crosses the wire is those fields for the ~7k weapons and
+armour, not ~39k definitions of a few kilobytes each. That is the shape this index
+always wanted — it discards almost everything it reads — and it is only affordable now
+that the manifest is somewhere that can do the discarding.
 """
 
 import asyncio
-import json
 import logging
-import sqlite3
 import typing as t
 
 from .constants import DESTINY_ITEM_TYPE_ARMOR, DESTINY_ITEM_TYPE_WEAPON
-from .manifest import _get_latest_manifest
+from .manifest import Field, ManifestVersion, ensure_manifest, scan_projection
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +26,17 @@ LIGHT_GG_URL = "https://www.light.gg/db/items/{}/"
 
 # Built index: name.lower() -> list of entries. Only the latest manifest is kept.
 _index: dict[str, list[dict[str, t.Any]]] | None = None
-_index_path: str | None = None
+_index_version: int | None = None
 _build_lock = asyncio.Lock()
+
+_ITEM_FIELDS = (
+    Field("itemType", "int"),
+    Field("displayProperties.name"),
+    Field("itemTypeDisplayName"),
+    Field("displayProperties.icon"),
+    Field("collectibleHash", "int"),
+    Field("seasonHash", "int"),
+)
 
 
 def _plain_name(value: str) -> str:
@@ -31,102 +44,86 @@ def _plain_name(value: str) -> str:
     return value.split(" (")[0].strip()
 
 
-def _season_numbers(con: sqlite3.Connection) -> dict[int, int]:
+async def _season_numbers(api_key: str) -> dict[int, int]:
     """``seasonHash → seasonNumber`` from the manifest, or ``{}`` if unavailable.
 
     ``seasonNumber`` is monotonic across releases (unlike item hashes, which aren't
     assigned in release order), so it's the authoritative "which of two same-named
-    weapons is newer" key. The season table isn't in every manifest/older cache, so a
-    missing table degrades to no season data — the resolver then falls back to the
-    collectible + hash tiebreak."""
-    try:
-        rows = con.execute("SELECT json FROM DestinySeasonDefinition")
-    except sqlite3.Error:
-        return {}
-    seasons: dict[int, int] = {}
-    for (raw,) in rows:
-        try:
-            season = json.loads(raw)
-        except (ValueError, TypeError):
-            continue
-        season_hash = season.get("hash")
-        number = season.get("seasonNumber")
-        if season_hash is not None and number is not None:
-            seasons[season_hash] = number
-    return seasons
+    weapons is newer" key. The season table isn't in every manifest, and one that lacks
+    it simply loads no rows, so a missing table degrades to no season data — the
+    resolver then falls back to the collectible + hash tiebreak."""
+    rows = await scan_projection(
+        api_key, "DestinySeasonDefinition", [Field("seasonNumber", "int")]
+    )
+    return {int(hash_): int(number) for hash_, number in rows if number is not None}
 
 
-def _build_sync(path: str) -> dict[str, list[dict[str, t.Any]]]:
-    """Parse the manifest item table into a name index (runs in a worker thread)."""
+async def _build(api_key: str) -> dict[str, list[dict[str, t.Any]]]:
+    """Project the manifest item table into a name index."""
+    seasons = await _season_numbers(api_key)
+    rows = await scan_projection(
+        api_key,
+        "DestinyInventoryItemDefinition",
+        _ITEM_FIELDS,
+        only={"itemType": (DESTINY_ITEM_TYPE_WEAPON, DESTINY_ITEM_TYPE_ARMOR)},
+    )
     index: dict[str, list[dict[str, t.Any]]] = {}
-    con = sqlite3.connect(path)
-    try:
-        seasons = _season_numbers(con)
-        rows = con.execute("SELECT json FROM DestinyInventoryItemDefinition")
-        for (raw,) in rows:
-            # Skip an individually-malformed row rather than aborting the whole build:
-            # one bad/truncated JSON blob or a row missing "hash" must not take the
-            # entire index down (autocomplete + link baking dead until a restart).
-            try:
-                item = json.loads(raw)
-            except (ValueError, TypeError):
-                continue
-            item_type = item.get("itemType")
-            if item_type not in (DESTINY_ITEM_TYPE_WEAPON, DESTINY_ITEM_TYPE_ARMOR):
-                continue
-            item_hash = item.get("hash")
-            if item_hash is None:
-                continue
-            display = item.get("displayProperties") or {}
-            name = (display.get("name") or "").strip()
-            if not name:
-                continue
-            index.setdefault(name.lower(), []).append(
-                {
-                    "name": name,
-                    "hash": item_hash,
-                    "type": item.get("itemTypeDisplayName", ""),
-                    "item_type": item_type,
-                    "icon": display.get("icon", ""),
-                    "collectible": bool(item.get("collectibleHash")),
-                    # -1 sorts below any real season, so items without a season fall
-                    # back to the hash tiebreak (exactly the prior behaviour for them).
-                    "season": seasons.get(item.get("seasonHash"), -1),
-                }
-            )
-    finally:
-        con.close()
+    for (
+        item_hash,
+        item_type,
+        raw_name,
+        type_name,
+        icon,
+        collectible_hash,
+        season_hash,
+    ) in rows:
+        name = (raw_name or "").strip()
+        if not name:
+            continue
+        index.setdefault(name.lower(), []).append(
+            {
+                "name": name,
+                "hash": int(item_hash),
+                "type": type_name or "",
+                "item_type": item_type,
+                "icon": icon or "",
+                "collectible": bool(collectible_hash),
+                # -1 sorts below any real season, so items without a season fall back
+                # to the hash tiebreak (exactly the prior behaviour for them).
+                "season": seasons.get(season_hash, -1),
+            }
+        )
     return index
 
 
 async def warm(api_key: str) -> None:
     """Build (or rebuild on a manifest update) the index. Safe to call repeatedly.
 
-    Downloads/caches the manifest if needed (slow, once) then parses it in a thread. A
-    no-op without an API key. Call from a background task so requests never block on it.
+    Loads the manifest if it isn't already stored (slow, once per manifest Bungie
+    publishes) then projects it. A no-op without an API key. Call from a background task
+    so requests never block on it.
     """
-    global _index, _index_path
+    global _index, _index_version
     if not api_key:
         return
     async with _build_lock:
         try:
-            path = await _get_latest_manifest(api_key)
+            version: ManifestVersion = await ensure_manifest(api_key)
         except Exception:
             logger.exception("item_index: could not fetch the manifest")
             return
-        if path == _index_path and _index is not None:
+        if version.id == _index_version and _index is not None:
             return
         try:
-            loop = asyncio.get_running_loop()
-            index = await loop.run_in_executor(None, _build_sync, path)
+            index = await _build(api_key)
         except Exception:
-            # Never let a manifest-parse failure kill the warm task uncaught — that
+            # Never let a manifest-read failure kill the warm task uncaught — that
             # surfaces only as a stray "Task exception was never retrieved" log and
             # leaves any previously-built index in place. Log and bail; a later manifest
             # update (or restart) re-attempts the build.
             logger.exception("item_index: could not build the index from the manifest")
             return
-        _index, _index_path = index, path
+        _index, _index_version = index, version.id
         logger.info("item_index: built (%d names)", len(index))
 
 

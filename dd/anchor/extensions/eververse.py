@@ -41,21 +41,23 @@ _ORNAMENT_TARGET_RE = re.compile(r"change the appearance of (.+?)\.")
 _ORNAMENT_TRAIT_IDS = frozenset({"item.ornament.weapon", "item.ornament.armor"})
 
 
-def _rotator_hashes(manifest_table: dict[str, t.Any], prefix: str) -> list[int]:
+async def _rotator_hashes(prefix: str) -> list[int]:
     """Discover daily rotator vendor hashes from the manifest.
 
     These are the vendors whose ``vendorIdentifier`` starts with ``prefix`` — e.g.
     ``EVERVERSE_BRIGHT_DUST_ROTATOR`` or ``EVERVERSE_SILVER_ROTATOR``
     (``..._EXOTIC_GHOSTS`` and friends).
 
-    The search runs in sqlite (``hashes_by_field_prefix``) rather than over
-    ``.values()``: the two scalars this needs per vendor used to cost a full parse of
-    ``DestinyVendorDefinition``, the fattest table in the manifest — ~385 MB RSS, and
-    twice over in :func:`eververse_message_constructor`, where both lookups are live at
-    once.
+    The search runs in the database rather than over the vendor definitions: the one
+    scalar this needs per vendor used to cost reading the whole of
+    ``DestinyVendorDefinition``, the fattest table in the manifest — ~385 MB, and twice
+    over in :func:`eververse_message_constructor`, where both pools are built.
     """
-    return manifest_table["DestinyVendorDefinition"].hashes_by_field_prefix(
-        "vendorIdentifier", prefix
+    return await api.hashes_by_field_prefix(
+        schemas.BungieCredentials.api_key,
+        "DestinyVendorDefinition",
+        "vendorIdentifier",
+        prefix,
     )
 
 
@@ -79,6 +81,30 @@ def _exotic_ornament_target_name(
     description = manifest_entry.get("displayProperties", {}).get("description", "")
     match = _ORNAMENT_TARGET_RE.search(description)
     return match.group(1) if match else None
+
+
+async def _ornament_targets(items: t.Iterable[api.DestinyItem]) -> dict[int, str]:
+    """``item hash -> the exotic it reskins``, for every exotic in ``items``.
+
+    Resolved once, up front, so the renderer needs no manifest at all. It used to hold
+    a live manifest table right through :func:`format_eververse_vendor` and do a lookup
+    per exotic line — which on a database-backed manifest would be a blocking round trip
+    per line, on the event loop, in the middle of building a post.
+    """
+    exotics = sorted({item.hash for item in items if item.is_exotic})
+    if not exotics:
+        return {}
+    by_hash = {item.hash: item for item in items if item.is_exotic}
+
+    def _resolve(manifest_table: api.ManifestLookup) -> dict[int, str]:
+        resolved: dict[int, str] = {}
+        for hash_ in exotics:
+            target = _exotic_ornament_target_name(by_hash[hash_], manifest_table)
+            if target:
+                resolved[hash_] = target
+        return resolved
+
+    return await api.build_in_thread(schemas.BungieCredentials.api_key, _resolve)
 
 
 # Class names that appear as ``item.class_`` on class-specific (armor ornament) items.
@@ -131,7 +157,7 @@ _SHIP_SPARROW_LABEL = {"Ship": "Ship", "Vehicle": "Sparrow", "Sparrow": "Sparrow
 
 def _eververse_line(
     item: api.DestinyItem,
-    manifest_table: dict[str, t.Any] | None,
+    ornament_targets: dict[int, str] | None,
     currency: str = "Bright Dust",
 ) -> str:
     """One rendered offering line: ``• [name](url) — cost (… target) · subtype``.
@@ -142,11 +168,7 @@ def _eververse_line(
     or the class emoji alone when no target resolves; weapon ornaments show just the
     exotic; ships/sparrows get a Ship/Sparrow subtype label."""
     line = f"• [**{item.name}**]({item.lightgg_url}) — {item.costs.get(currency, 0)}"
-    target = (
-        _exotic_ornament_target_name(item, manifest_table)
-        if item.is_exotic and manifest_table is not None
-        else None
-    )
+    target = (ornament_targets or {}).get(item.hash)
     if item.class_ in _CLASS_NAMES:  # armor ornament
         class_emoji = f":{item.class_.lower()}:"
         line += f" ({class_emoji} {target})" if target else f" ({class_emoji})"
@@ -163,13 +185,12 @@ async def _fetch_daily_rotator_offerings(
     *,
     rotator_prefix: str,
     currency: str,
-) -> tuple[list[api.DestinyItem], dict[str, t.Any]]:
+) -> list[api.DestinyItem]:
     """Fetch the deduped items across all active rotator vendors matching
     ``rotator_prefix`` whose cost includes ``currency``.
 
-    Returns the items (deduped by item hash) plus the manifest table, which the
-    renderer needs for the exotic-ornament base-item lookup. Inactive rotators
-    (``VendorNotFound``) are skipped so the post still succeeds.
+    Returns the items, deduped by item hash. Inactive rotators (``VendorNotFound``)
+    are skipped so the post still succeeds.
     """
     access_token = await api.refresh_api_tokens(webserver_runner)
 
@@ -192,41 +213,48 @@ async def _fetch_daily_rotator_offerings(
             for class_ in ("Hunter", "Titan", "Warlock")
         ]
 
-    manifest_table = await api._build_manifest_dict(
-        await api._get_latest_manifest(schemas.BungieCredentials.api_key)
-    )
-    rotator_hashes = _rotator_hashes(manifest_table, rotator_prefix)
+    rotator_hashes = await _rotator_hashes(rotator_prefix)
 
-    cost_match = currency.lower()
-    items: dict[int, api.DestinyItem] = {}  # dedupe by item hash across classes
+    # Every vendor is fetched before anything is built, so the manifest-backed
+    # construction can run in one worker thread rather than interleaving blocking
+    # manifest reads with the network calls on the event loop.
+    responses = []
     for character_id in character_ids:
         for vendor_hash in rotator_hashes:
             try:
-                response = await api.client.fetch_vendor(
-                    access_token=access_token,
-                    membership_type=membership.membership_type,
-                    membership_id=membership.membership_id,
-                    character_id=character_id,
-                    vendor_hash=vendor_hash,
+                responses.append(
+                    await api.client.fetch_vendor(
+                        access_token=access_token,
+                        membership_type=membership.membership_type,
+                        membership_id=membership.membership_id,
+                        character_id=character_id,
+                        vendor_hash=vendor_hash,
+                    )
                 )
             except api.VendorNotFound:
                 # Rotator is not currently active; skip it.
                 continue
 
+    cost_match = currency.lower()
+
+    def _build(manifest_table: api.ManifestLookup) -> list[api.DestinyItem]:
+        items: dict[int, api.DestinyItem] = {}  # dedupe by item hash across classes
+        for response in responses:
             vendor = api.DestinyVendor.from_vendors_api_response(
                 response=response, manifest_table=manifest_table
             )
             for sale_item in vendor.sale_items:
                 if cost_match in str(sale_item.costs).lower():
                     items.setdefault(sale_item.hash, sale_item)
+        return list(items.values())
 
-    return list(items.values()), manifest_table
+    return await api.build_in_thread(schemas.BungieCredentials.api_key, _build)
 
 
 async def fetch_daily_bright_dust_offerings(
     webserver_runner: aiohttp.web.AppRunner,
-) -> tuple[list[api.DestinyItem], dict[str, t.Any]]:
-    """Fetch the deduped daily bright-dust rotator items + the manifest table."""
+) -> list[api.DestinyItem]:
+    """Fetch the deduped daily bright-dust rotator items."""
     return await _fetch_daily_rotator_offerings(
         webserver_runner,
         rotator_prefix=api.EVERVERSE_BRIGHT_DUST_ROTATOR_PREFIX,
@@ -236,19 +264,18 @@ async def fetch_daily_bright_dust_offerings(
 
 async def fetch_daily_silver_offerings(
     webserver_runner: aiohttp.web.AppRunner,
-) -> tuple[list[api.DestinyItem], dict[str, t.Any]]:
-    """Fetch the deduped featured daily Silver rotator items + the manifest table.
+) -> list[api.DestinyItem]:
+    """Fetch the deduped featured daily Silver rotator items.
 
     Items the bot account already owns are reported at 0 Silver by the vendor; drop
     them so the post never shows a misleading "— 0".
     """
-    items, manifest_table = await _fetch_daily_rotator_offerings(
+    items = await _fetch_daily_rotator_offerings(
         webserver_runner,
         rotator_prefix=api.EVERVERSE_SILVER_ROTATOR_PREFIX,
         currency="Silver",
     )
-    items = [item for item in items if item.costs.get("Silver", 0) > 0]
-    return items, manifest_table
+    return [item for item in items if item.costs.get("Silver", 0) > 0]
 
 
 async def eververse_message_constructor(bot: CachedFetchBot) -> HMessage:
@@ -298,23 +325,25 @@ async def eververse_message_constructor(bot: CachedFetchBot) -> HMessage:
         hunter_sale_items | titan_sale_items | warlock_sale_items | common_sale_items
     )
 
-    daily_items, daily_manifest_table = await fetch_daily_bright_dust_offerings(
-        api.get_webserver_runner()
-    )
-    silver_items, _ = await fetch_daily_silver_offerings(api.get_webserver_runner())
+    daily_items = await fetch_daily_bright_dust_offerings(api.get_webserver_runner())
+    silver_items = await fetch_daily_silver_offerings(api.get_webserver_runner())
 
     return await format_eververse_vendor(
         eververse_data,
         bot,
         daily_items=daily_items,
         silver_items=silver_items,
-        manifest_table=daily_manifest_table,
+        # Resolved across every pool at once — the weekly items included, which the old
+        # per-line lookup covered only because it held a whole manifest table open.
+        ornament_targets=await _ornament_targets(
+            [*eververse_data.sale_items, *daily_items, *silver_items]
+        ),
     )
 
 
 def _render_offering_groups(
     groups: list[tuple[str, str, list[api.DestinyItem]]],
-    manifest_table: dict[str, t.Any] | None,
+    ornament_targets: dict[int, str] | None,
     currency: str,
 ) -> str:
     """Render the type-grouped offering lines for one currency pool as markdown."""
@@ -322,7 +351,7 @@ def _render_offering_groups(
     for emoji_name, header, items in groups:
         header_prefix = f":{emoji_name}: " if emoji_name else ""
         lines = [f"{header_prefix}**{header}**"]
-        lines += [_eververse_line(item, manifest_table, currency) for item in items]
+        lines += [_eververse_line(item, ornament_targets, currency) for item in items]
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
@@ -332,7 +361,7 @@ async def format_eververse_vendor(
     bot: CachedFetchBot,
     daily_items: list[api.DestinyItem] | None = None,
     silver_items: list[api.DestinyItem] | None = None,
-    manifest_table: dict[str, t.Any] | None = None,
+    ornament_targets: dict[int, str] | None = None,
 ) -> HMessage:
     emoji_dict = await fetch_emoji_dict(bot)
     daily_items = daily_items or []
@@ -353,7 +382,7 @@ async def format_eververse_vendor(
     bright_dust_body = (
         _render_offering_groups(
             _group_eververse_offerings(list(pool.values())),
-            manifest_table,
+            ornament_targets,
             "Bright Dust",
         )
         or "No Bright Dust offerings are available right now."
@@ -378,7 +407,7 @@ async def format_eververse_vendor(
         container.add_text_display("## :silver: Silver Offerings")
         container.add_separator(spacing=h.SpacingType.SMALL, divider=False)
         container.add_text_display(
-            _render_offering_groups(silver_groups, manifest_table, "Silver")
+            _render_offering_groups(silver_groups, ornament_targets, "Silver")
         )
 
     container.add_separator(divider=True)
