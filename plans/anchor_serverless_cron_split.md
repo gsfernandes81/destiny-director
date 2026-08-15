@@ -204,13 +204,11 @@ sand it down:
   wasted seconds and an easy way into a Discord rate limit. Sync from a deploy step
   instead.
 
-**Why the simpler "drop Discord entirely" variant is closed.** Killing interactions
-outright would remove the public key, the sync problem and the 3-second budget in one
-move. It is foreclosed by work already done: `plans/anchor_command_web_migration.md` §Set
-C deliberately keeps 10 entries in Discord, including three context menus whose input
-*is* the right-clicked message ("no web equivalent short of pasting message links") and
-`/control_panel`, the entry point into the web UI itself. That set was chosen on purpose;
-this plan should not quietly reverse it.
+**The dropout is avoidable, at a price.** Killing anchor's Discord surface entirely
+removes the public key, the sync problem and the 3-second budget in one move — and it is
+not as foreclosed as it first looks. **See §6**, which is where the interesting design
+work is; §2b as written above is the version that keeps every command where it is and
+eats the dropout.
 
 ---
 
@@ -264,11 +262,126 @@ Prod deploys stay the owner's call, per `CLAUDE.md`.
 
 ## 5. Open questions for the owner
 
-- **Is the 3-second cold-start miss acceptable?** Everything else here is mechanical;
-  this is the one genuine behaviour regression, and it is a judgement call about your own
-  daily use of `/control_panel`.
+- **§6 or §2b** — eliminate the dropout by emptying anchor's Discord surface, or keep
+  every command where it is and live with one failed invocation per idle period. §6 is
+  strictly better UX and strictly more work, and it depends on un-deferring a decision
+  from 2026-08-05.
 - **Do dev and prod both need this**, or is "turn dev's anchor off" the answer for half
   of it — with serverless applied only to prod?
 - **One cron service or two?** `0 4,17 * * *` with an hour-aware dispatcher keeps it to
   one service; a separate nightly service for the CV2 prune keeps the maintenance job's
   failures out of the posting job's logs.
+
+---
+
+## 6. Eliminating the dropout instead of tolerating it
+
+### 6a. The two rules that decide everything
+
+Deferring **does** work mechanically, and it is worth being precise about why, because it
+sounds like it should solve this outright. An interaction token is valid for **15
+minutes**, and the follow-up endpoints (`POST`/`PATCH /webhooks/{app_id}/{token}/...`)
+take the token *as* the credential — no auth header, no relationship to the socket the
+original POST arrived on. So any process holding the payload can finish the work long
+after some other process ACKed it.
+
+Two Discord rules constrain who can do what, and neither has a workaround:
+
+1. **A modal must be the _first_ response.** `respond_with_modal` is response type 9;
+   there is no defer-then-modal. `dd/anchor/embeds.py:178` already states this
+   ("``respond_with_modal`` must be the first response on the button's context").
+2. **Only a message's author can edit it.** No permission grants another bot
+   `message.edit()` on anchor's post.
+
+Rule 1 disqualifies the deferring proxy for the modal commands. Rule 2 disqualifies
+beacon for the editing commands. They bite different rows:
+
+| Entry | Modal-first? | Edits anchor's own message? | Thin handoff? |
+| --- | --- | --- | --- |
+| `/control_panel`, `/help`, `/source_code` | no | no | yes — a link |
+| `/post components` | no | no | yes — `Cv2Draft` + link |
+| `Edit post` (CV2 path) | no | no | yes — `_hand_off_to_web` |
+| `Copy post` (CV2 path) | no | no | yes — `_hand_off_to_web` |
+| `Edit post` (embed path) | **yes** | **yes** (`message.edit`, `posts.py:297`) | no |
+| `Copy post` (embed path) | **yes** | no (sends new) | no |
+| `/post embed` | **yes** | no (sends new) | no |
+| `Convert to components` | no | **yes** (`message.edit` in place) | no |
+| `ls_update` | no | **yes** (`msg_to_update.edit`, `lost_sector.py:59`) | no |
+| `/testing` ×2 | — | — | test_env only (25d81b8) |
+
+### 6b. Verdict on the three candidate mitigations
+
+**Deferring front door (a minimal bot in front of a sleeping anchor).** Works, and holds
+only the **public key** — never the bot token — since the initial ACK is just the HTTP
+response to Discord's POST. Rejected on four counts, in descending order of weight:
+
+- Rule 1 exempts the three modal commands, which are precisely the ones with no cheaper
+  fix. The proxy would need a pass-through list, and pass-through means waiting for
+  anchor, i.e. the dropout.
+- **Deferring is irreversible.** Once ACKed you *must* follow up. If anchor fails to
+  wake, the operator gets a permanent "thinking…" — worse than "did not respond", which
+  at least reads as "retry".
+- **The ephemeral flag is chosen at defer time.** The proxy has to know per command
+  whether the eventual response is ephemeral (`ls_update` responds `ephemeral=True`;
+  handoff errors do too). That is a second home for command semantics, in a different
+  service, guaranteed to drift from the first.
+- ~40–60 MB for a Python aiohttp process is 15–25% of anchor's 240 MB **permanently**,
+  capping the saving near 75–80% rather than 90%, plus a second service and a
+  private-network hop to operate. (A Cloudflare Worker would be free and does Ed25519 in
+  WebCrypto — worth remembering, but it is a third platform for one endpoint.)
+
+**Move commands to beacon.** Correct for every row above marked *thin handoff*: they mint
+a `Cv2Draft` and return a URL, needing nothing from anchor's process. Beacon is already
+in Kyber's guild (`emoji_servers=[cfg.kyber_discord_server_id]`, `beacon/__main__.py`) so
+the context-menu guild scope carries over, and `owner_only` is already documented as
+"beacon's per-command gate" (`dd/common/auth.py:22-23`) — this is an established pattern
+here, not a new one. Blocked by rule 2 for the three editing rows. One wrinkle if adopted:
+`_is_own` compares against `bot.get_me()` (`posts.py:194-197`), which on beacon resolves
+to beacon — it would need to compare against anchor's application id.
+
+**Cut commands.** The lever that unblocks the rest, and mostly already written down.
+
+### 6c. The combination — anchor registers zero commands
+
+Put together, the whole surface clears:
+
+- **Six thin handoffs → beacon.** `/control_panel`, `/post components`, `Edit post`(CV2),
+  `Copy post`(CV2), `/help`, `/source_code`. Each is a DB write plus a link, and **the
+  link click is what wakes anchor** — moving the cold start onto a browser, which
+  tolerates 15 seconds, and off Discord, which allows 3.
+- **Three modal paths → the web embed builder.** `/post embed`, `Edit post`(embed),
+  `Copy post`(embed) are exactly **Phase 2 of `plans/anchor_command_web_migration.md`**.
+  Building it retires all three and rule 1 with them.
+- **`Convert to components` → a draft, not an in-place edit.** Beacon mints a
+  `Cv2Draft` with `ACTION_EDIT` prefilled from `embeds_to_container(message.embeds)`;
+  the actual `message.edit` happens on publish from anchor's builder page, where anchor
+  is awake because you are on its page. Rule 2 is satisfied by anchor's *token* doing the
+  edit, which it still does.
+- **`ls_update` → web**, per the already-written `plans/ls_update_web_migration.md`.
+- **`/testing` ×2** are gated to `test_env` (25d81b8) and never register in production.
+
+The result: **anchor has no interactions endpoint, no public key, no command sync, no
+3-second budget and no front door.** It is an aiohttp web app plus a cron dispatcher.
+`__main__.py` keeps a plain REST client and drops lightbulb entirely. The dropout is not
+mitigated — there is nothing left for it to happen to.
+
+Note what does *not* move: anchor still posts every feed and still edits its own messages,
+from the cron process and from web publish actions, both using anchor's token over REST.
+Only the **interaction entry point** relocates.
+
+### 6d. The decision this actually asks for
+
+§6 is not free, and its cost is a reversal: **Phase 2 was deferred indefinitely by the
+owner on 2026-08-05**, keeping `/post embed` in Discord. §6 only reaches zero-dropout if
+that is un-deferred. That is the owner's call and this plan should not assume it.
+
+If Phase 2 stays deferred, the useful middle is available and is worth more than it
+sounds:
+
+> Move the six thin handoffs to beacon anyway, and keep a RESTBot on anchor for **only**
+> the modal and editing commands. The commands you touch daily (`/control_panel` above
+> all) never drop; the dropout survives only on the handful you reach for occasionally.
+
+That keeps the public key and `sync_commands=False` complexity from §2b, so it is not a
+simplification — but it moves the failure from the most-used command to the least-used
+ones, which is most of the felt benefit for a fraction of the work.
