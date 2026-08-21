@@ -2,18 +2,48 @@
 
 # Debian-slim dev environment. Toolchain is baked; the app source is
 # bind-mounted at /workspace at runtime (see docker-compose.dev.yml), so it is
-# NOT copied into the image. The container runs no network service — access is
-# via `docker exec` from the Pi host.
+# NOT copied into the image. The container's payload is its sshd: that is the
+# foreground process (see docker-entrypoint.dev.sh), and the way in is either
+# `ssh` to the published port or `docker exec` from the Pi host.
+
+# ── abduco, built from source ───────────────────────────────────────────────
+# Built rather than installed because abduco is NOT in bookworm: Debian has it in
+# trixie and sid only, so `apt-get install abduco` fails this build outright, and
+# the trixie .deb is linked against a newer glibc than this base carries. It is
+# one C file with no dependency beyond libc, so a throwaway stage holding a
+# compiler costs the final image nothing and it gains a 40KB binary.
+#
+# The tarball is pinned by hash and a mismatch must FAIL the build rather than be
+# retried: this stage compiles what it downloads, and the result then runs in a
+# container holding git push keys, a Railway token and the bots' .env.
+FROM python:3.13-slim-bookworm AS abduco-build
+ARG ABDUCO_VERSION=0.6
+ARG ABDUCO_SHA256=c90909e13fa95770b5afc3b59f311b3d3d2fdfae23f9569fa4f96a3e192a35f4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc libc6-dev make curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSLo /tmp/abduco.tar.gz \
+        "https://www.brain-dump.org/projects/abduco/abduco-${ABDUCO_VERSION}.tar.gz" \
+    && echo "${ABDUCO_SHA256}  /tmp/abduco.tar.gz" | sha256sum -c - \
+    && tar xzf /tmp/abduco.tar.gz -C /tmp \
+    && make -C "/tmp/abduco-${ABDUCO_VERSION}" \
+    && install -m 0755 "/tmp/abduco-${ABDUCO_VERSION}/abduco" /usr/local/bin/abduco
+
+# ── the container itself ────────────────────────────────────────────────────
 FROM python:3.13-slim-bookworm AS dev
 ARG USERNAME=dev
 ARG USER_UID=1000
 ARG USER_GID=1000
 
-# fish is the interactive shell (matches the host); bash stays the dev account's
-# login shell for Claude Code + entrypoint/make tooling. openssh-client is
+# fish is the dev account's LOGIN shell as well as its interactive one (it matches
+# the shell on the host). That is the setting `ssh dd-dev` obeys and nothing else
+# is: sshd runs the shell out of /etc/passwd and consults neither $SHELL nor an
+# alias. The /etc/shells line is added rather than assumed, because that is what
+# `chsh` and anything else consulting it read. openssh-client is
 # required for git push over git@github.com (Debian's git does not pull an ssh
 # client under --no-install-recommends). openssh-server runs the in-container
-# sshd (port 2222, non-root) so Zed can remote directly in (see sshd_config.dev).
+# sshd (port 2222, non-root) — the container's foreground process, and what Zed
+# remotes into (see sshd_config.dev).
 # libjemalloc2 lets the devbot runner (docker-run-devbot.sh) LD_PRELOAD jemalloc so
 # a locally-run dev bot mirrors the deployed image's allocator (the LD_PRELOAD/MALLOC_CONF
 # ENV in the repo-root Dockerfile) for RAM work.
@@ -27,14 +57,20 @@ ARG USER_GID=1000
 # Makefile passes (--single-transaction --quick --no-tablespaces — the last is a MySQL
 # 8 flag MariaDB also honours; verified against 10.11). The `mysql` REPL comes with it,
 # which is also how you would inspect the old database during a cutover.
-# screen keeps a long step alive across a dropped connection. Everything here is driven
-# over SSH from the Pi host or from Zed, and `make mysql-to-postgres` is minutes of
-# mysqldump and row copying under one process: lose the session mid-copy and the run
-# dies partway, which is the worst state for a migration to stop in. Start the window
-# inside `screen -S cutover` and a dropped link costs a reconnect rather than a restart.
+# abduco (from the stage above) is what a session started over ssh lives in, and it
+# is not an accessory: ssh IS how this container is used, so a claude — or a
+# `make mysql-to-postgres`, which is minutes of mysqldump and row copying under one
+# process — started outside a session dies with the link that carried it, and a
+# cutover stopped partway is the worst state for a migration to be in. It replaces
+# screen here, which was installed for exactly that job: abduco is a detach/attach
+# and nothing else — no key handling beyond Ctrl-\ , no status line, no window
+# management — so a full-screen TUI underneath it keeps every key it expects.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential git make fish screen openssh-client openssh-server curl gnupg ca-certificates tzdata libjemalloc2 postgresql-client mariadb-client \
-    && rm -rf /var/lib/apt/lists/*
+        build-essential git make fish openssh-client openssh-server curl gnupg ca-certificates tzdata libjemalloc2 postgresql-client mariadb-client \
+    && rm -rf /var/lib/apt/lists/* \
+    && if ! grep -qx /usr/bin/fish /etc/shells; then echo /usr/bin/fish >> /etc/shells; fi
+
+COPY --from=abduco-build /usr/local/bin/abduco /usr/local/bin/abduco
 
 # Node 22 LTS + Claude Code.
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
@@ -76,13 +112,16 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Create the dev user at the host owner's uid/gid (passed as build args — see
 # Makefile `dev-up`). Guard against an already-present gid/uid so the build won't
-# hard-fail if the host owner collides with a base-image account.
+# hard-fail if the host owner collides with a base-image account. The login shell
+# is fish, set with usermod as well as at useradd so the collision branch — where
+# the uid already exists and useradd is skipped — cannot quietly keep /bin/sh.
 RUN if ! getent group "${USER_GID}" >/dev/null; then \
         groupadd --gid "${USER_GID}" "${USERNAME}"; \
     fi \
     && if ! getent passwd "${USER_UID}" >/dev/null; then \
-        useradd --uid "${USER_UID}" --gid "${USER_GID}" --shell /bin/bash -m "${USERNAME}"; \
+        useradd --uid "${USER_UID}" --gid "${USER_GID}" --shell /usr/bin/fish -m "${USERNAME}"; \
     fi \
+    && usermod --shell /usr/bin/fish "$(getent passwd "${USER_UID}" | cut -d: -f1)" \
     && mkdir -p /workspace && chown "${USER_UID}:${USER_GID}" /workspace
 
 # Venv lives OUTSIDE /workspace so the bind-mount can't shadow the pre-built venv.
@@ -92,15 +131,25 @@ RUN if ! getent group "${USER_GID}" >/dev/null; then \
 # Claude's onboarding/trust survives `make dev-up` rebuilds. GH_CONFIG_DIR does the same
 # for `gh auth login` (gh writes hosts.yml/config.yml there — with no keyring in this slim
 # image it falls back to storing the token in that file), persisted via the dd-gh volume.
-# HISTFILE points bash history into the persisted .local/share volume. The entrypoint
+# HISTFILE points bash history into the persisted .local/share volume, and stays
+# pointed there now that fish is the login shell: bash is still what every script in
+# here runs under, and fish's own history lands in ~/.local/share/fish, which is the
+# same volume. The entrypoint
 # publishes all of these to SSH sessions via ~/.ssh/environment (it dumps `env`), so no
 # entrypoint edit is needed.
+# ABDUCO_CMD is set for a blunt reason: abduco's compiled-in default command is `dvtm`,
+# which is not installed here, so `abduco -c work` with no command would fail rather
+# than give you a shell. It names fish for the same reason the passwd entry does — an
+# abduco session is a shell someone works in. Its sockets need no setting: they go in
+# $HOME/.abduco, which is on the container filesystem and deliberately NOT on a volume,
+# because a socket that outlived its container is a session that no longer exists.
 # RAILWAY_NO_AUTO_UPDATE is Railway's own documented switch, and it belongs here
 # because RAILWAY_VERSION above PINS the CLI: a binary that updates itself would drift
 # off the pin on somebody's first command, and the version that fixed or broke something
 # would no longer be the one the image says it installed. Set as an ENV rather than in
 # the Makefile alone so it also covers an interactive `railway ...` over SSH.
 ENV TZ=Etc/UTC \
+    ABDUCO_CMD=/usr/bin/fish \
     RAILWAY_NO_AUTO_UPDATE=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -119,8 +168,13 @@ WORKDIR /workspace
 # otherwise uv/claude/railway can't write to them. .ssh-host holds the persisted
 # sshd host key (dd-ssh-host volume). .host-ssh needs no pre-create — it's a
 # directory bind mount that inherits the mounted .ssh dir's ownership.
+# .config/fish and .abduco are NOT volumes — they are here so the config lands with
+# the right owner and so the 700 abduco insists on is set once, rather than left to
+# the umask of whoever starts the first session.
 RUN mkdir -p /home/dev/.cache/uv /home/dev/.claude /home/dev/.railway /home/dev/.config/gh \
-    /home/dev/.ssh-host /home/dev/.zed_server /home/dev/.local/share
+    /home/dev/.config/fish /home/dev/.ssh-host /home/dev/.zed_server /home/dev/.local/share \
+    /home/dev/.abduco \
+    && chmod 700 /home/dev/.ssh-host /home/dev/.abduco
 
 # Pre-build the full dependency set (dev + speedups) into /home/dev/venv. The
 # editable project is added at container start once /workspace is mounted.
@@ -129,16 +183,22 @@ RUN --mount=type=cache,target=/home/dev/.cache/uv,uid=${USER_UID},gid=${USER_GID
     uv sync --frozen --no-install-project
 
 # In-container sshd config (Zed-remote / direct SSH on port 2222, non-root `dev`).
+# This is the container's foreground process — see docker-entrypoint.dev.sh.
 COPY --chown=${USER_UID}:${USER_GID} sshd_config.dev /home/dev/sshd_config
 EXPOSE 2222
+
+# fish is the login shell, and this is the half of that which puts every login shell
+# in /workspace rather than in the home directory. Not on a volume, so a rebuild is
+# what updates it.
+COPY --chown=${USER_UID}:${USER_GID} config.fish.dev /home/dev/.config/fish/config.fish
 
 # Interactive login walkthrough (git SSH / GitHub / Railway / Claude), driven from
 # the host by `make dev` / `make dev-login`. Idempotent — see the script header.
 COPY --chown=${USER_UID}:${USER_GID} docker-login.dev.sh /home/dev/login.sh
 
-# Foreground supervisor that runs + health-recycles `claude remote-control`. Launched
-# by the entrypoint (sshd runs in the background); only recycles a wedged daemon at
-# 0/32 — see the script header.
+# Supervisor that runs + health-recycles `claude remote-control`. Started by the
+# entrypoint ONLY under DD_REMOTE_CONTROL=1, in the background behind sshd; it only
+# recycles a wedged daemon at 0/32 — see the script header.
 COPY --chown=${USER_UID}:${USER_GID} docker-rc-supervisor.dev.sh /home/dev/rc-supervisor.sh
 
 COPY --chown=${USER_UID}:${USER_GID} docker-entrypoint.dev.sh /home/dev/entrypoint.sh

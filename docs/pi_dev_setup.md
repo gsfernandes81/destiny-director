@@ -2,15 +2,27 @@
 
 Develop Destiny Director inside a long-lived Docker container on a Raspberry Pi 5
 (`linux/arm64`). The primary workflow is terminal-based: `ssh` into the Pi host →
-`docker exec` into the container → run `claude` / git / make. An in-container sshd
-(port 2222) additionally lets **Zed remote directly into `/workspace`** (see
+`make dev-claude` / `make dev-shell` into the container → run `claude` / git / make.
+The container's **foreground process is its own sshd** (port 2222), which also lets
+**Zed remote directly into `/workspace`** (see
 [Zed remote / SSH access](#zed-remote--ssh-access)). The container bakes the toolchain
-(uv + Node/Claude Code + Railway CLI + GitHub CLI + make); the repo is bind-mounted, so edits
-on the host clone and inside the container are the same files.
+(uv + Node/Claude Code + Railway CLI + GitHub CLI + make + abduco); the repo is bind-mounted,
+so edits on the host clone and inside the container are the same files.
+
+**Hold every long-lived session in `abduco`.** `make dev-claude` is
+`abduco -A claude claude` — it attaches the session named `claude`, creating it if it is
+not there, so it is the same command whether you are starting the work or coming back to
+it, and the same session however you arrived. `Ctrl-\` detaches and leaves what is under
+it running. A claude — or a `make mysql-to-postgres`, which is minutes of mysqldump and
+row copying under one process — started *outside* a session dies with the link that
+carried it, and a cutover stopped partway is the worst state for a migration to be in.
+abduco is a detach/attach and nothing else (no status line, no window management, no key
+handling past `Ctrl-\`), so the TUI underneath keeps every key it expects. It replaced
+`screen`, which was in the image for exactly that job.
 
 Files: `Dockerfile.dev`, `docker-entrypoint.dev.sh`, `docker-compose.dev.yml`,
-`sshd_config.dev`. Git identity keys live in a gitignored `.dev-ssh/` dir that rides
-along with the clone.
+`sshd_config.dev`, `config.fish.dev`. Git identity keys live in a gitignored `.dev-ssh/`
+dir that rides along with the clone.
 
 ## Prerequisites (assumed already done on the Pi)
 
@@ -68,8 +80,10 @@ Register each **public** key with its GitHub account (Settings → SSH keys):
 #    re-run. Run it on the Pi host, in the clone:
 make dev
 
-# 5. Enter the container over the Pi host's sshd (fish is the interactive shell).
-ssh -t <pi-user>@<pi-ip> 'docker exec -it dd-dev fish'
+# 5. Enter the container. fish is the dev account's login shell as well as its
+#    interactive one, and lands you in /workspace either way.
+ssh -t <pi-user>@<pi-ip> 'cd <clone> && make dev-shell'    # a shell
+ssh -t <pi-user>@<pi-ip> 'cd <clone> && make dev-claude'   # a claude, in abduco
 ```
 
 `make dev` = `make dev-up` (build + start) + `make dev-login` (the login walkthrough).
@@ -85,8 +99,11 @@ Host dd
   HostName <pi-ip>
   User <pi-user>
   RequestTTY yes
-  RemoteCommand docker exec -it dd-dev fish
+  RemoteCommand docker exec -it dd-dev abduco -A claude claude
 ```
+
+(`docker exec -it dd-dev fish` for a plain shell instead. Either works; the abduco one
+is the session you come back to.)
 
 **uid note:** the container `dev` user is uid 1000, matching Raspberry Pi OS's default
 first user, so bind-mounted files (source + `.dev-ssh/` keys) line up. If your Pi user's
@@ -119,18 +136,24 @@ claude auth login     # prints a URL — open on your laptop, paste the code bac
 claude auth status    # verify
 ```
 
-**Claude Remote Control starts automatically.** The entrypoint runs a supervisor
-(`docker-rc-supervisor.dev.sh`, baked in at `/home/dev/rc-supervisor.sh`) as the
-container's **foreground** process — so the Claude session is what `docker logs` shows —
-that launches `claude remote-control --spawn worktree` as soon as you're signed in (it
-polls auth every ~10s), so you can drive this container's sessions from
+**Claude Remote Control is OFF by default.** It used to start on every boot as the
+container's foreground process; it is opt-in now. The way into this container is a shell
+plus abduco, and a remote-control daemon with nobody driving it is a live claude nobody
+is watching, sitting on both git push identities, a Railway token with prod in reach and
+the bots' `.env`. Turn it on for a spell — a session driven from the app while you're
+away from a terminal — with `DD_REMOTE_CONTROL=1` in `.env`, then `make dev-up`. It is
+read at container start, so it lands on a recreate and **not** on a bare
+`docker restart`. `make dev-rc-log` reads its log.
+
+With it on, the entrypoint starts the supervisor (`docker-rc-supervisor.dev.sh`, baked in
+at `/home/dev/rc-supervisor.sh`) in the background behind sshd, and it launches
+`claude remote-control --spawn worktree` as soon as you're signed in (it polls auth every
+~10s), so you can drive this container's sessions from
 [claude.ai/code](https://claude.ai/code) or the Claude mobile app with nothing to type.
 `--spawn worktree` gives each on-demand session its own git worktree, and
 `--no-create-session-in-dir` means an unused daemon sits at a true **0/32** (no phantom
-cwd session). sshd now runs in the background; the supervisor loops forever
-(re-launching the daemon on exit), so it's what keeps the container alive. Its output
-goes to `docker logs` verbatim (the live TUI, escape codes and all) and is *also*
-mirrored to `~/.local/share/remote-control.log` — but the file gets a cleaned view:
+cwd session). Its output no longer reaches `docker logs` — that is sshd's now — and goes
+to `~/.local/share/remote-control.log`, which gets a cleaned view:
 escape sequences stripped, repeated TUI repaints collapsed to one copy (with a
 `(suppressed N repeated TUI line(s))` note so nothing looks quieter than it was), and
 the file rotated at `RC_LOG_MAX_BYTES` (default 5MiB) keeping one `.1` generation.
@@ -221,14 +244,37 @@ To use it:
 
 1. Ensure `DEV_SSH_AUTHORIZED_KEYS` is set in `.env` (Pi host user's `.ssh` dir) and that
    its `authorized_keys` lists the public key you'll connect with (Zed's key).
-2. `make dev-up` rebuilds the image (with `openssh-server`) and starts sshd on 2222.
-3. Locally: `ssh -p 2222 dev@<pi-ip>` should log in as `dev`. For access off-LAN, point a
+2. **Set `DEV_SSH_BIND=0.0.0.0` in `.env`.** The published port defaults to `127.0.0.1`,
+   so out of the box the container's sshd answers only on the Pi itself — see
+   [Where the sshd port is published](#where-the-sshd-port-is-published) below.
+3. `make dev-up` rebuilds the image (with `openssh-server`) and starts sshd on 2222.
+4. Locally: `ssh -p 2222 dev@<pi-ip>` should log in as `dev`. For access off-LAN, point a
    **Cloudflare tunnel** at the Pi host's TCP port 2222 (configured from the Cloudflare
    dashboard — out of repo scope; key-based SSH only, pair with Cloudflare Access as you
-   see fit).
-4. In Zed, add an SSH remote to that host as user `dev` with the matching private key and
+   see fit). A `cloudflared` running on the Pi itself reaches `127.0.0.1:2222` and needs
+   no widening at all.
+5. In Zed, add an SSH remote to that host as user `dev` with the matching private key and
    open `/workspace`. Zed uploads its server and connects; SSH sessions inherit the app env
    (`.env` vars + the venv on `PATH`) via `~/.ssh/environment`, so tools resolve as they do
    under `docker exec`.
 
-The old `docker exec -it dd-dev fish` path still works unchanged.
+The `docker exec -it dd-dev fish` path still works unchanged, and is what `make dev-shell`
+runs.
+
+### Where the sshd port is published
+
+`DEV_SSH_BIND` is the **address** the container's sshd is published on, and it defaults to
+`127.0.0.1` — that default is the whole of the port's protection. sshd behind it is
+key-only, but what a key gets you here is a shell in a container holding both git push
+identities, the Railway token and the bots' `.env`. The Pi host's own sshd is already an
+authenticated hop in front of it.
+
+So the default means:
+
+- `make dev-shell` / `make dev-claude` / `docker exec` — unaffected, they never touch the port.
+- `ssh -t <pi-user>@<pi-ip> '…'` (through the Pi's own sshd) — unaffected.
+- A `cloudflared` **on the Pi** — unaffected; it reaches `127.0.0.1:2222`.
+- `ssh -p 2222 dev@<pi-ip>` from the LAN, and Zed remoting straight at the container —
+  **these need `DEV_SSH_BIND=0.0.0.0` in `.env`.**
+
+Publishing is create-time, so a change lands on `make dev-up`, never on a bare restart.

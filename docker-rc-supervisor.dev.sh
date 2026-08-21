@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Claude Remote Control supervisor for the Pi dev container. Backed into the image at
-# /home/dev/rc-supervisor.sh and run as the FOREGROUND process by the entrypoint, so
-# the Claude session is what `docker logs` surfaces (sshd runs in the background). This
-# script loops forever — it re-launches the daemon on exit — so it is itself the process
-# keeping the container alive.
+# Claude Remote Control supervisor for the Pi dev container. Baked into the image at
+# /home/dev/rc-supervisor.sh and started by the entrypoint ONLY under
+# DD_REMOTE_CONTROL=1, in the background behind sshd — which is the foreground process
+# and the one whose lifetime the container's lifetime equals. This script loops forever
+# (it re-launches the daemon on exit), but nothing depends on that any more: it is a
+# daemon you turned on, not the thing keeping the container up. Its output goes to the
+# log below rather than to `docker logs`, which is sshd's.
 #
 # It runs `claude remote-control --spawn worktree --no-create-session-in-dir` as a
 # long-lived service so you can drive this container from claude.ai/code or the Claude

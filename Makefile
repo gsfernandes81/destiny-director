@@ -105,9 +105,9 @@ dev-up:
 # One command to stand the whole thing up: build + start the container, wait for it
 # to be running, then walk through any logins that aren't done yet (git SSH, GitHub,
 # Railway, Claude) interactively. Every login step is idempotent — already-signed-in
-# services are skipped — so this is safe to re-run. Once Claude is logged in the
-# entrypoint's background supervisor brings up `claude remote-control --spawn worktree`
-# on its own (~10s), so there's nothing to exec by hand.
+# services are skipped — so this is safe to re-run. What it leaves you with is a
+# container whose foreground process is its sshd; get a session in it with `make
+# dev-claude` / `make dev-shell` below, or ssh straight in.
 dev: dev-up
 	@echo "Waiting for dd-dev to come up (up to 120s)..."
 	@for i in $$(seq 1 120); do \
@@ -120,6 +120,25 @@ dev: dev-up
 # Re-run the interactive login walkthrough against an already-running container.
 dev-login:
 	docker exec -it dd-dev bash /home/dev/login.sh
+
+# A claude in the container's `claude` abduco session. `abduco -A` attaches that
+# session, creating it if it is not there — so this is the same command whether you
+# are starting the work or coming back to it, and it is the same session
+# `ssh -t -p 2222 dev@<pi> abduco -A claude claude` reaches. One session, not one per
+# way in. Ctrl-\ detaches and the claude under it keeps running, container and all;
+# a claude started outside a session dies with the link that carried it.
+dev-claude:
+	docker exec -it dd-dev abduco -A claude claude
+
+# A fish shell in the container (starts in /workspace — WORKDIR, and config.fish.dev
+# for the login shells that don't).
+dev-shell:
+	docker exec -it dd-dev fish
+
+# The remote-control supervisor's log — only has anything in it under
+# DD_REMOTE_CONTROL=1 (see docker-compose.dev.yml).
+dev-rc-log:
+	docker exec dd-dev tail -n 60 /home/dev/.local/share/remote-control.log
 
 dev-down:
 	docker compose -f docker-compose.dev.yml down
@@ -556,7 +575,7 @@ check: lint format-check typecheck test test-js
 # real ones unprotected. They are static pattern rules for the same reason — see the
 # note on the deploy block for why a *plain* pattern rule cannot be made phony at all.
 .PHONY: prod $(addprefix deploy-,$(BOTS)) $(addprefix remove-last-deploy-,$(BOTS)) \
-	dev dev-up dev-login dev-down \
+	dev dev-up dev-login dev-claude dev-shell dev-rc-log dev-down \
 	dev-down-volumes run-beacon-local run-anchor-local _require-mem-cap \
 	run-beacon-devbot run-anchor-devbot devbot-up devbot-down devbot-logs \
 	devbot-status destroy-schemas create-schemas migration-plan migration-apply \

@@ -90,8 +90,9 @@ else
 fi
 
 # ── 4/4  Claude Code ─────────────────────────────────────────────────────────
-# Logging in here also unblocks the background Remote Control supervisor started by
-# the entrypoint — it polls auth every ~10s and comes online on its own once signed in.
+# This is the login `abduco -A claude claude` needs. It also unblocks the Remote Control
+# supervisor if this container was brought up with DD_REMOTE_CONTROL=1 — it polls auth
+# every ~10s and comes online on its own once signed in.
 bold "4/4  Claude Code"
 if claude auth status >/dev/null 2>&1; then
   ok "$(claude auth status --text 2>&1 | grep -m1 -E 'Email|Login method' | sed 's/^[[:space:]]*//')"
@@ -101,12 +102,16 @@ else
 fi
 
 bold "Done."
-if claude auth status >/dev/null 2>&1; then
+if [ "${DD_REMOTE_CONTROL:-0}" = "1" ] && claude auth status >/dev/null 2>&1; then
   ok "Claude Remote Control goes live within ~10s — open claude.ai/code or the mobile app."
 fi
 cat <<'EOF'
 
-  Attach a shell:   docker exec -it dd-dev fish
-  Remote control:   auto-started (spawn=worktree); log at ~/.local/share/remote-control.log
+  A claude:         make dev-claude   (= abduco -A claude claude; Ctrl-\ detaches)
+  A shell:          make dev-shell    (or: ssh -p 2222 dev@<pi>, see DEV_SSH_BIND)
+  Remote control:   off unless DD_REMOTE_CONTROL=1 in .env — then make dev-rc-log
   Re-run logins:    make dev-login
+
+  Start anything long — a claude, make mysql-to-postgres — inside abduco. A session
+  started outside one dies with the link that carried it.
 EOF

@@ -217,6 +217,13 @@ DB layer, or building a message/embed, read it.** Quick orientation:
 - The dev **container** is managed with `make dev-up` / `dev-down` (not bare
   `docker compose up`) so its uid/gid matches the host bind mount — otherwise writes to
   `/workspace` fail on non-1000-uid hosts (e.g. the Pi).
+- **Its foreground process is its sshd, and every long session goes in `abduco`.**
+  `make dev-claude` (= `abduco -A claude claude`, `Ctrl-\` to detach) and `make dev-shell`
+  are the ways in; a claude or a `make mysql-to-postgres` started outside a session dies
+  with the link that carried it. Claude Remote Control is **opt-in** —
+  `DD_REMOTE_CONTROL=1` in `.env` plus `make dev-up`, never on by default — and the
+  container's sshd is published on `127.0.0.1` unless `DEV_SSH_BIND` widens it.
+  `docs/pi_dev_setup.md`.
 
 ## Project layout & config
 

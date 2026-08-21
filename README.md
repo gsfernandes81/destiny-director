@@ -49,8 +49,9 @@ supervisord (`supervisord.conf`), which picks the bot from `RAILWAY_SERVICE_NAME
 also runs a disarmed-by-default sshd for getting a shell into a container whose bot has
 died (`sshd_config`).
 
-Developing on a remote Raspberry Pi 5 in a Docker dev container (terminal-only,
-`docker exec` over the Pi host's SSH): see [`docs/pi_dev_setup.md`](docs/pi_dev_setup.md).
+Developing on a remote Raspberry Pi 5 in a Docker dev container (terminal-only, over the
+Pi host's SSH — `make dev-claude` for a claude in an `abduco` session, `make dev-shell`
+for a fish shell): see [`docs/pi_dev_setup.md`](docs/pi_dev_setup.md).
 
 Deploying code to [railway](https://railway.app/):
 

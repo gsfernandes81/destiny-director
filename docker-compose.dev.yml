@@ -2,8 +2,9 @@
 #   make dev            (= make dev-up  +  make dev-login)
 # then reach the container over the Pi host's sshd:
 #   ssh -t <pi-user>@<pi-ip> 'docker exec -it dd-dev fish'
-# or drive it remotely from claude.ai/code — the entrypoint auto-starts
-# `claude remote-control --spawn worktree` once you're signed in.
+# or straight into its own sshd once DEV_SSH_BIND lets you (see `ports` below), and
+# hold whatever you start there in an `abduco` session. Driving it from claude.ai/code
+# is opt-in — DD_REMOTE_CONTROL, below.
 services:
   dev:
     build:
@@ -28,6 +29,14 @@ services:
     mem_limit: ${DEV_MEM_LIMIT:-2560m}
     memswap_limit: ${DEV_MEMSWAP_LIMIT:-2816m}
     env_file: [.env]                          # DATABASE_URL + RAILWAY_API_TOKEN + app vars
+    environment:
+      # Claude Remote Control — the claude.ai/code and mobile-app daemon — is OFF unless
+      # this is 1. The way in is a shell plus abduco; remote control is what you turn on
+      # for a spell when you are away from a terminal, and a daemon running with nobody
+      # driving it is a live claude nobody is watching, in a container holding this
+      # repo's push keys and Railway token. Read by the entrypoint at start, so it lands
+      # on `make dev-up`, not on a bare `docker restart`.
+      DD_REMOTE_CONTROL: ${DD_REMOTE_CONTROL:-0}
     volumes:
       - .:/workspace                          # bind-mount the host clone; dev user uid built to match (USER_UID)
       - dd-uv-cache:/home/dev/.cache/uv        # persist uv cache (fast re-syncs)
@@ -39,7 +48,19 @@ services:
       - dd-zed-server:/home/dev/.zed_server    # persist Zed's remote server binary (no re-download per rebuild)
       - dd-local-share:/home/dev/.local/share  # persist fish history + bash history (HISTFILE points here)
     ports:
-      - "${DEV_SSH_PORT:-2222}:2222"   # host ${DEV_SSH_PORT} (default 2222) -> container sshd; Cloudflare tunnel points here
+      # host ${DEV_SSH_PORT} (default 2222) -> the container's sshd.
+      #
+      # DEV_SSH_BIND is the ADDRESS it is published on, and it defaults to 127.0.0.1
+      # because that default is the whole of this port's protection: sshd behind it is
+      # key-only, but what a key gets you here is a shell in a container holding both
+      # git push identities, a Railway token with prod in reach, and the bots' .env.
+      # The Pi host's own sshd is already an authenticated hop in front of it, and a
+      # cloudflared running on the Pi ITSELF reaches 127.0.0.1:${DEV_SSH_PORT} unchanged.
+      #
+      # So this default BREAKS `ssh -p 2222 dev@<pi-ip>` and Zed remoting straight in
+      # from the LAN. Put DEV_SSH_BIND=0.0.0.0 in .env if that is how you connect — and
+      # note publishing is create-time, so it lands on `make dev-up`, never a restart.
+      - "${DEV_SSH_BIND:-127.0.0.1}:${DEV_SSH_PORT:-2222}:2222"
     depends_on:
       postgres:
         condition: service_healthy

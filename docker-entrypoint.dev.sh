@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
+# dd-dev PID 1 (under `init: true`, so the background processes left here get reaped).
+#
+# **sshd is the FOREGROUND process, and that is the whole design.** This container is
+# used by getting a session inside it — `ssh -p 2222 dev@<pi>`, Zed's remote, or
+# `docker exec` from the Pi host — and running claude or a long `make` inside an
+# `abduco` session there. So the thing whose lifetime the container's lifetime should
+# equal is the ssh endpoint.
+#
+# It was the other way round for a while: the remote-control supervisor ran in the
+# foreground so `docker logs` would show the Claude session, with sshd pushed into the
+# background behind it. That arrangement made the container's life depend on a daemon
+# that is now opt-in — see the DD_REMOTE_CONTROL block at the bottom.
 set -e
 
 # Git identities: keys + SSH config live in the gitignored .dev-ssh/ dir, which
@@ -36,9 +48,9 @@ chmod 600 "$HOME/.ssh/environment"
 
 # Pre-seed two headless-hostile first-run flags in ~/.claude.json (moved into the
 # persisted dd-claude volume via CLAUDE_CONFIG_DIR). Both default to "unset" on a FRESH
-# volume, where each blocks the supervisor with a dialog nobody can answer in a headless
-# container. Done idempotently, merging into any existing config, BEFORE the supervisor
-# starts (while no claude process is writing the file):
+# volume, where each blocks claude with a dialog nobody can answer in a headless
+# container. Done idempotently, merging into any existing config, BEFORE anything can
+# start a claude (while no claude process is writing the file):
 #
 #   1. projects["<dir>"].hasTrustDialogAccepted — workspace trust. Absent → `claude
 #      remote-control --spawn worktree` aborts with "Workspace not trusted". We seed it
@@ -47,7 +59,10 @@ chmod 600 "$HOME/.ssh/environment"
 #   2. remoteDialogSeen (top-level) — the one-time "Enable Remote Control? [y/N]" consent.
 #      When falsy, `claude remote-control` opens a readline prompt on stdin; with no
 #      interactive stdin the supervisor's daemon can never answer it and re-prompts on
-#      every restart. Seeding it true skips the prompt outright.
+#      every restart. Seeding it true skips the prompt outright. Kept unconditional even
+#      though the supervisor is opt-in now: it costs a JSON key, and the moment it would
+#      be missed is the one where someone has just set DD_REMOTE_CONTROL=1 and is not
+#      watching the container come up.
 python3 - "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.claude.json" /workspace <<'PY' || true
 import json, os, sys
 
@@ -80,15 +95,32 @@ if dirty:
     os.chmod(path, 0o600)
 PY
 
-# In-container sshd (Zed-remote / direct SSH) now runs in the BACKGROUND. -e routes its
-# log to `docker logs`; all work is still also reachable via `docker exec`.
-/usr/sbin/sshd -D -e -f /home/dev/sshd_config &
+# Claude Remote Control — OFF unless asked for. It makes the container drivable from
+# claude.ai/code and the Claude mobile app, and it used to be started on every boot as
+# the foreground process. It is opt-in now: the way in is an ssh session plus abduco,
+# and a daemon nobody is driving is a live claude with a permission classifier for
+# company, sitting on this repo's push keys and Railway token.
+#
+# Turn it on for a spell — a session driven from the app while away from a terminal —
+# with DD_REMOTE_CONTROL=1 in .env, then `make dev-up`. It is read at start, so it
+# lands on a recreate, not on a bare `docker restart`. The supervisor polls for a login
+# rather than failing without one, so ordering with `make dev-login` does not matter;
+# see its header for the recycle policy — it only ever restarts a wedged daemon at 0/32.
+# setsid + its own log, because its stdout is a TUI that repaints.
+if [ "${DD_REMOTE_CONTROL:-0}" = "1" ]; then
+  setsid bash /home/dev/rc-supervisor.sh </dev/null >/dev/null 2>&1 &
+  echo "[entrypoint] remote-control supervisor started (log: ~/.local/share/remote-control.log)"
+else
+  echo "[entrypoint] remote control off (DD_REMOTE_CONTROL=1 in .env turns it on)"
+fi
 
-# Claude Remote Control: drive this container's sessions from claude.ai/code or the
-# Claude mobile app. Now the FOREGROUND process, so the Claude session is what
-# `docker logs` shows and it's what keeps the container alive. The supervisor idles
-# until Claude is authenticated, then runs (and health-recycles) `claude remote-control
-# --spawn worktree`. It loops forever (re-launching the daemon on exit), so it won't
-# fall out from under the container; see the script header for the recycle policy — it
-# only ever restarts a wedged daemon at 0/32.
-exec bash /home/dev/rc-supervisor.sh
+# In-container sshd, in the foreground: the container's payload. exec, so sshd IS this
+# process — signals from `docker stop` reach it directly and the container's lifetime is
+# exactly the endpoint's. -D stops it daemonising, which would point its stderr at
+# /dev/null and throw away the -e log that `docker logs dd-dev` is made of.
+#
+# Nothing beyond this line runs; a start-up failure is in the log above it.
+echo "[entrypoint] sshd on :2222 in the foreground — get a session and work in abduco"
+echo "[entrypoint]     ssh -p 2222 dev@<pi>                     a fish shell in /workspace"
+echo "[entrypoint]     abduco -A claude claude                  a claude that survives the link"
+exec /usr/sbin/sshd -D -e -f /home/dev/sshd_config
