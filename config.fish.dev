@@ -14,6 +14,16 @@
 # that cd'd every fish would move the ground under anything scripted.
 # Guarded on the directory too: a container brought up with the bind mount missing
 # should still hand you a shell to find that out from, not an error on every login.
+#
+# **The corollary, and it bites:** `ssh <host> <command>` is NOT a login shell. sshd
+# execs the shell with argv[0] as `fish`, not `-fish`, so this cd does not run and the
+# command inherits $HOME as its cwd. That matters for exactly one command — the abduco
+# one, because abduco takes the session's cwd from whoever creates it, and `-A` then
+# hands that same cwd to everybody who attaches later. A `claude` session rooted at
+# /home/dev is a claude in the wrong project, and it would outlive the mistake.
+# So every ssh one-liner in this repo spells its own `cd /workspace` (Makefile
+# `dev-claude`, docs/pi_dev_setup.md, the entrypoint banner) rather than relying on
+# this file. Keep it that way if you add another.
 if status is-login
     if test -d /workspace
         cd /workspace

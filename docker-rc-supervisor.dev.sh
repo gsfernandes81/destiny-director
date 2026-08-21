@@ -49,11 +49,16 @@ RC_PERMISSION_MODE=${RC_PERMISSION_MODE:-}  # empty => daemon default (keep prom
 RC_LOG_MAX_BYTES=${RC_LOG_MAX_BYTES:-5242880}  # rotate the logfile past this (5MiB)
 
 # --- log plumbing -------------------------------------------------------------------
-# As the container's foreground process, our stdout/stderr IS `docker logs`, which is
-# how you watch the live Claude TUI. So `docker logs` keeps getting the stream VERBATIM
-# (escape codes and all) — do not filter that.
+# Our stdout/stderr USED to be `docker logs`, back when this ran as the container's
+# foreground process, and it kept the live Claude TUI verbatim for that reason. sshd is
+# the foreground process now and `docker logs` is its; the entrypoint starts us under
+# setsid with stdout on /dev/null, so the verbatim stream goes nowhere and the raw
+# passthrough below is vestigial. It is left intact rather than ripped out because it
+# costs nothing and is what makes this script still readable when run by hand from a
+# `docker exec` — which is the one context that gets the TUI back.
 #
-# The PERSISTED logfile is a different job: it's the forensic record you grep from a
+# The PERSISTED logfile is therefore the whole of the record now, and the only way to
+# read it is `make dev-rc-log`. It is the forensic record you grep from a
 # `docker exec` days later. Teeing the raw stream into it was wrong on both counts — the
 # TUI repaints itself every few seconds, so the file grew ~5MB/day unbounded AND buried
 # the handful of real supervisor lines under megabytes of cursor-control escapes.

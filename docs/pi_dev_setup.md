@@ -20,6 +20,16 @@ abduco is a detach/attach and nothing else (no status line, no window management
 handling past `Ctrl-\`), so the TUI underneath keeps every key it expects. It replaced
 `screen`, which was in the image for exactly that job.
 
+> **If you write your own one-liner, spell the `cd`.** abduco takes the session's cwd
+> from whoever *creates* it, and `-A` hands that cwd to everyone who attaches afterwards.
+> `ssh <host> <command>` is **not** a login shell — sshd execs `fish` rather than `-fish`,
+> so `config.fish.dev` does not run and the command starts in `/home/dev`. Create the
+> shared session that way once and every later `make dev-claude` attaches a claude rooted
+> at the wrong directory, untrusted-workspace dialog and all. So:
+> `ssh -t -p 2222 dev@<pi> 'cd /workspace && abduco -A claude claude'`. The routes above
+> need no `cd`: `docker exec` starts in `/workspace` (the image's `WORKDIR`), and an
+> interactive login shell is already there.
+
 Files: `Dockerfile.dev`, `docker-entrypoint.dev.sh`, `docker-compose.dev.yml`,
 `sshd_config.dev`, `config.fish.dev`. Git identity keys live in a gitignored `.dev-ssh/`
 dir that rides along with the clone.

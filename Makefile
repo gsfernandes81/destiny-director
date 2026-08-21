@@ -123,10 +123,17 @@ dev-login:
 
 # A claude in the container's `claude` abduco session. `abduco -A` attaches that
 # session, creating it if it is not there — so this is the same command whether you
-# are starting the work or coming back to it, and it is the same session
-# `ssh -t -p 2222 dev@<pi> abduco -A claude claude` reaches. One session, not one per
-# way in. Ctrl-\ detaches and the claude under it keeps running, container and all;
-# a claude started outside a session dies with the link that carried it.
+# are starting the work or coming back to it. Ctrl-\ detaches and the claude under it
+# keeps running, container and all; a claude started outside a session dies with the
+# link that carried it.
+#
+# The ssh equivalent, which reaches the SAME session, is
+#     ssh -t -p 2222 dev@<pi> 'cd /workspace && abduco -A claude claude'
+# and the `cd` is not decoration: `ssh <host> <command>` is not a login shell, so
+# config.fish.dev does not run and the command would otherwise start in $HOME. abduco
+# takes the session's cwd from whoever CREATES it and `-A` hands it to everyone after,
+# so that one omission roots the shared session — and every later `make dev-claude`
+# attaching to it — at /home/dev. This recipe needs no cd: WORKDIR is /workspace.
 dev-claude:
 	docker exec -it dd-dev abduco -A claude claude
 
@@ -135,10 +142,13 @@ dev-claude:
 dev-shell:
 	docker exec -it dd-dev fish
 
-# The remote-control supervisor's log — only has anything in it under
-# DD_REMOTE_CONTROL=1 (see docker-compose.dev.yml).
+# The remote-control supervisor's log. In the default arrangement there IS no such
+# file — remote control is off (DD_REMOTE_CONTROL=1 turns it on, see
+# docker-compose.dev.yml), and even with it on the supervisor writes nothing until
+# claude is authenticated. So say that, rather than letting `tail` fail on a missing
+# path and dressing "nothing to report" up as `make: *** Error 1`.
 dev-rc-log:
-	docker exec dd-dev tail -n 60 /home/dev/.local/share/remote-control.log
+	@docker exec dd-dev sh -c 'l=/home/dev/.local/share/remote-control.log; if [ -s "$$l" ]; then tail -n 60 "$$l"; elif [ "$${DD_REMOTE_CONTROL:-0}" != 1 ]; then echo "remote control is off — set DD_REMOTE_CONTROL=1 in .env, then make dev-up"; else echo "supervisor up, log still empty — it waits for a claude login (make dev-login)"; fi'
 
 dev-down:
 	docker compose -f docker-compose.dev.yml down

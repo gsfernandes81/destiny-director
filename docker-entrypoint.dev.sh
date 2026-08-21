@@ -120,7 +120,17 @@ fi
 # /dev/null and throw away the -e log that `docker logs dd-dev` is made of.
 #
 # Nothing beyond this line runs; a start-up failure is in the log above it.
+#
+# The routes named below are the ones that work at the DEFAULT DEV_SSH_BIND=127.0.0.1,
+# where the published port answers on the Pi and nowhere else — so they go through the
+# Pi host and `make`, not straight at the container. `ssh -p 2222 dev@<pi-ip>` needs
+# DEV_SSH_BIND=0.0.0.0 in .env, and a start-up banner is the wrong place to teach that;
+# docs/pi_dev_setup.md § "Where the sshd port is published" is.
+# Going through `make` also sidesteps the cwd trap: `ssh <host> <command>` is not a
+# login shell, so config.fish is skipped, and a bare `abduco -A claude claude` sent that
+# way would create the shared session rooted at $HOME instead of /workspace.
 echo "[entrypoint] sshd on :2222 in the foreground — get a session and work in abduco"
-echo "[entrypoint]     ssh -p 2222 dev@<pi>                     a fish shell in /workspace"
-echo "[entrypoint]     abduco -A claude claude                  a claude that survives the link"
+echo "[entrypoint]   on the Pi:   make dev-shell     a fish shell in /workspace"
+echo "[entrypoint]                make dev-claude    a claude that survives the link"
+echo "[entrypoint]   over ssh:    ssh -t <pi-user>@<pi> 'cd <clone> && make dev-claude'"
 exec /usr/sbin/sshd -D -e -f /home/dev/sshd_config
