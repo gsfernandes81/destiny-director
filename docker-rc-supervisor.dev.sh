@@ -54,9 +54,12 @@ RC_PERMISSION_MODE=${RC_PERMISSION_MODE:-}  # empty => daemon default (keep prom
 RC_LOG_MAX_BYTES=${RC_LOG_MAX_BYTES:-5242880}  # rotate the logfile past this (5MiB)
 
 # --- log plumbing -------------------------------------------------------------------
-# As the container's foreground process, our stdout/stderr IS `docker logs`, which is
-# how you watch the live Claude TUI. So `docker logs` keeps getting the stream VERBATIM
-# (escape codes and all) — do not filter that.
+# This stream WAS `docker logs` when the supervisor was the container's foreground
+# process. Under the base image it is started in the background with its output
+# discarded, so tee's first branch now goes nowhere and the file below is the only
+# reader — `docker logs dd-dev` shows sshd. The shape is kept unchanged: it costs
+# nothing, and it is what makes `bash /home/dev/rc-supervisor.sh` in a `docker exec`
+# still show the live TUI verbatim.
 #
 # The PERSISTED logfile is a different job: it's the forensic record you grep from a
 # `docker exec` days later. Teeing the raw stream into it was wrong on both counts — the
@@ -78,7 +81,7 @@ RC_LOG_MAX_BYTES=${RC_LOG_MAX_BYTES:-5242880}  # rotate the logfile past this (5
 # Rotation keeps one previous generation ($LOG.1) — enough to span a recycle or two
 # without the file ever being a disk risk on the Pi.
 #
-# NOTE the plumbing shape below: `tee` still owns the docker-logs path exactly as before,
+# NOTE the plumbing shape below: `tee` still owns the interactive path exactly as before,
 # and the filter hangs off tee's SECOND output. The filter is line-oriented (awk), so
 # putting it inline would hold a partial line — a spinner or prompt that repaints without
 # a trailing newline — until the line completed, making the live TUI feel laggy. Keeping

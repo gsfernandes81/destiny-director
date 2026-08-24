@@ -1,5 +1,6 @@
 # Break-glass sshd for the DEPLOYED container (see supervisord.conf; the dev container's
-# equivalent is sshd_config.dev). It exists for one job: getting a shell into a container
+# equivalent now lives in the gsrpi-dev-base image, with this repo overriding two
+# keywords in sshd_config.dev.d/). It exists for one job: getting a shell into a container
 # whose bot has died — `supervisorctl -c /etc/dd/supervisord.conf status`, a look at the
 # database, a manual `alembic` run — without keeping the bot alive to do it.
 #
@@ -46,7 +47,7 @@ KbdInteractiveAuthentication no
 PermitEmptyPasswords no
 PermitRootLogin no
 StrictModes yes
-# No `UsePAM no` here (unlike sshd_config.dev, which is Debian-based): Alpine's OpenSSH is
+# No `UsePAM no` here (unlike the dev container's Debian-based config): Alpine's OpenSSH is
 # built without PAM entirely, so the option does not exist and sshd warns "Unsupported
 # option UsePAM" on every start. Non-root sshd needs PAM off, and it already is.
 

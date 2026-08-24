@@ -62,7 +62,7 @@ services:
       # the published port below. Setting it here without the credentials the base wants
       # in DEV_SECRETS_DIR/tunnel.json only earns a warning at start.
     volumes:
-      - .:/workspace                          # bind-mount the host clone; dev user uid built to match (USER_UID)
+      - .:/workspace                          # bind-mount the host clone; the base image's dev uid must match this clone's owner (make dev-up checks)
       - dd-uv-cache:/home/dev/.cache/uv        # persist uv cache (fast re-syncs)
       - dd-claude:/home/dev/.claude            # persist Claude Code login/config (incl. ~/.claude.json via CLAUDE_CONFIG_DIR)
       - dd-railway:/home/dev/.railway          # persist `railway login` (CLI writes ~/.railway/config.json, not ~/.config/railway)

@@ -47,7 +47,7 @@ hostport="${DATABASE_URL#*@}"; hostport="${hostport%%/*}"
 db_host="${hostport%%:*}"; db_port="${hostport##*:}"
 [ "$db_port" = "$db_host" ] && db_port=5432
 
-# Provision the database as the admin role (mirrors docker-entrypoint.dev.sh's old
+# Provision the database as the admin role (mirrors the pre-base dev entrypoint's old
 # atlas_dev step — Alembic needs no throwaway "dev" database, so that step is gone
 # entirely; this is purely the devbot's own isolated database). Fatal on failure —
 # unlike a best-effort step, the bot can't run without its database — but bounded-retry

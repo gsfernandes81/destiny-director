@@ -23,8 +23,8 @@ which is built by CI and published **publicly** to
 `ghcr.io/gsfernandes81/gsrpi-dev-base`. From there come python 3.13-slim, Node + Claude
 Code, `gh`, screen, **abduco**, fish, the ssh client and server, cloudflared, the `dev`
 user, the dotfiles, and the entrypoint that starts everything. What is left in this repo
-is the database clients, the Railway CLI, this project's venv, and the five files listed
-above.
+is the database clients, the Railway CLI, this project's venv, and the repo-specific
+files listed above.
 
 - **The tag is pinned** (`ARG BASE_TAG` at the top of `Dockerfile.dev`), never `latest`,
   so a base rebuild cannot change this container until that line moves. Which base a
@@ -39,7 +39,7 @@ above.
   It is non-fatal — a failed sync warns and the container still comes up, so you can ssh
   in and look.
 - **Two files parameterise the base rather than fork it**: `ssh_config.dev` (the baked
-  half of `~/.ssh/config`, used when `.dev-ssh/config` is absent) and
+  half of `~/.ssh/config`, used when `.dev-ssh/ssh_config.fleet` is absent) and
   `sshd_config.dev.d/10-authorized-keys.conf` (points sshd at the host account's
   `authorized_keys`, as it has always been served here). The rest is `DEV_*` environment
   in `docker-compose.dev.yml`.
@@ -64,22 +64,38 @@ ssh-keygen -t ed25519 -f .dev-ssh/id_ed25519_shark    -N ""   # -> geolocatingsh
 chmod 600 .dev-ssh/id_ed25519_personal .dev-ssh/id_ed25519_shark
 ```
 
-Create `.dev-ssh/config` (used as `~/.ssh/config` inside the container):
+Create `.dev-ssh/ssh_config.fleet`. The base image **prepends** it to the baked defaults
+to make `~/.ssh/config` at every start, before it pulls the clone — which is why it has
+that name and why nothing in this repo symlinks the file:
 
 ```
 Host github.com
   HostName github.com
   User git
-  IdentityFile /workspace/.dev-ssh/id_ed25519_personal
+  IdentityFile ~/.ssh/id_ed25519_personal
   IdentitiesOnly yes
   StrictHostKeyChecking accept-new
 Host github.com-shark
   HostName github.com
   User git
-  IdentityFile /workspace/.dev-ssh/id_ed25519_shark
+  IdentityFile ~/.ssh/id_ed25519_shark
   IdentitiesOnly yes
   StrictHostKeyChecking accept-new
 ```
+
+The `IdentityFile` paths are `~/.ssh/…` and not `/workspace/.dev-ssh/…`: the base copies
+every `.dev-ssh/id_*` into `~/.ssh` at mode 600 on each start, and a copy it owns cannot
+be refused for the bind mount's modes.
+
+> **Renaming from the old layout.** This file used to be `.dev-ssh/config`, symlinked
+> over `~/.ssh/config` by the entrypoint. If your clone still has that name, rename it —
+> `mv .dev-ssh/config .dev-ssh/ssh_config.fleet` — and switch the paths as above. Until
+> you do, `docker-child-init.dev.sh` copies it into place each start so nothing breaks,
+> says so loudly, and the start-up `git pull` has no identity to offer and reports itself
+> as offline whatever the truth is. The symlink is gone on purpose: the base rewrites
+> `~/.ssh/config` with a redirection at every start, and a redirection follows a symlink
+> — the second boot of a container would have truncated your `.dev-ssh/config` and filled
+> it with the baked defaults.
 
 Register each **public** key with its GitHub account (Settings → SSH keys):
 `cat .dev-ssh/id_ed25519_personal.pub` → gsfernandes81, `…_shark.pub` → geolocatingshark.
@@ -128,6 +144,25 @@ differs, build the base locally instead: `cd ~/infra/dev && make base` reads its
 clone's owner and tags the result under the same ghcr name, and the next `make dev-up`
 here picks it up without touching this repo. Changing the uid means the named volumes
 must be recreated under the new owner — `make dev-down-volumes`.
+
+### What else the base changed, and what this repo put back
+
+Three behaviours moved with the base image. Two are put back here because the conversion
+is meant to change what the image is *built from*, not what it does:
+
+- **`AllowTcpForwarding`** — the old `sshd_config.dev` had no such line, so OpenSSH's
+  default (yes) applied and `ssh -p 2222 -L 5432:dd-postgres:5432 dev@<pi>` worked. The
+  base turns forwarding off, correctly for itself. `sshd_config.dev.d/20-forwarding.conf`
+  turns it back on here.
+- **The `dev` account's login shell** — the base makes it fish; this image puts it back to
+  bash (`usermod` in `Dockerfile.dev`), because sshd runs the login shell from
+  `/etc/passwd`, so it is what every `ssh <pi> '<cmd>'` and every Zed remote bootstrap
+  command executes under, and this repo's tooling assumes a POSIX shell there. `docker
+  exec -it dd-dev fish` is unchanged.
+- **`ClientAliveInterval 30` / `ClientAliveCountMax 3`** — kept, not overridden. The base
+  drops a session after 90s of *unanswered probes*, which a live client answers; what it
+  actually removes is wedged sessions, and abduco (also new, from the base) is what makes
+  losing one free.
 
 ## First run inside the container (`/workspace`, user `dev`)
 
