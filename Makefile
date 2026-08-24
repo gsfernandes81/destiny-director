@@ -88,26 +88,28 @@ $(addprefix deploy-,$(BOTS)): deploy-%:
 $(addprefix remove-last-deploy-,$(BOTS)): remove-last-deploy-%:
 	railway down $(TARGET_ENV_FLAG) --service $*
 
-# Remote Pi dev container (docker-compose.dev.yml). dev-up builds the image with
-# the uid/gid that OWN this clone so the bind-mounted /workspace stays writable,
-# then starts it detached. We read the owner with `stat`, NOT `id -u`: when docker
-# is run via sudo/root, `id -u` is 0 and the build then collides with the root
-# account (`groupadd: GID '0' already exists`). The clone owner is the right uid
-# whoever launches the build. dev-down stops it; dev-down-volumes also drops the
-# named volumes (uv cache, claude/railway/gh config, postgres data) — use when the baked
-# uid changed and the volumes must be recreated under the new owner. DEV_HOSTNAME
-# sets the container's hostname to the docker host's name + `-dd-dev`, so Claude
-# Code shows a stable, meaningful machine title instead of the random container ID
-# (the suffix distinguishes the container from the host itself).
+# Remote Pi dev container (docker-compose.dev.yml). dev-up builds the image and
+# starts it detached. It no longer passes HOST_UID/HOST_GID: since 2026-08-24 the
+# image is a thin child of gsrpi-dev-base and the `dev` user is built in the BASE,
+# at the uid of whoever built THAT — 1001 in the published one. If this host's
+# clone owner is a different uid, build the base locally (`make base` in infra's
+# dev/, which reads its own clone's owner) and this build picks it up, because
+# docker prefers a local image over a pull. dev-down stops it; dev-down-volumes
+# also drops the named volumes (uv cache, claude/railway/gh config, postgres data)
+# — use when the base's uid changed and the volumes must be recreated under the new
+# owner. DEV_HOSTNAME sets the container's hostname to the docker host's name +
+# `-dd-dev`, so Claude Code shows a stable, meaningful machine title instead of the
+# random container ID (the suffix distinguishes the container from the host itself).
 dev-up:
-	HOST_UID=$$(stat -c '%u' .) HOST_GID=$$(stat -c '%g' .) DEV_HOSTNAME=$$(hostname)-dd-dev docker compose -f docker-compose.dev.yml up -d --build
+	DEV_HOSTNAME=$$(hostname)-dd-dev docker compose -f docker-compose.dev.yml up -d --build
 
 # One command to stand the whole thing up: build + start the container, wait for it
 # to be running, then walk through any logins that aren't done yet (git SSH, GitHub,
 # Railway, Claude) interactively. Every login step is idempotent — already-signed-in
 # services are skipped — so this is safe to re-run. Once Claude is logged in the
-# entrypoint's background supervisor brings up `claude remote-control --spawn worktree`
-# on its own (~10s), so there's nothing to exec by hand.
+# supervisor the base image's entrypoint started (DEV_REMOTE_CONTROL=1) brings up
+# `claude remote-control --spawn worktree` on its own (~10s), so there's nothing to
+# exec by hand.
 dev: dev-up
 	@echo "Waiting for dd-dev to come up (up to 120s)..."
 	@for i in $$(seq 1 120); do \

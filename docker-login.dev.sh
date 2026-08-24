@@ -27,7 +27,8 @@ DEV_SSH=/workspace/.dev-ssh
 # ── 1/4  Git SSH keys ────────────────────────────────────────────────────────
 # Reuse a preexisting key if one already authenticates; otherwise offer to
 # generate one into the gitignored .dev-ssh/ (persists with the clone; the
-# entrypoint wires it into ~/.ssh and rewrites GitHub HTTPS->SSH for pushes).
+# child-init.sh wires it into ~/.ssh at start, and the base image's entrypoint
+# rewrites GitHub HTTPS->SSH for pushes).
 bold "1/4  Git SSH keys"
 if ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -T git@github.com 2>&1 \
      | grep -q "successfully authenticated"; then
@@ -41,8 +42,9 @@ else
     if ask "Generate a new ed25519 key there?"; then
       mkdir -p "$DEV_SSH" && chmod 700 "$DEV_SSH"
       ssh-keygen -t ed25519 -f "$DEV_SSH/id_ed25519_dev" -N "" -C "dd-dev-$(hostname)"
-      # Point ssh at this key by its absolute path (survives restarts; the entrypoint
-      # re-links .dev-ssh/config -> ~/.ssh/config on every start). Don't clobber a
+      # Point ssh at this key by its absolute path (survives restarts;
+      # child-init.sh re-links .dev-ssh/config -> ~/.ssh/config on every start).
+      # Don't clobber a
       # config you may already have from the manual multi-account setup.
       [ -f "$DEV_SSH/config" ] || cat > "$DEV_SSH/config" <<EOF
 Host github.com
@@ -91,7 +93,8 @@ fi
 
 # ── 4/4  Claude Code ─────────────────────────────────────────────────────────
 # Logging in here also unblocks the background Remote Control supervisor started by
-# the entrypoint — it polls auth every ~10s and comes online on its own once signed in.
+# the base image's entrypoint — it polls auth every ~10s and comes online on its own
+# once signed in.
 bold "4/4  Claude Code"
 if claude auth status >/dev/null 2>&1; then
   ok "$(claude auth status --text 2>&1 | grep -m1 -E 'Email|Login method' | sed 's/^[[:space:]]*//')"

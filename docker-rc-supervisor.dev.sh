@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
-# Claude Remote Control supervisor for the Pi dev container. Backed into the image at
-# /home/dev/rc-supervisor.sh and run as the FOREGROUND process by the entrypoint, so
-# the Claude session is what `docker logs` surfaces (sshd runs in the background). This
-# script loops forever — it re-launches the daemon on exit — so it is itself the process
-# keeping the container alive.
+# Claude Remote Control supervisor for the Pi dev container. Baked into the image at
+# /home/dev/rc-supervisor.sh and started by gsrpi-dev-base's entrypoint when
+# DEV_REMOTE_CONTROL=1 — the base carries the hook and each child carries its own daemon.
+#
+# SINCE 2026-08-24 IT RUNS IN THE BACKGROUND and sshd is the foreground process, which is
+# the reverse of the arrangement this file was written for. Two consequences, both
+# deliberate: `docker logs dd-dev` now shows sshd and the start-up lines rather than this
+# supervisor's stream, and ending this loop no longer ends the container. The cleaned,
+# rotated view in ~/.local/share/remote-control.log is unchanged and is now the place to
+# read it. The base made that swap because the door is the thing whose lifetime the
+# container's lifetime should equal: a wedged or exited supervisor must not take away the
+# ssh you would fix it from. This script still loops forever regardless.
 #
 # It runs `claude remote-control --spawn worktree --no-create-session-in-dir` as a
 # long-lived service so you can drive this container from claude.ai/code or the Claude
