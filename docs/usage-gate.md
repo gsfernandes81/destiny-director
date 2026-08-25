@@ -148,6 +148,12 @@ already over the cap. It is scoped to this one session only. See docs/usage-gate
 
 ## Handoff & resume
 
+> **Remote control left this container on 2026-08-25.** It is reached by ssh with
+> the work held in an `abduco` session now, and no daemon spawns a worktree per
+> session. The wording below describes how this was originally exercised; the gate
+> itself is unchanged, and a worktree you make yourself (`git worktree add`) puts
+> you in the same shape it assumes.
+
 When the gate pauses a run, the token-efficient way to continue is **not** to resume
 the same (now-huge) session but to write a compact **handoff** and let a **fresh,
 minimal session** pick up only that. This is built for `claude remote-control --spawn
