@@ -222,6 +222,11 @@ DB layer, or building a message/embed, read it.** Quick orientation:
   the Railway CLI, its venv and `docker-child-init.dev.sh`. The uid the bind mount needs
   is the BASE's now — see `docs/pi_dev_setup.md` § *The image is a thin child of a shared
   base* before changing anything about the build.
+- **The container is driven over ssh, not by Remote Control.** As of 2026-08-25 the
+  remote-control supervisor is deleted fleet-wide: `ssh -p 2222 dev@<pi>` then `abduco -A
+  claude claude`, which holds the session across a dropped link. The base stops a claude
+  left idle for 90 minutes and logs the `claude --resume` that restores it — one idle
+  session's process tree was measured at 1,146 MB, and this Pi runs four containers.
 
 ## Project layout & config
 

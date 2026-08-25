@@ -17,7 +17,7 @@
 # locally UNDER THE SAME NAME, and docker prefers a local image over a pull — so a GitHub
 # outage, a metered month, or a host whose clone owner is not the uid the CI image bakes
 # means building it there, and this file is none the wiser.
-ARG BASE_TAG=2026.08.24.2
+ARG BASE_TAG=2026.08.25
 FROM ghcr.io/gsfernandes81/gsrpi-dev-base:${BASE_TAG}
 
 # Re-declared, because an ARG stated before FROM is out of scope after it. Recorded as a
@@ -149,11 +149,13 @@ COPY --chown=dev:dev sshd_config.dev.d/ /home/dev/sshd_config.d/
 # it fills is in here.
 COPY --chown=dev:dev docker-login.dev.sh /home/dev/login.sh
 
-# Claude Remote Control. The BASE carries the hook — its entrypoint starts this exact
-# path when DEV_REMOTE_CONTROL=1 — and this repo carries the daemon, because the recycle
-# policy below it (never kill a live session; only recycle at a literal 0/32) is a
-# decision about THIS container.
-COPY --chown=dev:dev docker-rc-supervisor.dev.sh /home/dev/rc-supervisor.sh
+# NO REMOTE-CONTROL SUPERVISOR, as of 2026-08-25, and the file is deleted rather than
+# left unreferenced. This container is reached the way the other three are — ssh in, and
+# hold the work in an abduco session: `ssh -p 2222 dev@<pi>` then `abduco -A claude
+# claude`, which survives a dropped link on its own. The base carries no hook to start a
+# daemon with any more, and it runs the opposite job instead: it stops a claude nobody has
+# spoken to in 90 minutes and leaves the conversation for `claude --resume`, because an
+# idle session's process tree measures over a gigabyte.
 
 # The fifth seam: what this image does at start that the base cannot know about.
 COPY --chown=dev:dev docker-child-init.dev.sh /home/dev/child-init.sh

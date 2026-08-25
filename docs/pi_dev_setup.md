@@ -9,8 +9,8 @@ Develop Destiny Director inside a long-lived Docker container on a Raspberry Pi 
 on the host clone and inside the container are the same files.
 
 Files: `Dockerfile.dev`, `docker-child-init.dev.sh`, `docker-compose.dev.yml`,
-`ssh_config.dev`, `sshd_config.dev.d/`, `docker-login.dev.sh`,
-`docker-rc-supervisor.dev.sh`. Git identity keys live in a gitignored `.dev-ssh/` dir
+`ssh_config.dev`, `sshd_config.dev.d/`, `docker-login.dev.sh`. Git identity keys live in
+a gitignored `.dev-ssh/` dir
 that rides along with the clone.
 
 ## The image is a thin child of a shared base
@@ -191,42 +191,31 @@ claude auth login     # prints a URL — open on your laptop, paste the code bac
 claude auth status    # verify
 ```
 
-**Claude Remote Control starts automatically.** The base image's entrypoint starts this
-repo's supervisor (`docker-rc-supervisor.dev.sh`, baked in at
-`/home/dev/rc-supervisor.sh`) whenever `DEV_REMOTE_CONTROL=1` — it is set in
-`docker-compose.dev.yml` — and that supervisor launches `claude remote-control --spawn
-worktree` as soon as you're signed in (it polls auth every ~10s), so you can drive this
-container's sessions from [claude.ai/code](https://claude.ai/code) or the Claude mobile
-app with nothing to type. `--spawn worktree` gives each on-demand session its own git
-worktree, and `--no-create-session-in-dir` means an unused daemon sits at a true **0/32**
-(no phantom cwd session).
+**There is no Claude Remote Control here as of 2026-08-25**, and the supervisor that ran
+it is deleted rather than defaulted off. Every dev container on this Pi is now reached the
+same way, which is the way this one already had a door for:
 
-**Since the base landed, the supervisor runs in the BACKGROUND and sshd is the foreground
-process** — the reverse of the arrangement before it, because the door is what the
-container's lifetime should equal: a wedged supervisor must not take away the ssh you
-would fix it from. So `docker logs dd-dev` shows sshd and the start-up lines, not the
-Claude stream, and `~/.local/share/remote-control.log` is where to read the supervisor.
-That file gets a cleaned view:
-escape sequences stripped, repeated TUI repaints collapsed to one copy (with a
-`(suppressed N repeated TUI line(s))` note so nothing looks quieter than it was), and
-the file rotated at `RC_LOG_MAX_BYTES` (default 5MiB) keeping one `.1` generation.
-Teeing the raw stream used to grow that file ~5MB/day of cursor-control noise.
+```sh
+ssh -p 2222 dev@<pi-ip>          # or `docker exec -it dd-dev fish` from the host
+abduco -A claude claude          # attach the session named `claude`, create it if absent
+```
 
-*Why a supervisor and not just restart-on-crash:* Claude Code's remote-control server
-has a known class of upstream hangs where the **process stays alive but wedges** and
-stops accepting new sessions (anthropics/claude-code#51267, #40416, #37321). A
-restart-on-exit loop can't recover that, so the supervisor also **health-recycles** a
-wedged daemon — but only when it is free to: it restarts the daemon **only at a literal
-0/32 sessions**, never while a session is live (even an idle one), because killing a
-live session forces a painful remote recovery. Concretely: a freshly started daemon is
-left alone until it has served ≥1 session; once it has been used and then drops to 0
-sessions, it gets `RC_IDLE_RECYCLE_SECS` (default 300s) of continuous idle and is then
-recycled once. So you always return to a fresh, unwedged daemon after an idle gap, but
-an untouched one is never churned. Tunables (env): `RC_POLL_SECS`,
-`RC_IDLE_RECYCLE_SECS`, `RC_PERMISSION_MODE` (default keeps prompts on),
-`RC_LOG_MAX_BYTES`. A daemon that
-wedges *mid-session* is deliberately left until that session ends — end the stuck
-session from claude.ai/code (or `docker exec`) and the idle recycle takes it from there.
+`abduco` is what makes that survive a dropped link — it is a detach/attach and nothing
+else, no key handling of its own beyond Ctrl-\ , so the TUI underneath keeps every key it
+expects. `-A` means the same command both starts the work and comes back to it. Three
+arrangements for driving Claude across four containers was three things to remember; this
+is one, and it does not put a permission classifier in charge of a container holding a
+read-write deploy key and a Railway token.
+
+**An idle claude is stopped for you, and the conversation is not lost.** The base image
+runs `offload-idle-claude.sh`: a session that has been detached, silent and running
+nothing for 90 minutes is stopped, and `~/.local/share/claude-offload.log` records the
+exact `claude --resume` that brings it back. The number is not arbitrary — a claude can
+schedule its own wake-up and the runtime clamps that to an hour, so past that only a
+person is coming back for it. It refuses to touch an attached session, one with any
+non-claude process running under it (a Bash call, a build, a subagent), or one with no
+transcript to time by. Reason for it: one idle session's process tree measured **1,146 MB
+RSS**, and this Pi runs four of these next to Postgres.
 
 If Claude Code's Bash sandbox blocks writes to `~/.cache/uv` (breaks uv/ruff/ty/pytest),
 relax the sandbox in-container — the container is already an isolation boundary.
