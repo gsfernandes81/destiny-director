@@ -86,8 +86,7 @@ import lightbulb as lb
 
 from ...common import cfg, settings
 from ...common.schemas import Cv2Draft
-from ...common.utils import fetch_emoji_dict
-from .. import cv2_nodes, web
+from .. import cv2_nodes, hybrid_post_core, web
 from ..cv2_raw import RawComponentBuilder
 from . import autopost_settings
 from .web_auth import authed_user_id
@@ -108,9 +107,26 @@ _CUSTOM_POST_HTML_PATH = (
     Path(__file__).resolve().parent.parent / "web_static" / "custom_post.html"
 )
 
-# Emoji dicts are a REST round-trip per guild; the builder asks for one on every page
-# load, so keep the last result briefly rather than re-fetching per draft.
-_emoji_cache: dict[str, dict[str, t.Any]] | None = None
+
+async def _guild_emoji() -> dict[str, h.Emoji]:
+    """The guild's emoji, for the page to render with and for ``/publish`` to resolve.
+
+    Goes through :func:`hybrid_post_core.preview_emoji_dict` — the TTL'd, process-wide
+    cache every producer's ``/preview`` route already shares — so the map the canvas
+    renders from and the map publishing substitutes against are the *same* map. This
+    module used to keep a cache of its own that, despite saying "briefly", had no expiry
+    at all: an emoji renamed or deleted mid-process left the preview happily drawing a
+    name that publishing would no longer resolve, which is the previews-lie bug this
+    file exists to have fixed, in miniature.
+
+    Degrades to an empty map rather than failing: ``preview_emoji_dict`` swallows a
+    failed fetch itself, and a request that beats the bot up raises
+    :class:`web.BotNotReady`. Shortcodes then render (and post) as their literal text.
+    """
+    try:
+        return await hybrid_post_core.preview_emoji_dict(web.require_bot())
+    except web.BotNotReady:
+        return {}
 
 
 async def _emoji_map() -> dict[str, dict[str, t.Any]]:
@@ -121,46 +137,20 @@ async def _emoji_map() -> dict[str, dict[str, t.Any]]:
     on one only from ``{"id": …, "name": …}`` — a name alone is valid for a unicode
     emoji and silently nothing for a custom one, which is why this map is richer than
     the ``{name: url}`` shape :func:`hybrid_post_core.emoji_payload` sends elsewhere.
-
-    A failure here costs shortcode rendering across the page — the canvas, the button
-    emoji picker and the publish confirmation all resolve from this one map now — so it
-    degrades to an empty map (shortcodes render as their literal text) rather than
-    failing the page.
     """
-    global _emoji_cache
-    if _emoji_cache is not None:
-        return _emoji_cache
-    try:
-        emoji_dict = await fetch_emoji_dict(t.cast(h.GatewayBot, web.require_bot()))
-        _emoji_cache = {
-            name: {
-                "url": str(getattr(emoji, "url", "")),
-                "id": str(getattr(emoji, "id", "") or ""),
-                "animated": bool(getattr(emoji, "is_animated", False)),
-            }
-            for name, emoji in emoji_dict.items()
+    return {
+        name: {
+            "url": str(getattr(emoji, "url", "")),
+            "id": str(getattr(emoji, "id", "") or ""),
+            "animated": bool(getattr(emoji, "is_animated", False)),
         }
-    except Exception as e:
-        logging.warning("CV2 builder: could not resolve the emoji dict: %r", e)
-        _emoji_cache = {}
-    return _emoji_cache
+        for name, emoji in (await _guild_emoji()).items()
+    }
 
 
 async def _substitute_emoji(nodes: list[cv2_nodes.Node]) -> list[cv2_nodes.Node]:
-    """Resolve the tree's ``:name:`` shortcodes against the guild's emoji.
-
-    Fetched fresh rather than read off ``_emoji_map``'s cache: a publish is rare (that
-    cache exists for the per-page-load round-trip) and an emoji added since the page
-    loaded should still resolve. A fetch failure leaves the tree alone and logs — the
-    post goes out with literal shortcodes, which is worse than a mention but much better
-    than losing the send.
-    """
-    try:
-        emoji_dict = await fetch_emoji_dict(t.cast(h.GatewayBot, web.require_bot()))
-    except Exception as e:
-        logging.warning("CV2 builder: publishing without emoji substitution: %r", e)
-        return nodes
-    return cv2_nodes.substitute_emoji(nodes, emoji_dict)
+    """Resolve the tree's ``:name:`` shortcodes against the same emoji the page drew."""
+    return cv2_nodes.substitute_emoji(nodes, await _guild_emoji())
 
 
 async def _load_draft(request: aiohttp.web.Request) -> Cv2Draft:
