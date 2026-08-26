@@ -92,3 +92,12 @@ unresolved-attribute = "ignore"
 # A one-method stub stands in for `pages_cls` (it needs only `from_channel` and
 # `teardown`), and CommandBase is what `make_navigator_command` actually returns.
 invalid-argument-type = "ignore"
+
+[[overrides]]
+include = ["dd/beacon/tests/test_user_commands_message_copy.py"]
+
+[overrides.rules]
+# _copy_response_kwargs takes an h.Message but reads five attributes off it. Building a
+# real one means the entity factory and a full gateway payload; a stand-in with those
+# five states the case under test outright.
+invalid-argument-type = "ignore"

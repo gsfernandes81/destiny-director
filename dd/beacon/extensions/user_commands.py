@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...common import cfg, settings
 from ...common.auth import NotBotOwnerError, owner_only
 from ...common.bot import CachedFetchBot
+from ...common.components import rebuild_components
 from ...common.discord_logging import log_command_failure
 from ...common.schemas import UserCommand, db_session
 from ...common.utils import (
@@ -148,6 +149,34 @@ async def _on_command_error(
 # --------------------------------------------------------------------------------------
 
 
+def _copy_response_kwargs(msg: h.Message) -> dict[str, t.Any]:
+    """The ``ctx.respond`` kwargs that re-send ``msg`` verbatim (response type 2).
+
+    Two things a fetched message needs before it can be sent back out:
+
+    - **Components are models, not builders.** hikari's send path calls ``build()`` on
+      every entry of ``components``, and a fetched message exposes
+      :class:`hikari.PartialComponent` models, which have no such method. Passing them
+      through raised ``AttributeError: 'ContainerComponent' object has no attribute
+      'build'`` — so every copy command whose source carried *any* component (a
+      Components V2 post, or a plain message with a link-button row) failed outright.
+      :func:`rebuild_components` turns them back into sendable builders.
+    - **A Components V2 source is components-only.** It carries no content and no
+      embeds — Discord treats them as mutually exclusive — and must go out with the
+      ``IS_COMPONENTS_V2`` flag, so it gets a payload of its own rather than the
+      content/embeds/attachments one.
+    """
+    components = rebuild_components(msg.components) if msg.components else []
+    if h.MessageFlag.IS_COMPONENTS_V2 in (msg.flags or h.MessageFlag.NONE):
+        return {"components": components, "flags": h.MessageFlag.IS_COMPONENTS_V2}
+    return {
+        "content": msg.content,
+        "embeds": msg.embeds,
+        "components": components,
+        "attachments": msg.attachments,
+    }
+
+
 def _user_command_response_func_builder(
     cmd: UserCommand,
 ) -> t.Callable[[t.Any, lb.Context], t.Awaitable[None]]:
@@ -200,15 +229,7 @@ def _user_command_response_func_builder(
             # Bypass the cache (use raw REST) so a copied message always reflects the
             # live source, as in v2.
             msg_to_respond_with = await bot.rest.fetch_message(channel_id, message_id)
-            await ctx.respond(
-                msg_to_respond_with.content,
-                embeds=msg_to_respond_with.embeds,
-                # Re-sending a fetched message's components is the intended
-                # message-copy behaviour; hikari accepts them at runtime even though
-                # ty types them as message components rather than builders.
-                components=msg_to_respond_with.components,  # ty: ignore[invalid-argument-type]
-                attachments=msg_to_respond_with.attachments,
-            )
+            await ctx.respond(**_copy_response_kwargs(msg_to_respond_with))
 
     elif cmd.response_type == 3:
         embed_kwargs = json.loads(cmd.response_data)
