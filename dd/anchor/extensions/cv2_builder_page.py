@@ -44,9 +44,11 @@ additionally scoped to the draft's creator — see :meth:`Cv2Draft.get_for_user`
 **Trust boundary.** Rendering is the client's job — the canvas is the live editing
 surface, so a round-trip per keystroke is not an option, and one shared renderer
 (``web_static/cv2_render.js``) draws every preview surface. None of that is
-load-bearing. ``/publish`` re-runs :func:`cv2_nodes.validate` and sends through
-:class:`RawComponentBuilder` from the node list *it* was given, so a tampered or stale
-client cannot post something the server did not independently accept.
+load-bearing. ``/publish`` resolves the tree's ``:name:`` shortcodes (the client only
+ever *renders* them; Discord needs the ``<:name:id>`` mention in the payload), re-runs
+:func:`cv2_nodes.validate` on the result and sends through :class:`RawComponentBuilder`
+from the node list *it* was given, so a tampered or stale client cannot post something
+the server did not independently accept.
 
 The target is the other half of that boundary. A browser names one **exactly once, at
 mint**, and only through :func:`_handle_new`, which refuses anything
@@ -84,8 +86,7 @@ import lightbulb as lb
 
 from ...common import cfg, settings
 from ...common.schemas import Cv2Draft
-from ...common.utils import fetch_emoji_dict
-from .. import cv2_nodes, web
+from .. import cv2_nodes, hybrid_post_core, web
 from ..cv2_raw import RawComponentBuilder
 from . import autopost_settings
 from .web_auth import authed_user_id
@@ -106,9 +107,26 @@ _CUSTOM_POST_HTML_PATH = (
     Path(__file__).resolve().parent.parent / "web_static" / "custom_post.html"
 )
 
-# Emoji dicts are a REST round-trip per guild; the builder asks for one on every page
-# load, so keep the last result briefly rather than re-fetching per draft.
-_emoji_cache: dict[str, dict[str, t.Any]] | None = None
+
+async def _guild_emoji() -> dict[str, h.Emoji]:
+    """The guild's emoji, for the page to render with and for ``/publish`` to resolve.
+
+    Goes through :func:`hybrid_post_core.preview_emoji_dict` — the TTL'd, process-wide
+    cache every producer's ``/preview`` route already shares — so the map the canvas
+    renders from and the map publishing substitutes against are the *same* map. This
+    module used to keep a cache of its own that, despite saying "briefly", had no expiry
+    at all: an emoji renamed or deleted mid-process left the preview happily drawing a
+    name that publishing would no longer resolve, which is the previews-lie bug this
+    file exists to have fixed, in miniature.
+
+    Degrades to an empty map rather than failing: ``preview_emoji_dict`` swallows a
+    failed fetch itself, and a request that beats the bot up raises
+    :class:`web.BotNotReady`. Shortcodes then render (and post) as their literal text.
+    """
+    try:
+        return await hybrid_post_core.preview_emoji_dict(web.require_bot())
+    except web.BotNotReady:
+        return {}
 
 
 async def _emoji_map() -> dict[str, dict[str, t.Any]]:
@@ -119,29 +137,20 @@ async def _emoji_map() -> dict[str, dict[str, t.Any]]:
     on one only from ``{"id": …, "name": …}`` — a name alone is valid for a unicode
     emoji and silently nothing for a custom one, which is why this map is richer than
     the ``{name: url}`` shape :func:`hybrid_post_core.emoji_payload` sends elsewhere.
-
-    A failure here costs shortcode rendering across the page — the canvas, the button
-    emoji picker and the publish confirmation all resolve from this one map now — so it
-    degrades to an empty map (shortcodes render as their literal text) rather than
-    failing the page.
     """
-    global _emoji_cache
-    if _emoji_cache is not None:
-        return _emoji_cache
-    try:
-        emoji_dict = await fetch_emoji_dict(t.cast(h.GatewayBot, web.require_bot()))
-        _emoji_cache = {
-            name: {
-                "url": str(getattr(emoji, "url", "")),
-                "id": str(getattr(emoji, "id", "") or ""),
-                "animated": bool(getattr(emoji, "is_animated", False)),
-            }
-            for name, emoji in emoji_dict.items()
+    return {
+        name: {
+            "url": str(getattr(emoji, "url", "")),
+            "id": str(getattr(emoji, "id", "") or ""),
+            "animated": bool(getattr(emoji, "is_animated", False)),
         }
-    except Exception as e:
-        logging.warning("CV2 builder: could not resolve the emoji dict: %r", e)
-        _emoji_cache = {}
-    return _emoji_cache
+        for name, emoji in (await _guild_emoji()).items()
+    }
+
+
+async def _substitute_emoji(nodes: list[cv2_nodes.Node]) -> list[cv2_nodes.Node]:
+    """Resolve the tree's ``:name:`` shortcodes against the same emoji the page drew."""
+    return cv2_nodes.substitute_emoji(nodes, await _guild_emoji())
 
 
 async def _load_draft(request: aiohttp.web.Request) -> Cv2Draft:
@@ -260,7 +269,17 @@ async def _handle_preview(request: aiohttp.web.Request) -> aiohttp.web.Response:
 async def _handle_publish(request: aiohttp.web.Request) -> aiohttp.web.Response:
     draft = await _load_draft(request)
     nodes = await _nodes_from_body(request)
+    # What the author typed, kept for the autosave below: the draft stores shortcodes so
+    # a later edit shows `:armor:` in the editor rather than a raw mention.
+    authored_nodes = nodes
     user_id = authed_user_id(request)
+
+    # Resolve `:name:` shortcodes to `<:name:id>` mentions *before* validating, for the
+    # same reason `finalize_cv2_post` does it before `guard_cv2_hmessage`: a mention is
+    # ~20 characters longer than the shortcode it replaces, and Discord's 4000-character
+    # cap counts the mention. Validating the authored text would pass a tree Discord
+    # then refuses — on a loot table with forty item icons, by roughly 800 characters.
+    nodes = await _substitute_emoji(nodes)
 
     # Re-validate server-side. The client blocks the button on the same rules, but the
     # rules that matter are the ones enforced here.
@@ -309,7 +328,7 @@ async def _handle_publish(request: aiohttp.web.Request) -> aiohttp.web.Response:
         )
 
     draft_id = str(draft.id)
-    await Cv2Draft.save_nodes(draft_id, user_id, nodes)
+    await Cv2Draft.save_nodes(draft_id, user_id, authored_nodes)
     await Cv2Draft.mark_published(draft_id, user_id, int(message.id))
     return aiohttp.web.json_response(
         {

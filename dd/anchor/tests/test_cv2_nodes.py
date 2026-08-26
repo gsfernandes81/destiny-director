@@ -201,3 +201,94 @@ def test_validate_refuses_more_than_ten_gallery_images():
         "items": [{"media": {"url": f"https://e.invalid/{i}.png"}} for i in range(11)],
     }
     assert any("Discord allows 10" in p for p in cn.validate([many]))
+
+
+# --- emoji substitution -----------------------------------------------------------
+#
+# The bug these cover: the builder resolved `:name:` for the canvas and the "exactly how
+# Discord will render it" confirmation, but published the node tree verbatim — so a post
+# that showed real emoji in both previews arrived in the channel as literal `:armor:`.
+
+
+class _FakeEmoji:
+    """Enough of ``hikari.Emoji`` for the substituter, which only ever ``str()``s it."""
+
+    def __init__(self, mention: str) -> None:
+        self._mention = mention
+
+    def __str__(self) -> str:
+        return self._mention
+
+
+_EMOJI = {
+    "armor": _FakeEmoji("<:armor:111>"),
+    "auto_rifle": _FakeEmoji("<:auto_rifle:222>"),
+}
+
+
+def test_substitute_emoji_rewrites_text_display_content():
+    nodes = [{"type": cn.TEXT_DISPLAY, "content": ":armor: Helmet, Arms, Chest"}]
+    assert cn.substitute_emoji(nodes, _EMOJI) == [
+        {"type": cn.TEXT_DISPLAY, "content": "<:armor:111> Helmet, Arms, Chest"}
+    ]
+    # The input tree is left alone — the draft keeps what the author typed.
+    assert nodes[0]["content"] == ":armor: Helmet, Arms, Chest"
+
+
+def test_substitute_emoji_reaches_nested_text_and_section_accessories():
+    nodes = [
+        {
+            "type": cn.CONTAINER,
+            "components": [
+                {
+                    "type": cn.SECTION,
+                    "components": [{"type": cn.TEXT_DISPLAY, "content": ":armor:"}],
+                    "accessory": {
+                        "type": cn.THUMBNAIL,
+                        "media": {"url": "https://e.invalid/i.png"},
+                    },
+                },
+                {"type": cn.TEXT_DISPLAY, "content": ":auto_rifle: Intercalary"},
+            ],
+        }
+    ]
+    out = cn.substitute_emoji(nodes, _EMOJI)
+    section, text = out[0]["components"]
+    assert section["components"][0]["content"] == "<:armor:111>"
+    assert section["accessory"]["media"]["url"] == "https://e.invalid/i.png"
+    assert text["content"] == "<:auto_rifle:222> Intercalary"
+
+
+def test_substitute_emoji_is_idempotent_and_leaves_unknown_names_alone():
+    # A draft seeded from a live post already carries mentions; running again must not
+    # rewrite them (the substituter skips anything with a trailing id).
+    nodes = [{"type": cn.TEXT_DISPLAY, "content": "<:armor:111> and :unknown:"}]
+    once = cn.substitute_emoji(nodes, _EMOJI)
+    assert once[0]["content"] == "<:armor:111> and :unknown:"
+    assert cn.substitute_emoji(once, _EMOJI) == once
+
+
+def test_substitute_emoji_leaves_button_labels_alone():
+    # Discord renders no markdown in a button label — a mention there would show as
+    # its raw text. A button's emoji is a field of its own.
+    row = {
+        "type": cn.ACTION_ROW,
+        "components": [
+            {"type": cn.BUTTON, "label": ":armor: Loot", "url": "https://e.invalid"}
+        ],
+    }
+    assert cn.substitute_emoji([row], _EMOJI)[0]["components"][0]["label"] == (
+        ":armor: Loot"
+    )
+
+
+def test_validation_counts_the_substituted_length():
+    # Why publish substitutes *before* validating: the mention is what Discord counts.
+    # A tree that fits as shortcodes can overflow once resolved, and the loot tables
+    # that prompted this carry dozens of icons.
+    line = ":armor: " * 400  # 3200 chars authored, ~5200 once resolved
+    nodes = [{"type": cn.TEXT_DISPLAY, "content": line}]
+    assert cn.validate(nodes) == []
+    assert any(
+        "Too much text" in p for p in cn.validate(cn.substitute_emoji(nodes, _EMOJI))
+    )

@@ -47,7 +47,10 @@ here are the ones that actually gate a send.
 
 import typing as t
 
+import hikari as h
+
 from ..common.components import CV2_TEXT_LIMIT, cv2_utf16_len
+from ..common.utils import construct_emoji_substituter, re_user_side_emoji
 
 # --- Discord component type ids ---------------------------------------------------
 
@@ -191,6 +194,47 @@ def _sanitize_node(node: Node) -> Node:
             return _placeholder("incomplete link button")
         return node
     return node
+
+
+# --- emoji substitution -----------------------------------------------------------
+
+
+def substitute_emoji(nodes: list[Node], emoji_dict: dict[str, h.Emoji]) -> list[Node]:
+    """Return a copy of ``nodes`` with ``:name:`` shortcodes resolved to mentions.
+
+    Discord renders a custom emoji only from a full ``<:name:id>`` mention; a bare
+    ``:armor:`` posts as those seven literal characters. Every *code*-driven CV2 post
+    resolves them on the way out (``components.finalize_cv2_post``), but the web
+    builder sent the author's node tree verbatim — so a post whose canvas and
+    confirmation dialog both showed real emoji (the client renderer resolves shortcodes
+    against the same guild map) arrived in the channel as raw text.
+
+    Only a text display's ``content`` is rewritten. A button *label* is deliberately
+    left alone: Discord renders no markdown there, and a button's emoji is a field of
+    its own (``buttonEmojiFor`` in ``cv2_model.js`` fills it), so substituting would put
+    visible ``<:name:id>`` text on the button — which is what the renderer models by
+    drawing labels as plain text.
+
+    Mentions already in the tree — a draft seeded from a live post carries them — are
+    left untouched by :func:`construct_emoji_substituter`, so this is idempotent.
+    """
+    substituter = construct_emoji_substituter(emoji_dict)
+
+    def walk(node: Node) -> Node:
+        out = dict(node)
+        if out.get("type") == TEXT_DISPLAY and isinstance(out.get("content"), str):
+            out["content"] = re_user_side_emoji.sub(substituter, out["content"])
+        children = out.get("components")
+        if isinstance(children, list):
+            out["components"] = [
+                walk(child) if isinstance(child, dict) else child for child in children
+            ]
+        accessory = out.get("accessory")
+        if isinstance(accessory, dict):
+            out["accessory"] = walk(accessory)
+        return out
+
+    return [walk(node) if isinstance(node, dict) else node for node in nodes]
 
 
 # --- validation -------------------------------------------------------------------

@@ -317,7 +317,7 @@
     }
 
     function paintCanvas() {
-      state.problems = M.validate(state.nodes);
+      state.problems = M.validate(state.nodes, emoji);
       el.canvas.innerHTML = state.nodes.length
         ? // `.cv2-root` is what cv2_preview.css keys the rendered post's typography off,
           // and the canvas never had it — so the message read at a different size here
@@ -362,7 +362,7 @@
 
     /** Repaint error outlines + the inspector without rebuilding the canvas DOM. */
     function refreshValidity() {
-      state.problems = M.validate(state.nodes);
+      state.problems = M.validate(state.nodes, emoji);
       const bad = problemPaths();
       el.canvas.querySelectorAll(".cv2b-blk").forEach((n) => {
         n.classList.toggle("cv2b-invalid", bad.has(n.dataset.path));

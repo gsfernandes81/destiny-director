@@ -29,6 +29,7 @@ Two things here are load-bearing and everything else is plumbing:
    from can never hold a channel nobody vetted.
 """
 
+import datetime as dt
 import json
 import typing as t
 import uuid
@@ -38,7 +39,7 @@ import aiohttp.web
 import hikari as h
 import pytest
 
-from dd.anchor import web
+from dd.anchor import hybrid_post_core, web
 from dd.anchor.extensions import (
     autopost_settings as aps,
     cv2_builder_page as page,
@@ -133,9 +134,10 @@ class _StubBot:
 def stub_bot(monkeypatch: pytest.MonkeyPatch) -> _StubBot:
     bot = _StubBot()
     monkeypatch.setattr(web, "_bot", bot)
-    # The emoji map is a REST round-trip; short-circuit it (its own degrade path is
-    # covered by the try/except in _emoji_map).
-    monkeypatch.setattr(page, "_emoji_cache", {})
+    # The emoji map is a REST round-trip; short-circuit it at the shared cache the
+    # page and /publish both read (its degrade path is covered by _guild_emoji).
+    monkeypatch.setattr(hybrid_post_core, "_emoji_cache", {})
+    monkeypatch.setattr(hybrid_post_core, "_emoji_cache_at", dt.datetime.now(tz=dt.UTC))
     return bot
 
 
@@ -529,3 +531,57 @@ async def test_page_shell_is_servable() -> None:
     # A missing/renamed template would otherwise only fail in production.
     assert page._PAGE_HTML_PATH.exists()
     assert "cv2_builder_page.js" in page._PAGE_HTML_PATH.read_text()
+
+
+# --- one emoji map, two readers ---------------------------------------------------
+#
+# The canvas and the publish confirmation render `:armor:` from `_emoji_map`, and
+# `/publish` resolves it through `_substitute_emoji`. When those read different caches
+# they can disagree, and a disagreement is the previews-lie bug in miniature: the page
+# draws an emoji publishing will no longer resolve. This module used to hold a cache of
+# its own with no expiry despite its "briefly" comment, so a rename or delete stranded
+# the page on a stale name until the process restarted. Both readers now go through
+# `hybrid_post_core`'s shared, TTL'd dict — so pin that they cannot drift.
+
+
+class _StubEmoji:
+    def __init__(self, id_: int, name: str) -> None:
+        self.id = id_
+        self.name = name
+        self.url = f"https://cdn.invalid/{id_}.png"
+        self.is_animated = False
+
+    def __str__(self) -> str:
+        return f"<:{self.name}:{self.id}>"
+
+
+async def test_the_page_and_publish_resolve_from_the_same_emoji_dict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(web, "_bot", _StubBot())
+    monkeypatch.setattr(
+        hybrid_post_core, "_emoji_cache", {"armor": _StubEmoji(111, "armor")}
+    )
+    monkeypatch.setattr(hybrid_post_core, "_emoji_cache_at", dt.datetime.now(tz=dt.UTC))
+
+    assert (await page._emoji_map())["armor"]["id"] == "111"
+    nodes = await page._substitute_emoji([{"type": 10, "content": ":armor: Helmet"}])
+    assert nodes[0]["content"] == "<:armor:111> Helmet"
+
+    # Drop the emoji from the shared dict: BOTH readers must lose it together.
+    monkeypatch.setattr(hybrid_post_core, "_emoji_cache", {})
+    assert await page._emoji_map() == {}
+    dropped = await page._substitute_emoji([{"type": 10, "content": ":armor: Helmet"}])
+    assert dropped[0]["content"] == ":armor: Helmet"
+
+
+async def test_emoji_lookup_degrades_when_the_bot_is_not_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A request that beats the bot up must not fail the page or lose a send; shortcodes
+    # render (and post) as their literal text instead.
+    monkeypatch.setattr(web, "_bot", None)
+
+    assert await page._emoji_map() == {}
+    nodes = await page._substitute_emoji([{"type": 10, "content": ":armor:"}])
+    assert nodes[0]["content"] == ":armor:"
