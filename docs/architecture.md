@@ -140,6 +140,14 @@ Two consequences worth knowing before touching any of it:
   is structural rather than remembered: text reaches the DOM via `textContent`, a URL is
   `http(s)`-validated at the single place it becomes an attribute, a colour is assigned
   as a style *property*, and only `cv2_model.renderMd` output ever reaches `innerHTML`.
+- **A `:shortcode:` is rendered on the web but *resolved* on the server.** The renderer
+  turns `:armor:` into an `<img>` so the canvas and the publish confirmation look like
+  Discord; Discord itself only renders a full `<:name:id>` mention, so
+  `cv2_nodes.substitute_emoji` rewrites the tree at `/publish` (as
+  `components.finalize_cv2_post` does for every code-driven CV2 post). Publishing the
+  authored tree verbatim is what once put literal `:armor:` in a live loot table. The
+  client mirrors the substitution for one purpose only — the 4000-character count, which
+  Discord measures on the mention, not the shortcode.
 - **`dd/anchor/preview_fixtures/`** is the golden corpus. Python asserts the data it
   produces, JavaScript asserts the drawing, and every expectation is audited against the
   tag/attribute/URL whitelist. Change a render and you regenerate it — deliberately, and

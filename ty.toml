@@ -44,11 +44,15 @@ include = ["dd/sector_accounting/utils.py"]
 invalid-method-override = "ignore"
 
 [[overrides]]
-include = ["dd/common/tests/test_utils.py"]
+include = [
+    "dd/common/tests/test_utils.py",
+    "dd/anchor/tests/test_cv2_nodes.py",
+]
 
 [overrides.rules]
 # construct_emoji_substituter is typed for dict[str, h.Emoji] but only calls
-# str() on the values, so the tests pass plain strings.
+# str() on the values, so the tests pass plain strings — and cv2_nodes.substitute_emoji,
+# which is a thin wrapper over it, inherits both the signature and the stand-in.
 invalid-argument-type = "ignore"
 
 [[overrides]]

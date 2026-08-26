@@ -338,7 +338,46 @@
     return total;
   }
 
-  function validate(nodes) {
+  // One `:name:` shortcode. Mirrors `re_user_side_emoji` in dd/common/utils.py — the
+  // trailing id group is what marks an ALREADY-resolved mention, which is left alone.
+  const SHORTCODE = /(<a?)?:(\w+)(?:~\d)*:(\d+>)?/g;
+
+  /**
+   * Resolve `:name:` shortcodes to `<:name:id>` mentions across a node tree.
+   *
+   * Mirrors `cv2_nodes.substitute_emoji`, which is what actually runs at publish. The
+   * client needs it only to COUNT: a mention is ~20 characters longer than the
+   * shortcode it replaces and Discord's 4000-character cap counts the mention, so
+   * measuring the authored text would let the canvas say "Ready to post" about a tree
+   * the server then refuses. Rendering still resolves shortcodes to <img>, not to text.
+   *
+   * A name the guild map doesn't know (or knows without an id — the bare-URL map shape)
+   * is left as its literal text, exactly as Discord would show it.
+   */
+  function substituteEmoji(nodes, emoji) {
+    if (!emoji) return nodes;
+    const sub = (text) =>
+      String(text).replace(SHORTCODE, (whole, prefix, name, idGroup) => {
+        if (idGroup) return whole;
+        const entry = emojiEntry(emoji, name);
+        if (!entry || !entry.id) return whole;
+        return "<" + (entry.animated ? "a" : "") + ":" + name + ":" + entry.id + ">";
+      });
+    const walk = (node) => {
+      const out = Object.assign({}, node);
+      if (out.type === TEXT_DISPLAY && typeof out.content === "string") {
+        out.content = sub(out.content);
+      }
+      if (Array.isArray(out.components)) out.components = out.components.map(walk);
+      if (out.accessory && typeof out.accessory === "object") {
+        out.accessory = walk(out.accessory);
+      }
+      return out;
+    };
+    return nodes.map(walk);
+  }
+
+  function validate(nodes, emoji) {
     const problems = [];
     const push = (path, msg) => problems.push({ path: path, msg: msg });
 
@@ -355,8 +394,9 @@
     }
 
     // The cap Discord enforces at send time; without checking it here the only symptom
-    // is a rejected send long after the text was written.
-    const textLen = totalTextLength(nodes);
+    // is a rejected send long after the text was written. Measured on the SUBSTITUTED
+    // tree because that is the payload Discord counts (see `substituteEmoji`).
+    const textLen = totalTextLength(substituteEmoji(nodes, emoji));
     if (textLen > MAX_TEXT) {
       push(
         null,
@@ -1013,6 +1053,7 @@
     // validation
     validate,
     totalTextLength,
+    substituteEmoji,
     // markdown
     esc,
     inlineMd,

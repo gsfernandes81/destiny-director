@@ -44,9 +44,11 @@ additionally scoped to the draft's creator — see :meth:`Cv2Draft.get_for_user`
 **Trust boundary.** Rendering is the client's job — the canvas is the live editing
 surface, so a round-trip per keystroke is not an option, and one shared renderer
 (``web_static/cv2_render.js``) draws every preview surface. None of that is
-load-bearing. ``/publish`` re-runs :func:`cv2_nodes.validate` and sends through
-:class:`RawComponentBuilder` from the node list *it* was given, so a tampered or stale
-client cannot post something the server did not independently accept.
+load-bearing. ``/publish`` resolves the tree's ``:name:`` shortcodes (the client only
+ever *renders* them; Discord needs the ``<:name:id>`` mention in the payload), re-runs
+:func:`cv2_nodes.validate` on the result and sends through :class:`RawComponentBuilder`
+from the node list *it* was given, so a tampered or stale client cannot post something
+the server did not independently accept.
 
 The target is the other half of that boundary. A browser names one **exactly once, at
 mint**, and only through :func:`_handle_new`, which refuses anything
@@ -142,6 +144,23 @@ async def _emoji_map() -> dict[str, dict[str, t.Any]]:
         logging.warning("CV2 builder: could not resolve the emoji dict: %r", e)
         _emoji_cache = {}
     return _emoji_cache
+
+
+async def _substitute_emoji(nodes: list[cv2_nodes.Node]) -> list[cv2_nodes.Node]:
+    """Resolve the tree's ``:name:`` shortcodes against the guild's emoji.
+
+    Fetched fresh rather than read off ``_emoji_map``'s cache: a publish is rare (that
+    cache exists for the per-page-load round-trip) and an emoji added since the page
+    loaded should still resolve. A fetch failure leaves the tree alone and logs — the
+    post goes out with literal shortcodes, which is worse than a mention but much better
+    than losing the send.
+    """
+    try:
+        emoji_dict = await fetch_emoji_dict(t.cast(h.GatewayBot, web.require_bot()))
+    except Exception as e:
+        logging.warning("CV2 builder: publishing without emoji substitution: %r", e)
+        return nodes
+    return cv2_nodes.substitute_emoji(nodes, emoji_dict)
 
 
 async def _load_draft(request: aiohttp.web.Request) -> Cv2Draft:
@@ -260,7 +279,17 @@ async def _handle_preview(request: aiohttp.web.Request) -> aiohttp.web.Response:
 async def _handle_publish(request: aiohttp.web.Request) -> aiohttp.web.Response:
     draft = await _load_draft(request)
     nodes = await _nodes_from_body(request)
+    # What the author typed, kept for the autosave below: the draft stores shortcodes so
+    # a later edit shows `:armor:` in the editor rather than a raw mention.
+    authored_nodes = nodes
     user_id = authed_user_id(request)
+
+    # Resolve `:name:` shortcodes to `<:name:id>` mentions *before* validating, for the
+    # same reason `finalize_cv2_post` does it before `guard_cv2_hmessage`: a mention is
+    # ~20 characters longer than the shortcode it replaces, and Discord's 4000-character
+    # cap counts the mention. Validating the authored text would pass a tree Discord
+    # then refuses — on a loot table with forty item icons, by roughly 800 characters.
+    nodes = await _substitute_emoji(nodes)
 
     # Re-validate server-side. The client blocks the button on the same rules, but the
     # rules that matter are the ones enforced here.
@@ -309,7 +338,7 @@ async def _handle_publish(request: aiohttp.web.Request) -> aiohttp.web.Response:
         )
 
     draft_id = str(draft.id)
-    await Cv2Draft.save_nodes(draft_id, user_id, nodes)
+    await Cv2Draft.save_nodes(draft_id, user_id, authored_nodes)
     await Cv2Draft.mark_published(draft_id, user_id, int(message.id))
     return aiohttp.web.json_response(
         {

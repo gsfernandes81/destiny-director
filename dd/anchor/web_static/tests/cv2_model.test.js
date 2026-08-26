@@ -206,6 +206,42 @@ test("an incomplete accessory is reported against the accessory itself", () => {
   assert.deepEqual(btnProblem.path, [0, "acc"]);
 });
 
+// --- emoji substitution --------------------------------------------------------------
+// The mirror of cv2_nodes.substitute_emoji. The client needs it only to COUNT: the
+// mention is what Discord's 4000-character cap measures, so counting the authored
+// shortcodes would let the canvas say "Ready to post" about a tree the server refuses.
+
+const GUILD_EMOJI = {
+  armor: { url: "https://cdn.invalid/111.png", id: "111", animated: false },
+  wave: { url: "https://cdn.invalid/222.gif", id: "222", animated: true },
+};
+
+test("shortcodes become mentions, and an animated one keeps its <a: prefix", () => {
+  const out = M.substituteEmoji([text(":armor: and :wave:")], GUILD_EMOJI);
+  assert.equal(out[0].content, "<:armor:111> and <a:wave:222>");
+});
+
+test("substitution leaves resolved mentions, unknown names and labels alone", () => {
+  const out = M.substituteEmoji([text("<:armor:111> :nope:")], GUILD_EMOJI);
+  assert.equal(out[0].content, "<:armor:111> :nope:");
+  // Discord renders no markdown in a button label; its emoji is a field of its own.
+  const row = linkButton(":armor: Loot", "https://e.invalid");
+  assert.equal(M.substituteEmoji([row], GUILD_EMOJI)[0].components[0].label, ":armor: Loot");
+});
+
+test("substitution reaches nested text and does not mutate the input", () => {
+  const nodes = [container([section([text(":armor:")], { type: M.THUMBNAIL })])];
+  const out = M.substituteEmoji(nodes, GUILD_EMOJI);
+  assert.equal(out[0].components[0].components[0].content, "<:armor:111>");
+  assert.equal(nodes[0].components[0].components[0].content, ":armor:");
+});
+
+test("the length check counts the substituted text, not the shortcodes", () => {
+  const nodes = [text(":armor: ".repeat(400))]; // 3200 authored, 4800 resolved
+  assert.deepEqual(M.validate(nodes), []);
+  assert.ok(M.validate(nodes, GUILD_EMOJI).some((p) => /Too much text/.test(p.msg)));
+});
+
 // --- multi-button rows ---------------------------------------------------------------
 // A row loaded from a live post can hold up to five buttons. Assuming one meant the
 // second was rendered but not editable, and its missing URL slipped past validation.
