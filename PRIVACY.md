@@ -8,7 +8,7 @@ Access to these server and channel ids is only permitted to bot developers and o
 
 ## Storage of Data
 
-Data is stored in a private database and the database is secured to prevent external access, however no guarantee is proviede and we assume no liaility for the unintentional or malicious breach of data. In the event of unauthorised data acces, users will be notified through the discord client application through servers it is registered in provided the database isn't damaged to the point where we can not send out messages since we do not have server and channel ids to send them to.
+Data is stored in a private database and the database is secured to prevent external access, however no guarantee is provided and we assume no liability for the unintentional or malicious breach of data. In the event of unauthorised data access, users will be notified through the Discord client application through servers it is registered in provided the database isn't damaged to the point where we can not send out messages since we do not have server and channel ids to send them to.
 
 ## User Rights
 
