@@ -1,8 +1,8 @@
 # Break-glass sshd for the DEPLOYED container (see supervisord.conf; the dev container's
-# equivalent now lives in the gsrpi-dev-base image, with this repo overriding two
-# keywords in sshd_config.dev.d/). It exists for one job: getting a shell into a container
-# whose bot has died — `supervisorctl -c /etc/dd/supervisord.conf status`, a look at the
-# database, a manual `alembic` run — without keeping the bot alive to do it.
+# sshd is gsrpi-dev-base's own, and this repo adds nothing to it). It exists for one job:
+# getting a shell into a container whose bot has died — `supervisorctl -c
+# /etc/dd/supervisord.conf status`, a look at the database, a manual `alembic` run —
+# without keeping the bot alive to do it.
 #
 # Runs as the unprivileged `dd` user (the image does `USER dd`), which is why the port is
 # 2222 rather than 22. A non-root sshd can only ever authenticate its own account, so

@@ -7,16 +7,16 @@
 #     `make create/destroy-schemas` and the integration tests can't clobber it (and
 #     vice-versa). The database is created + owned by the app user on the first launch
 #     (needs the postgres sibling's superuser — see below).
-#   * OOM isolation — relies on the dd-dev container memory cap (docker-compose.dev.yml
-#     mem_limit) to confine any OOM kill to THIS container's cgroup; `choom` then biases
-#     the bot to be the FIRST victim within it, ahead of the Claude session. The make
-#     targets refuse to launch unless the cap is in place (see `_require-mem-cap`).
+#   * OOM isolation — relies on the dd-dev container memory cap (its mem_limit in infra's
+#     dev/compose.yaml) to confine any OOM kill to THIS container's cgroup; `choom` then
+#     biases the bot to be the FIRST victim within it, ahead of the Claude session. The
+#     make targets refuse to launch unless the cap is in place (see `_require-mem-cap`).
 #
-# No jemalloc in the dev image (prod-only), so RAM won't mirror prod exactly — fine for
-# functional spin-up-to-test, not for a RAM-measurement instance.
-#
-# Usage: ./docker-run-devbot.sh <beacon|anchor>   (normally via `make run-*-devbot` /
-# `make devbot-up`). Env vars are ambient in dd-dev via the compose `env_file: [.env]`.
+# Usage: normally `make run-*-devbot` / `make devbot-up`, which run this as
+#     uv run --env-file .env ./docker-run-devbot.sh <beacon|anchor>
+# so that .env's DATABASE_URL (and any DEVBOT_*) are in this script's environment. dd-dev's
+# own environment does not carry them: since 2026-10-27 the container is a service in
+# infra's dev/compose.yaml, which links .env into /workspace and does not load it.
 set -euo pipefail
 
 bot="${1:-}"
@@ -25,7 +25,7 @@ case "$bot" in
   *) echo "usage: $0 <beacon|anchor>" >&2; exit 2 ;;
 esac
 
-: "${DATABASE_URL:?DATABASE_URL not set — run inside dd-dev where env_file loads .env}"
+: "${DATABASE_URL:?DATABASE_URL not set — run via make run-*-devbot / devbot-up, which load .env (uv run --env-file .env)}"
 schema="${DEVBOT_SCHEMA:-kyber_devbot}"   # a Postgres DATABASE name, not a MySQL-style schema
 
 # The bot connects with the SAME creds/host as DATABASE_URL, only the database swapped —
@@ -35,11 +35,12 @@ devbot_url="${DATABASE_URL%/*}/${schema}"
 
 # Host/port/user/password for the admin provisioning connection, parsed from
 # DATABASE_URL so a non-default host still works. Port defaults to 5432 when the URL
-# omits it. The compose `postgres` sibling's POSTGRES_USER is already a superuser (the
-# official postgres image grants that to whichever user POSTGRES_USER names), so by
-# default we just reuse the same creds as DATABASE_URL for provisioning rather than a
-# separate root account — override with DEVBOT_DB_ADMIN_USER / DEVBOT_DB_ADMIN_PASSWORD
-# if the compose file is ever changed to a non-superuser app role.
+# omits it. The `postgres` sibling's POSTGRES_USER (dd-postgres in infra's
+# dev/compose.yaml) is already a superuser (the official postgres image grants that to
+# whichever user POSTGRES_USER names), so by default we just reuse the same creds as
+# DATABASE_URL for provisioning rather than a separate root account — override with
+# DEVBOT_DB_ADMIN_USER / DEVBOT_DB_ADMIN_PASSWORD if that service is ever changed to a
+# non-superuser app role.
 userinfo="${DATABASE_URL#*//}"; userinfo="${userinfo%%@*}"
 app_user="${userinfo%%:*}"
 app_password="${userinfo#*:}"
@@ -133,7 +134,7 @@ elif [ -f "$jemalloc" ]; then
   export MALLOC_CONF="${malloc_prefix}background_thread:true,dirty_decay_ms:10000,muzzy_decay_ms:10000"
   echo "devbot: jemalloc preloaded (MALLOC_CONF=$MALLOC_CONF)"
 else
-  echo "devbot: jemalloc not in image (glibc malloc) — rebuild dd-dev (make dev-up) to enable"
+  echo "devbot: jemalloc not in image (glibc malloc) — rebuild dd-dev from infra's dev/ to enable"
 fi
 
 oom_adj="${DEVBOT_OOM_SCORE_ADJ:-800}"

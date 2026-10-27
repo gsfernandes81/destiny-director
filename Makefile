@@ -88,75 +88,6 @@ $(addprefix deploy-,$(BOTS)): deploy-%:
 $(addprefix remove-last-deploy-,$(BOTS)): remove-last-deploy-%:
 	railway down $(TARGET_ENV_FLAG) --service $*
 
-# Remote Pi dev container (docker-compose.dev.yml). dev-up builds the image and
-# starts it detached. It no longer passes HOST_UID/HOST_GID: since 2026-08-24 the
-# image is a thin child of gsrpi-dev-base and the `dev` user is built in the BASE,
-# at the uid of whoever built THAT — 1001 in the published one. If this host's
-# clone owner is a different uid, build the base locally (`make base` in infra's
-# dev/, which reads its own clone's owner) and this build picks it up, because
-# docker prefers a local image over a pull. dev-down stops it; dev-down-volumes
-# also drops the named volumes (uv cache, claude/railway/gh config, postgres data)
-# — use when the base's uid changed and the volumes must be recreated under the new
-# owner. DEV_HOSTNAME sets the container's hostname to the docker host's name +
-# `-dd-dev`, so Claude Code shows a stable, meaningful machine title instead of the
-# random container ID (the suffix distinguishes the container from the host itself).
-dev-up:
-	DEV_HOSTNAME=$$(hostname)-dd-dev docker compose -f docker-compose.dev.yml up -d --build
-	@$(MAKE) --no-print-directory dev-check-uid
-
-# The guard that the deleted HOST_UID build arg used to make unnecessary. The base image
-# bakes its `dev` account at whatever uid built it (1001 in the published one), and if
-# that is not this clone's owner the container comes up perfectly and then fails at two
-# things at once, neither of which names a uid: /workspace is read-only from inside, and
-# sshd refuses the bind-mounted authorized_keys under StrictModes as "bad ownership or
-# modes", which reads as a broken key. Checked after the start rather than before the
-# build, because the image's uid is a property of the image and this asks the container
-# itself. A warning and not a failure: the container is up and `docker exec` still works,
-# which is how you would fix it.
-dev-check-uid:
-	@cuid=$$(docker exec dd-dev id -u 2>/dev/null); \
-	owner=$$(stat -c '%u' .); \
-	if [ -z "$$cuid" ]; then \
-	  echo "note: dd-dev is not running yet — skipping the uid check." >&2; \
-	elif [ "$$cuid" != "$$owner" ]; then \
-	  echo "" >&2; \
-	  echo "WARNING: dd-dev's dev user is uid $$cuid; this clone is owned by uid $$owner." >&2; \
-	  echo "         /workspace is not writable from inside the container, and sshd will" >&2; \
-	  echo "         refuse every login as 'bad ownership or modes' on the host account's" >&2; \
-	  echo "         authorized_keys. Neither message says uid." >&2; \
-	  echo "         Fix: build the base at this uid, then re-run make dev-up —" >&2; \
-	  echo "             cd ~/infra/dev && make base" >&2; \
-	  echo "         It reads its own clone's owner and tags the result under the same" >&2; \
-	  echo "         ghcr name, which docker prefers over the pull. If the uid changes," >&2; \
-	  echo "         the named volumes must be recreated too: make dev-down-volumes." >&2; \
-	  echo "" >&2; \
-	fi
-
-# One command to stand the whole thing up: build + start the container, wait for it
-# to be running, then walk through any logins that aren't done yet (git SSH, GitHub,
-# Railway, Claude) interactively. Every login step is idempotent — already-signed-in
-# services are skipped — so this is safe to re-run. Once Claude is logged in, work in
-# the container the way you work in the others: `ssh -p 2222 dev@<pi>` and then
-# `abduco -A claude claude`, which holds the session across a dropped link.
-dev: dev-up
-	@echo "Waiting for dd-dev to come up (up to 120s)..."
-	@for i in $$(seq 1 120); do \
-		docker exec dd-dev true 2>/dev/null && break; \
-		[ $$i = 120 ] && { echo "ERROR: dd-dev did not become exec-able within 120s — check 'docker compose -f docker-compose.dev.yml logs dev'." >&2; exit 1; }; \
-		sleep 1; \
-	done
-	@$(MAKE) dev-login
-
-# Re-run the interactive login walkthrough against an already-running container.
-dev-login:
-	docker exec -it dd-dev bash /home/dev/login.sh
-
-dev-down:
-	docker compose -f docker-compose.dev.yml down
-
-dev-down-volumes:
-	docker compose -f docker-compose.dev.yml down -v
-
 run-beacon-local: .env
 	uv run python -OOm dd.beacon
 
@@ -168,34 +99,43 @@ run-anchor-local: .env
 # `kyber_devbot` schema and are biased to be the first OOM victim under the dd-dev memory
 # cap — so a throwaway test bot can't clobber the shared DB or OOM-kill a neighbour.
 # `.devbot-logs/<bot>.{log,pid}` hold the background logs + process-group ids.
+#
+# The runner is started under `uv run --env-file .env`, like `make test`, because dd-dev's
+# environment does NOT carry .env any more: since 2026-10-27 the container is a service in
+# infra's dev/compose.yaml, which links .env into /workspace rather than loading it, and the
+# script needs DATABASE_URL (and any DEVBOT_*) in its own environment before Python runs.
+DEVBOT_RUN = uv run --env-file .env ./docker-run-devbot.sh
 
 # Guard: refuse to launch unless dd-dev is memory-capped, so an OOM can only ever hit this
-# container's cgroup (never a neighbour). memory.max=="max" means uncapped — apply the cap
-# from the Pi HOST by recreating the container so the compose mem_limit takes effect.
+# container's cgroup (never a neighbour). memory.max=="max" means uncapped. The cap is
+# dd-dev's mem_limit in infra's dev/compose.yaml, so an uncapped dd-dev is one started some
+# other way, or one whose service lost the line — recreate it from infra on zero.
 _require-mem-cap:
 	@[ "$$(cat /sys/fs/cgroup/memory.max 2>/dev/null)" != "max" ] || { \
 		echo "REFUSING: dd-dev is not memory-capped (cgroup memory.max=max)." >&2; \
-		echo "A runaway devbot could OOM-kill a neighbour container. Cap it on the Pi HOST first:" >&2; \
-		echo "    make dev-up     # recreate dd-dev with the docker-compose.dev.yml mem_limit" >&2; \
+		echo "A runaway devbot could OOM-kill a neighbour container. The cap is dd-dev's" >&2; \
+		echo "mem_limit in infra's dev/compose.yaml; recreate dd-dev from there, on zero:" >&2; \
+		echo "    cd ~/infra/dev && make up S=dd-dev" >&2; \
 		exit 1; }
 
 # Foreground, single bot (focused debugging).
 run-beacon-devbot: .env _require-mem-cap
-	./docker-run-devbot.sh beacon
+	$(DEVBOT_RUN) beacon
 
 run-anchor-devbot: .env _require-mem-cap
-	./docker-run-devbot.sh anchor
+	$(DEVBOT_RUN) anchor
 
 # Background lifecycle for both bots. setsid detaches each into its own session so it
-# survives this shell; $$! is the session leader == process-group id, recorded so
-# devbot-down can signal the whole group (uv run's child python included).
+# survives this shell; $$! is the session leader (the outer `uv run`) == process-group id,
+# recorded so devbot-down can signal the whole group (the runner and the bot's own
+# `uv run` + python included).
 devbot-up: .env _require-mem-cap
 	@mkdir -p .devbot-logs
 	@for b in beacon anchor; do \
 		if [ -f .devbot-logs/$$b.pid ] && kill -0 -"$$(cat .devbot-logs/$$b.pid)" 2>/dev/null; then \
 			echo "$$b devbot already running (pgid $$(cat .devbot-logs/$$b.pid))"; \
 		else \
-			setsid ./docker-run-devbot.sh $$b >.devbot-logs/$$b.log 2>&1 & \
+			setsid $(DEVBOT_RUN) $$b >.devbot-logs/$$b.log 2>&1 & \
 			echo $$! >.devbot-logs/$$b.pid; \
 			echo "started $$b devbot (pgid $$!) -> .devbot-logs/$$b.log"; \
 		fi; \
@@ -586,8 +526,7 @@ check: lint format-check typecheck test test-js
 # real ones unprotected. They are static pattern rules for the same reason — see the
 # note on the deploy block for why a *plain* pattern rule cannot be made phony at all.
 .PHONY: prod $(addprefix deploy-,$(BOTS)) $(addprefix remove-last-deploy-,$(BOTS)) \
-	dev dev-up dev-check-uid dev-login dev-down \
-	dev-down-volumes run-beacon-local run-anchor-local _require-mem-cap \
+	run-beacon-local run-anchor-local _require-mem-cap \
 	run-beacon-devbot run-anchor-devbot devbot-up devbot-down devbot-logs \
 	devbot-status destroy-schemas create-schemas migration-plan migration-apply \
 	migration-dry-run migration-check dump-db dump-mysql dump-vars restore-vars restore-raw \

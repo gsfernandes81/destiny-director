@@ -1,299 +1,123 @@
-# Remote Raspberry Pi 5 dev environment
+# dd-dev: the dev container on the Pi
 
-Develop Destiny Director inside a long-lived Docker container on a Raspberry Pi 5
-(`linux/arm64`). The primary workflow is terminal-based: `ssh` into the Pi host →
-`docker exec` into the container → run `claude` / git / make. An in-container sshd
-(port 2222) additionally lets **Zed remote directly into `/workspace`** (see
-[Zed remote / SSH access](#zed-remote--ssh-access)). The container bakes the toolchain
-(uv + Node/Claude Code + Railway CLI + GitHub CLI + make); the repo is bind-mounted, so edits
-on the host clone and inside the container are the same files.
+Destiny Director is developed inside `dd-dev`, a long-lived container on `zero` (a
+Raspberry Pi 5, `linux/arm64`). **Since 2026-10-27 the container is not described in this
+repo**: it is one service in the infra repo's `dev/compose.yaml`, beside the other dev
+containers and the hub that is the way in to all of them. Bring-up, lifecycle, getting in,
+GitHub access, the Claude login and the secrets layout are infra's, documented once in
+[`dev/README.md`](https://github.com/gsfernandes81/infra/blob/main/dev/README.md) in
+gsfernandes81/infra — read it rather than a copy here. This page is what is dd-specific.
 
-Files: `Dockerfile.dev`, `docker-child-init.dev.sh`, `docker-compose.dev.yml`,
-`ssh_config.dev`, `sshd_config.dev.d/`, `docker-login.dev.sh`. Git identity keys live in
-a gitignored `.dev-ssh/` dir
-that rides along with the clone.
+## What this repo still owns
 
-## The image is a thin child of a shared base
+| File | What it is |
+|---|---|
+| `Dockerfile.dev` | the image: a thin child of infra's `gsrpi-dev-base` adding the database clients, the Railway CLI and this project's venv. Infra builds it from this repo's `main` on GitHub and passes `BASE_TAG`, so the default in the file is only a fallback |
+| `docker-child-init.dev.sh` | run by the base at every start: `uv sync --frozen` adds the editable project to the pre-built venv. Non-fatal — a failed sync warns and the container still comes up |
+| `docker-login.dev.sh` | the login walkthrough, `/home/dev/login.sh` in the image — what `make login C=dd-dev` runs |
+| `ssh_config.dev` | the baked defaults half of `~/.ssh/config` |
+| `docker-run-devbot.sh` | the spin-up-to-test bot runner, below |
 
-Since **2026-08-24** `Dockerfile.dev` does not build a dev environment — it pulls one.
-Everything this container has in common with its three siblings on the same Pi
-(`infra-dev`, `or3-dev`, `ds-dev`) lives in one image, `gsrpi-dev-base`, whose source is
-`dev/Dockerfile.base` in the [infra](https://github.com/gsfernandes81/infra) repo and
-which is built by CI and published **publicly** to
-`ghcr.io/gsfernandes81/gsrpi-dev-base`. From there come python 3.13-slim, Node + Claude
-Code, `gh`, screen, **abduco**, fish, the ssh client and server, cloudflared, the `dev`
-user, the dotfiles, and the entrypoint that starts everything. What is left in this repo
-is the database clients, the Railway CLI, this project's venv, and the repo-specific
-files listed above.
+A change to any of them reaches the container when infra rebuilds it from `main`, so it
+ships only once it is merged there.
 
-- **The tag is pinned** (`ARG BASE_TAG` at the top of `Dockerfile.dev`), never `latest`,
-  so a base rebuild cannot change this container until that line moves. Which base a
-  running container is on is a label: `docker inspect dd-dev --format '{{index
-  .Config.Labels "uk.gsrpi.base-tag"}}'`.
-- **No build order and no cross-repo checkout**: the `FROM` pulls. The infra repo is
-  needed on this host only for the offline fallback — `make base` there builds the same
-  image under the same name, and docker prefers a local image over a pull.
-- **What this image adds at start** is `docker-child-init.dev.sh`, run by the base's
-  entrypoint after it pulls the clone and before it starts sshd: the `.dev-ssh` git
-  identities, and `uv sync --frozen` to add the editable project to the pre-built venv.
-  It is non-fatal — a failed sync warns and the container still comes up, so you can ssh
-  in and look.
-- **Two files parameterise the base rather than fork it**: `ssh_config.dev` (the baked
-  half of `~/.ssh/config`, used when `.dev-ssh/ssh_config.fleet` is absent) and
-  `sshd_config.dev.d/10-authorized-keys.conf` (points sshd at the host account's
-  `authorized_keys`, as it has always been served here). The rest is `DEV_*` environment
-  in `docker-compose.dev.yml`.
+## The layout, as it touches this repo
 
-## Prerequisites (assumed already done on the Pi)
+- **`/workspace` is a volume with its own clone of this repo**, over https — not a bind
+  mount of a host clone. Push to share work; nothing on the host sees it.
+- **`.env` lives in an env volume and is linked to `/workspace/.env`.** It is *not* the
+  container's environment: dd reads it itself (`dd.common.cfg`'s `load_dotenv`, `uv run
+  --env-file .env` in the Makefile). Infra's README has how the file gets there the first
+  time (`docker cp` into `~/.env.d`, then `make restart C=dd-dev`). Beyond the app's own
+  variables (`.env-example`) it holds:
 
-- Docker + `docker compose` v2 and `git` installed.
-- The Pi's own SSH server is enabled and your laptop can `ssh <pi-user>@<pi-ip>`.
+  ```sh
+  DATABASE_URL=postgresql://kyber:kyber@postgres:5432/kyber   # the dd-postgres sibling
+  DATABASE_SSL=false                                          # it has no TLS
+  RAILWAY_API_TOKEN=<railway account token>                   # see Railway CLI
+  ```
 
-## One-time bootstrap
+- **GitHub is the hub's per-repo token**, for this repo only: git and `gh` use it with no
+  login and no ssh key. `gh auth status` reports failure on it while every repo command
+  works; `make login` checks the token instead. PRs made from the container appear as the
+  App, commits as you.
+- **Other ssh identities are read-only**, from `~/.dd-dev-secrets` on zero (mounted at
+  `/run/dd-secrets`): the base copies each private key into `~/.ssh` and prepends that
+  directory's `ssh_config.fleet` to `~/.ssh/config` at every start. The one this repo has
+  a use for is the `shark` remote (geolocatingshark), which the token cannot reach.
+- **The way in is `ssh dev`**, then dd-dev in the menu. Zed, scp and port-forwards to the
+  container have no route at present.
+- **Memory**: infra caps dd-dev (`mem_limit`), which is what the devbot targets check for.
 
-```sh
-# 1. Clone (HTTPS is fine for the read-only bootstrap) and check out dev.
-git clone https://github.com/gsfernandes81/destiny-director.git
-cd destiny-director
-git checkout dev
-
-# 2. Create the git identity keys in the gitignored .dev-ssh/ dir.
-mkdir -p .dev-ssh && chmod 700 .dev-ssh
-ssh-keygen -t ed25519 -f .dev-ssh/id_ed25519_personal -N ""   # -> gsfernandes81
-ssh-keygen -t ed25519 -f .dev-ssh/id_ed25519_shark    -N ""   # -> geolocatingshark
-chmod 600 .dev-ssh/id_ed25519_personal .dev-ssh/id_ed25519_shark
-```
-
-Create `.dev-ssh/ssh_config.fleet`. The base image **prepends** it to the baked defaults
-to make `~/.ssh/config` at every start, before it pulls the clone — which is why it has
-that name and why nothing in this repo symlinks the file:
-
-```
-Host github.com
-  HostName github.com
-  User git
-  IdentityFile ~/.ssh/id_ed25519_personal
-  IdentitiesOnly yes
-  StrictHostKeyChecking accept-new
-Host github.com-shark
-  HostName github.com
-  User git
-  IdentityFile ~/.ssh/id_ed25519_shark
-  IdentitiesOnly yes
-  StrictHostKeyChecking accept-new
-```
-
-The `IdentityFile` paths are `~/.ssh/…` and not `/workspace/.dev-ssh/…`: the base copies
-every `.dev-ssh/id_*` into `~/.ssh` at mode 600 on each start, and a copy it owns cannot
-be refused for the bind mount's modes.
-
-> **Renaming from the old layout.** This file used to be `.dev-ssh/config`, symlinked
-> over `~/.ssh/config` by the entrypoint. If your clone still has that name, rename it —
-> `mv .dev-ssh/config .dev-ssh/ssh_config.fleet` — and switch the paths as above. Until
-> you do, `docker-child-init.dev.sh` copies it into place each start so nothing breaks,
-> says so loudly, and the start-up `git pull` has no identity to offer and reports itself
-> as offline whatever the truth is. The symlink is gone on purpose: the base rewrites
-> `~/.ssh/config` with a redirection at every start, and a redirection follows a symlink
-> — the second boot of a container would have truncated your `.dev-ssh/config` and filled
-> it with the baked defaults.
-
-Register each **public** key with its GitHub account (Settings → SSH keys):
-`cat .dev-ssh/id_ed25519_personal.pub` → gsfernandes81, `…_shark.pub` → geolocatingshark.
+## First run inside the container
 
 ```sh
-# 3. Put the dev .env at the repo root (bind-mounted -> visible in-container).
-#    Simplest: scp it from your existing dev box. It must contain every var the
-#    bots read at import (Discord tokens, etc.), plus:
-#      DATABASE_URL=postgresql://kyber:kyber@postgres:5432/kyber
-#      RAILWAY_API_TOKEN=<railway account token>   # Railway -> Account -> Tokens
-#    (.env is required even for unit tests — make test uses --env-file .env and
-#     dd/common/cfg.py reads env at import.)
-
-# 4. Build + start (dev container + postgres) AND log in to everything in one command.
-#    `make dev` builds/starts the container, then runs an interactive walkthrough
-#    that signs you in to whatever isn't done yet — git SSH, GitHub, Railway, Claude.
-#    Each step is idempotent (already-authed services are skipped), so it's safe to
-#    re-run. Run it on the Pi host, in the clone:
-make dev
-
-# 5. Enter the container over the Pi host's sshd (fish is the interactive shell).
-ssh -t <pi-user>@<pi-ip> 'docker exec -it dd-dev fish'
+make login C=dd-dev          # on zero, in ~/infra/dev: token, workspace, .env, Railway, Claude
 ```
 
-`make dev` = `make dev-up` (build + start) + `make dev-login` (the login walkthrough).
-Use `make dev-up` alone if you only want to (re)build without touching logins, and
-`make dev-login` alone to re-run just the login steps against a running container.
-Step 2's manual key generation is optional — the walkthrough offers to generate a git
-SSH key for you (into `.dev-ssh/`) and upload it via `gh` if nothing authenticates yet.
-
-Optional laptop `~/.ssh/config` alias so `ssh dd` drops you straight in:
-
-```
-Host dd
-  HostName <pi-ip>
-  User <pi-user>
-  RequestTTY yes
-  RemoteCommand docker exec -it dd-dev fish
-```
-
-**uid note:** the container's `dev` user is built in the BASE image, not here — the
-published one bakes uid/gid **1001**, so bind-mounted files (source + `.dev-ssh/` keys)
-line up with a Pi account at that uid. `make dev-up` no longer passes `USER_UID`/
-`USER_GID`, because this image no longer creates the account. If your Pi user's uid
-differs, build the base locally instead: `cd ~/infra/dev && make base` reads its own
-clone's owner and tags the result under the same ghcr name, and the next `make dev-up`
-here picks it up without touching this repo. Changing the uid means the named volumes
-must be recreated under the new owner — `make dev-down-volumes`.
-
-### What else the base changed, and what this repo put back
-
-Three behaviours moved with the base image. Two are put back here because the conversion
-is meant to change what the image is *built from*, not what it does:
-
-- **`AllowTcpForwarding`** — the old `sshd_config.dev` had no such line, so OpenSSH's
-  default (yes) applied and `ssh -p 2222 -L 5432:dd-postgres:5432 dev@<pi>` worked. The
-  base turns forwarding off, correctly for itself. `sshd_config.dev.d/20-forwarding.conf`
-  turns it back on here.
-- **The `dev` account's login shell** — the base makes it fish; this image puts it back to
-  bash (`usermod` in `Dockerfile.dev`), because sshd runs the login shell from
-  `/etc/passwd`, so it is what every `ssh <pi> '<cmd>'` and every Zed remote bootstrap
-  command executes under, and this repo's tooling assumes a POSIX shell there. `docker
-  exec -it dd-dev fish` is unchanged.
-- **`ClientAliveInterval 30` / `ClientAliveCountMax 3`** — kept, not overridden. The base
-  drops a session after 90s of *unanswered probes*, which a live client answers; what it
-  actually removes is wedged sessions, and abduco (also new, from the base) is what makes
-  losing one free.
-
-## First run inside the container (`/workspace`, user `dev`)
+then, in the container:
 
 ```sh
-# Git remotes + identity (keys are wired into ~/.ssh at start by child-init.sh).
-git remote set-url origin git@github.com:gsfernandes81/destiny-director.git
+git -C /workspace remote -v              # origin, https — the fresh clone's only remote
+uv sync --frozen                         # what child-init does; a no-op when current
+make test                                # the unit + SQLite suite (needs .env)
+make lint && make typecheck
+```
+
+The `shark` remote, only if an identity for it is in `~/.dd-dev-secrets` — a
+`github.com-shark` Host block naming its key in `ssh_config.fleet`:
+
+```sh
 git remote add shark git@github.com-shark:geolocatingshark/destiny-director.git
-git config user.name  "gsfernandes81"
-git config user.email "<your git email>"
-ssh -T git@github.com; ssh -T git@github.com-shark   # both should greet their user
-
-# Prove the toolchain.
-uv sync                                  # editable project into /home/dev/venv
-make test                                # DB-free unit suite (SQLite)
-uv run ruff check dd && uv run ty check dd
 ```
 
-## Claude Code
-
-Node 22 + `@anthropic-ai/claude-code` are baked in; `~/.claude` is a persistent volume,
-so login survives rebuilds. `make dev` / `make dev-login` handle sign-in for you
-(`claude auth login`), but you can also do it directly:
-
-```sh
-claude auth login     # prints a URL — open on your laptop, paste the code back
-claude auth status    # verify
-```
-
-**There is no Claude Remote Control here as of 2026-08-25**, and the supervisor that ran
-it is deleted rather than defaulted off. Every dev container on this Pi is now reached the
-same way, which is the way this one already had a door for:
-
-```sh
-ssh -p 2222 dev@<pi-ip>          # or `docker exec -it dd-dev fish` from the host
-abduco -A claude claude          # attach the session named `claude`, create it if absent
-```
-
-`abduco` is what makes that survive a dropped link — it is a detach/attach and nothing
-else, no key handling of its own beyond Ctrl-\ , so the TUI underneath keeps every key it
-expects. `-A` means the same command both starts the work and comes back to it. Three
-arrangements for driving Claude across four containers was three things to remember; this
-is one, and it does not put a permission classifier in charge of a container holding a
-read-write deploy key and a Railway token.
-
-**An idle claude is stopped for you, and the conversation is not lost.** The base image
-runs `offload-idle-claude.sh`: a session that has been detached, silent and running
-nothing for 90 minutes is stopped, and `~/.local/share/claude-offload.log` records the
-exact `claude --resume` that brings it back. The number is not arbitrary — a claude can
-schedule its own wake-up and the runtime clamps that to an hour, so past that only a
-person is coming back for it. It refuses to touch an attached session, one with any
-non-claude process running under it (a Bash call, a build, a subagent), or one with no
-transcript to time by. Reason for it: one idle session's process tree measured **1,146 MB
-RSS**, and this Pi runs four of these next to Postgres.
-
-If Claude Code's Bash sandbox blocks writes to `~/.cache/uv` (breaks uv/ruff/ty/pytest),
-relax the sandbox in-container — the container is already an isolation boundary.
+> **Pushing to `shark/main` is a prod deploy** (CLAUDE.md). Never on your own initiative.
 
 ## Railway CLI
 
-The Railway CLI is baked into the image (installed from the release tarball — the
-`@railway/cli` npm package 404s on arm64). With `RAILWAY_API_TOKEN` in `.env` the container is already
-authenticated; verify with `railway whoami`. (Alternative: `railway login --browserless`,
-persisted via the `dd-railway` volume.) `make deploy-beacon-dev` / `deploy-anchor-dev`
-then run from inside the container.
+Baked into the image from the release tarball (the `@railway/cli` npm package 404s on
+arm64), pinned by `RAILWAY_VERSION` in `Dockerfile.dev`. **The Makefile's railway targets
+run it bare, and `.env` is not exported into the container**, so a `RAILWAY_API_TOKEN` in
+`.env` does not reach them. Log in once instead — `railway login --browserless`, persisted
+in the `dd-railway` volume (`make login C=dd-dev` offers it) — and check with
+`railway whoami`. Then `make deploy-beacon` / `make deploy-anchor` deploy to Railway's dev
+environment.
 
 > **Prod deploys require explicit confirmation each time (see CLAUDE.md). Never deploy
 > prod on your own initiative.**
 
-## GitHub CLI
+## Postgres / migrations
 
-`gh` is baked into the image (installed from the release tarball, same as the Railway CLI).
-`GH_CONFIG_DIR` points at `~/.config/gh`, a persistent `dd-gh` volume, so login survives
-rebuilds. Authenticate once with the device flow:
-
-```sh
-gh auth login   # choose GitHub.com → HTTPS → "Login with a web browser"; open the URL on
-                # your laptop, paste the one-time code back
-gh auth status  # verify
-```
-
-This slim image has no secret keyring, so `gh` stores the token in
-`~/.config/gh/hosts.yml` inside the volume. Once authenticated you can read code scanning
-alerts and other API data, e.g.
-`gh api repos/gsfernandes81/destiny-director/code-scanning/alerts`. (Alternative: set
-`GH_TOKEN` in `.env` to a PAT instead of running `gh auth login`.)
-
-## Postgres / migrations (integration scope)
+`dd-postgres` (`postgres:17-alpine`, user/password/database `kyber`) starts with dd-dev and
+answers as `postgres` inside it — the host the `DATABASE_URL` above names.
 
 ```sh
-docker compose -f docker-compose.dev.yml up -d postgres   # if not already up
-make migration-apply                                       # apply against DATABASE_URL
+pg_isready -h postgres                                                   # is it up
+make migration-apply                                                     # apply against DATABASE_URL
 TEST_USE_POSTGRES=1 uv run --env-file .env python -m pytest -m integration  # DB suite on Postgres
 ```
 
-Applying migrations needs only the running `postgres` service. Authoring new migrations
-(`make migration-plan MSG="..."`) autogenerates a revision by diffing
-`dd/common/schemas.py`'s models straight against that same live database — no throwaway
-"dev" database or Docker socket needed (that was an Atlas-specific requirement this repo
-no longer has). Always hand-check the generated revision; autogenerate is a starting
-point, not an oracle. `postgres:17-alpine` is much lighter than `mysql:8` was; still fine
-to leave it stopped when not integration-testing.
+Authoring a migration (`make migration-plan MSG="..."`) autogenerates a revision by diffing
+`dd/common/schemas.py`'s models straight against that same database — no throwaway "dev"
+database is needed. Always hand-check the generated revision; autogenerate is a starting
+point, not an oracle.
 
-## Editing
+## Dev bots (spin-up-to-test)
 
-Terminal-only by default: edit via Claude Code or a terminal editor (`vim`/`nano`/`helix`,
-`apt`-installable in-container) inside `docker exec`. No editor is installed on the Pi host.
+`make run-beacon-devbot` / `run-anchor-devbot` (foreground) and `make devbot-up` /
+`devbot-down` / `devbot-status` / `devbot-logs` (background) run a bot inside dd-dev via
+`docker-run-devbot.sh`, under `uv run --env-file .env` so `.env` reaches it. Each runs
+against its own Postgres database (`DEVBOT_SCHEMA`, default `kyber_devbot`) on the same
+server, created on first launch and migrated each time, so it cannot clobber the shared
+`kyber` database or the integration tests. Each starts with a raised OOM score
+(`DEVBOT_OOM_SCORE_ADJ`, default 800) so the kernel reaps it before the Claude session,
+and the targets refuse to start while dd-dev is uncapped (`memory.max` reads `max`).
+jemalloc is preloaded as in the deployed image; `DEVBOT_JEMALLOC=0` forces glibc for an
+A/B RAM comparison.
 
-### Zed remote / SSH access
+## Claude Code
 
-The container also runs an in-container sshd (port 2222) so **Zed can remote directly into
-`/workspace`** (reversing the original terminal-only, no-sshd/no-ports decision). It runs as
-the non-root `dev` user, key-only — so only `dev` can log in, preserving the `docker exec`
-model and uid-1000 file ownership. Authorized keys are **not hardcoded**: the compose file
-bind-mounts the Pi host user's `.ssh` directory (from `DEV_SSH_AUTHORIZED_KEYS` in `.env`,
-e.g. `/home/<pi-user>/.ssh/`) read-only, and sshd reads `authorized_keys` from it — so it
-authorizes the same keys that already log into the Pi host. Host `2222` publishes the
-container's sshd; the host key is persisted in the `dd-ssh-host` volume so Zed's
-`known_hosts` stays stable across `make dev-down && make dev-up`.
-
-To use it:
-
-1. Ensure `DEV_SSH_AUTHORIZED_KEYS` is set in `.env` (Pi host user's `.ssh` dir) and that
-   its `authorized_keys` lists the public key you'll connect with (Zed's key).
-2. `make dev-up` rebuilds the image (with `openssh-server`) and starts sshd on 2222.
-3. Locally: `ssh -p 2222 dev@<pi-ip>` should log in as `dev`. For access off-LAN, point a
-   **Cloudflare tunnel** at the Pi host's TCP port 2222 (configured from the Cloudflare
-   dashboard — out of repo scope; key-based SSH only, pair with Cloudflare Access as you
-   see fit).
-4. In Zed, add an SSH remote to that host as user `dev` with the matching private key and
-   open `/workspace`. Zed uploads its server and connects; SSH sessions inherit the app env
-   (`.env` vars + the venv on `PATH`) via `~/.ssh/environment`, so tools resolve as they do
-   under `docker exec`.
-
-The old `docker exec -it dd-dev fish` path still works unchanged.
+In the base image and logged in through `make login C=dd-dev`; by default the login is
+shared across the dev containers (infra's switch). If Claude Code's Bash sandbox blocks
+writes to `~/.cache/uv` (breaks uv/ruff/ty/pytest), relax the sandbox in-container — the
+container is already an isolation boundary.

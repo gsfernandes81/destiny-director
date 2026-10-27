@@ -112,7 +112,8 @@ ENV/
 env.bak/
 venv.bak/
 
-# Remote Pi dev container — git identity keys + SSH config (never commit)
+# The pre-hub dev container's git identity keys + SSH config. They live on zero in
+# ~/.dd-dev-secrets now; still ignored so an old clone's copy can never be committed.
 /.dev-ssh/
 
 # Spin-up-to-test dev bots — background logs + process-group pidfiles (make devbot-up)

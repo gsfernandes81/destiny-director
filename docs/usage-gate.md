@@ -148,9 +148,9 @@ already over the cap. It is scoped to this one session only. See docs/usage-gate
 
 ## Handoff & resume
 
-> **Remote control left this container on 2026-08-25.** It is reached by ssh with
-> the work held in an `abduco` session now, and no daemon spawns a worktree per
-> session. The wording below describes how this was originally exercised; the gate
+> **Remote control left this container on 2026-08-25.** It is reached through
+> infra's hub now (`ssh dev`, with the work held in a zmx session), and no daemon
+> spawns a worktree per session. The wording below describes how this was originally exercised; the gate
 > itself is unchanged, and a worktree you make yourself (`git worktree add`) puts
 > you in the same shape it assumes.
 

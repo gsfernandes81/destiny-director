@@ -44,8 +44,8 @@ DB layer, or building a message/embed, read it.** Quick orientation:
   `uv run ty` work out of the box.
 - Do not create virtualenvs by hand or install packages globally.
 - The `Makefile`'s Python targets (`run-*-local`, `*-schemas`, `test`, `lint`, `format`,
-  `typecheck`, `migration-*`) all use `uv run`. The `railway`/`dev-*` targets shell out
-  to non-Python CLIs (Railway CLI, `docker compose`) as-is.
+  `typecheck`, `migration-*`, `run-*-devbot`/`devbot-up`) all use `uv run`. The `railway`
+  targets shell out to the Railway CLI as-is.
 
 ## Running & deploying
 
@@ -214,19 +214,26 @@ DB layer, or building a message/embed, read it.** Quick orientation:
   *rules* themselves are committed (see above) and apply everywhere.
 - On the pyenv box `.python-version` pins 3.13; the repo-authoritative pin is
   `requires-python = "~=3.13.0"` in `pyproject.toml`.
-- The dev **container** is managed with `make dev-up` / `dev-down` (not bare
-  `docker compose up`), which sets `DEV_HOSTNAME` and keeps the compose file the single
-  place the container is described. Its image is a **thin child of `gsrpi-dev-base`**
-  (infra's `dev/Dockerfile.base`, pulled from ghcr) as of 2026-08-24: the `dev` user,
-  the toolchain and the entrypoint come from there, this repo adds the database clients,
-  the Railway CLI, its venv and `docker-child-init.dev.sh`. The uid the bind mount needs
-  is the BASE's now — see `docs/pi_dev_setup.md` § *The image is a thin child of a shared
-  base* before changing anything about the build.
-- **The container is driven over ssh, not by Remote Control.** As of 2026-08-25 the
-  remote-control supervisor is deleted fleet-wide: `ssh -p 2222 dev@<pi>` then `abduco -A
-  claude claude`, which holds the session across a dropped link. The base stops a claude
-  left idle for 90 minutes and logs the `claude --resume` that restores it — one idle
-  session's process tree was measured at 1,146 MB, and this Pi runs four containers.
+- The dev **container**, `dd-dev`, is **not described in this repo** any more: since
+  2026-10-27 it is one service in infra's `dev/compose.yaml` (with `dd-postgres`, aliased
+  `postgres`), and lifecycle is infra's — `make up S=dd-dev` / `restart` / `stop` /
+  `shell` / `login` with `C=dd-dev`, in `~/infra/dev` on zero (infra's `dev/README.md`).
+  Infra builds this repo's `Dockerfile.dev` from `main` on GitHub, as a **thin child of
+  `gsrpi-dev-base`**; what this repo owns is that file, `ssh_config.dev`,
+  `docker-child-init.dev.sh` (the venv sync at every start) and `docker-login.dev.sh`
+  (what `make login C=dd-dev` runs). See `docs/pi_dev_setup.md` before changing any of
+  them.
+- **`/workspace` is a volume holding its own clone, not a host checkout**, and `.env` is a
+  link into an env volume — it is **not** in the container's environment, so anything that
+  needs it loads it: `dd.common.cfg`'s `load_dotenv`, or `uv run --env-file .env` as the
+  test, migration and devbot targets do. A bare `railway` does not see its
+  `RAILWAY_API_TOKEN`. GitHub is the hub's per-repo https token: no ssh key or `gh auth
+  login` for origin. Any other ssh identity is read-only, from `~/.dd-dev-secrets` on
+  zero.
+- **The way in is `ssh dev`** — the hub's claude-sessions menu — then dd-dev; every
+  session it opens is a zmx session, which holds across a dropped link. No port is
+  published and no per-container tunnel exists, so Zed, scp and port-forwards to the
+  container have no route at present (an open gap in infra's README).
 
 ## Project layout & config
 

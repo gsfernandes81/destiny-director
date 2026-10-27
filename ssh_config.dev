@@ -1,30 +1,30 @@
 # The BAKED half of ~/.ssh/config inside dd-dev, copied into the image at
 # /home/dev/ssh_config — one of gsrpi-dev-base's seams. At every start the base writes
 #
-#     /workspace/.dev-ssh/ssh_config.fleet    (this repo's identities, host-side)
-#     this file                               (the defaults, and nothing else)
+#     $DEV_SECRETS_DIR/ssh_config.fleet    (this repo's identities, if any — on zero,
+#                                           ~/.dd-dev-secrets, mounted read-only at
+#                                           /run/dd-secrets by infra's dev/compose.yaml)
+#     this file                            (the defaults, and nothing else)
 #
 # into ~/.ssh/config, in that order, because ssh takes the FIRST value it obtains for each
-# keyword. Both halves are in place before the base pulls the clone.
+# keyword. The base also copies every private key in that directory into ~/.ssh at 0600.
 #
-# SO WHAT THIS FILE IS FOR is the case where the other half is absent: a fresh clone, or a
-# container brought up before `make dev-login` has ever run. It carries NO IdentityFile on
-# purpose.
-# The base's own copy of this file names infra's deploy key, and inheriting that would
-# have made a first `git push` in here fail with "no such identity:
-# /home/dev/.ssh/id_ed25519_infra_deploy" — a message naming another container's
-# credential, in a repo that has nothing to do with it. With no identity named, the same
-# push fails with "Permission denied (publickey)", which is what is actually wrong.
+# NONE OF IT IS NEEDED FOR origin. Since 2026-10-27 git and gh reach
+# gsfernandes81/destiny-director over https with the hub's per-repo token, and nothing
+# rewrites https to ssh. An ssh identity is only for a remote that token cannot reach —
+# e.g. a `github.com-shark` alias for the geolocatingshark remote. Add one on zero, in
+# ~/.dd-dev-secrets; nothing in the container can write there.
 #
-# The real identities are in /workspace/.dev-ssh/ssh_config.fleet: github.com for
-# gsfernandes81 and github.com-shark for geolocatingshark, each naming the copy the base
-# makes in ~/.ssh. docs/pi_dev_setup.md has that file's content and the rename from its
-# old name; `make dev-login` writes a single-account version when it generates a key.
+# SO WHAT THIS FILE IS FOR is the defaults, which are all there is when the other half is
+# absent (the usual case). It carries NO IdentityFile on purpose: with no identity named,
+# an ssh push that has none fails with "Permission denied (publickey)", which is what is
+# actually wrong. It matches the base's own copy today; it stays a file of this repo's so
+# that what dd-dev's ssh does is decided here, not inherited by accident.
 
 # ── defaults — MUST stay last, and here they are also all there is ──────────
 # ssh takes the FIRST value it obtains for each keyword, so a wildcard above a Host block
-# silently wins over it. Anything specific belongs in .dev-ssh/ssh_config.fleet,
-# which the base prepends above this.
+# silently wins over it. Anything specific belongs in ssh_config.fleet, which the base
+# prepends above this.
 Host *
   IdentitiesOnly yes
   ServerAliveInterval 30
